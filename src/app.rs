@@ -10,6 +10,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     sync::Mutex,
 };
+use crate::app_action_queue::{ActionQueue};
 
 lazy_static::lazy_static! {
     #[doc(hidden)]
@@ -20,6 +21,8 @@ lazy_static::lazy_static! {
 #[class(base=Node)]
 pub struct BevyApp {
     app: Option<App>,
+
+    pub action_queue: ActionQueue
 }
 
 impl BevyApp {
@@ -29,6 +32,16 @@ impl BevyApp {
 
     pub fn get_app_mut(&mut self) -> Option<&mut App> {
         self.app.as_mut()
+    }
+}
+
+impl BevyApp {
+    fn apply_pending_actions(&mut self) {
+        if let Some(app) = self.app.as_mut() {
+            for a in self.action_queue.drain() {
+                a.apply(app);
+            }
+        }
     }
 }
 
@@ -59,6 +72,8 @@ impl INode for BevyApp {
         app.add_plugins(crate::assets::GodotAssetsPlugin);
 
         self.app = Some(app);
+
+        self.apply_pending_actions();
     }
 
     fn process(&mut self, _delta: f64) {
@@ -66,7 +81,10 @@ impl INode for BevyApp {
             return;
         }
 
+        self.apply_pending_actions();
+
         if let Some(app) = self.app.as_mut() {
+
             app.insert_resource(GodotVisualFrame);
 
             if let Err(e) = catch_unwind(AssertUnwindSafe(|| app.update())) {
@@ -84,6 +102,8 @@ impl INode for BevyApp {
         if godot::classes::Engine::singleton().is_editor_hint() {
             return;
         }
+
+        self.apply_pending_actions();
 
         if let Some(app) = self.app.as_mut() {
             app.insert_resource(GodotPhysicsFrame);
