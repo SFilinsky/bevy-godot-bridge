@@ -9,10 +9,11 @@ mod scene;
 mod scene_tree;
 mod utils;
 mod app_action_queue;
-pub mod tools;
-pub use tools::collect_children;
+mod tools;
+mod dto;
 
-pub use bevy_godot4_proc_macros::ExportToGodot;
+pub use tools::collect_children;
+pub use dto::ExportMeta;
 
 pub mod prelude {
     pub use super::erased_gd::{ErasedGd, ErasedGdResource};
@@ -23,9 +24,10 @@ pub mod prelude {
     };
     pub use bevy_godot4_proc_macros::{
         bevy_app,
+        ExportComponent,
+        ExportEntity
     };
-    pub use crate::ExportToGodot;
     pub use super::app_action_queue::{AppAction};
-    pub use crate::{collect_children};
+    pub use crate::{collect_children, ExportMeta};
 }
 pub use app::{BevyApp, APP_BUILDER_FN};
