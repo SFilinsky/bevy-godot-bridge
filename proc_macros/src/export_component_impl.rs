@@ -1,5 +1,7 @@
 ﻿use proc_macro::TokenStream;
 use heck::ToSnakeCase;
+use syn::meta::ParseNestedMeta;
+use syn::spanned::Spanned;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     use quote::{format_ident};
@@ -29,21 +31,91 @@ pub fn expand(input: TokenStream) -> TokenStream {
     };
 
 
-    let mut dto_field_idents: Vec<::syn::Ident> = Vec::new();
-    let mut dto_field_types:  Vec<::syn::Type>  = Vec::new();
+    let mut dto_field_idents: Vec<syn::Ident> = Vec::new();
+    let mut dto_field_types:  Vec<syn::Type>  = Vec::new();
+    let mut dto_assigns:      Vec<proc_macro2::TokenStream> = Vec::new();
 
-    for f in fields_iter {
-        let mut include = false;
-        for attr in &f.attrs {
-            if attr.path().is_ident("export") {
-                include = true;
-                break;
+    fn option_inner(ty: &syn::Type) -> Option<&syn::Type> {
+        if let syn::Type::Path(tp) = ty {
+            if let Some(seg) = tp.path.segments.last() {
+                if seg.ident == "Option" {
+                    if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                        if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                            return Some(inner);
+                        }
+                    }
+                }
             }
         }
+        None
+    }
+
+    for f in fields_iter {
+        let mut include   = false;
+        let mut into_ty   : Option<syn::Type> = None;
+
+        for attr in &f.attrs {
+            if !attr.path().is_ident("export") { continue; }
+            include = true;
+
+            // #[export] or #[export(into(TargetType))]
+            if let syn::Meta::List(list) = &attr.meta {
+                let parser = syn::meta::parser(|meta: ParseNestedMeta| {
+                    if meta.path.is_ident("into") {
+                        meta.parse_nested_meta(|inner| {
+                            let p = inner.path.clone();
+                            let t = syn::Type::Path(syn::TypePath{ qself: None, path: p });
+                            into_ty = Some(t);
+                            Ok(())
+                        })
+                    } else {
+                        Err(meta.error("supported options: into(TargetType)"))
+                    }
+                });
+                if let Err(e) = syn::parse::Parser::parse2(parser, list.tokens.clone()) {
+                    return e.to_compile_error().into();
+                }
+            }
+        }
+
         if include {
-            let ident: ::syn::Ident = f.ident.clone().expect("named field");
-            dto_field_idents.push(ident);
-            dto_field_types.push(f.ty.clone());
+            let ident = f.ident.clone().expect("named field");
+            let src_ty = f.ty.clone();
+            let span   = src_ty.span();
+
+            dto_field_idents.push(ident.clone());
+
+            if let Some(target_ty) = into_ty {
+                // Handle Option<T> → Option<Target>
+                if let Some(inner) = option_inner(&src_ty) {
+                    // Option<Src> -> Option<Target>, using &Src: Into<Target>
+                    dto_field_types.push(syn::parse_quote!(Option<#target_ty>));
+
+                    dto_assigns.push(quote::quote_spanned! { span=>
+                    // Nice error if the conversion is missing:
+                    const _: fn() = || {
+                        fn _assert<S, D>() where for<'a> &'a S: ::core::convert::Into<D> {}
+                        _assert::<#inner, #target_ty>();
+                    };
+                    d.#ident = c.#ident.as_ref().map(|v| ::core::convert::Into::<#target_ty>::into(v));
+                });
+                } else {
+                    // Src -> Target, using &Src: Into<Target>
+                    dto_field_types.push(target_ty.clone());
+
+                    dto_assigns.push(quote::quote_spanned! { span=>
+                    const _: fn() = || {
+                        fn _assert<S, D>() where for<'a> &'a S: ::core::convert::Into<D> {}
+                        _assert::<#src_ty, #target_ty>();
+                    };
+                    d.#ident = ::core::convert::Into::<#target_ty>::into(&c.#ident);
+                });
+                }
+            } else {
+                // No conversion: copy as-is
+                dto_field_types.push(src_ty.clone());
+                dto_assigns.push(quote::quote! { d.#ident = c.#ident; });
+            }
         }
     }
 
@@ -75,7 +147,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 let mut dto = Self::new_gd();
                 {
                     let mut d = dto.bind_mut();
-                    #( d.#dto_field_idents = c.#dto_field_idents; )*
+                    #( #dto_assigns )*
                 }
                 dto
             }
