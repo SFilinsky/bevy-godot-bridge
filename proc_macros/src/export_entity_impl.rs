@@ -54,10 +54,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
         format_ident!("{}", heck::ToSnakeCase::to_snake_case(last))
     }
 
-    let dto_ident          = format_ident!("{}Dto", tag_ident);
-    let exporter_ident     = format_ident!("{}Exporter", tag_ident);
-    let system_ident       = format_ident!("export_{}_changes", tag_snake);
+    let dto_ident           = format_ident!("{}Dto", tag_ident);
+    let exporter_ident      = format_ident!("{}Exporter", tag_ident);
+    let system_ident        = format_ident!("export_{}_changes", tag_snake);
     let export_plugin_ident = format_ident!("{}EntityExportPlugin", tag_ident);
+    let entity_spawn_handler_ident = format_ident!("{}EntitySpawnHandler", tag_ident);
+    let entity_node_ident          = format_ident!("{}Entity", tag_ident);
 
     // required & optional lists split into (ty, span) + field idents
     let (req_tys, req_spans): (Vec<_>, Vec<_>) = required.iter().cloned().unzip();
@@ -71,13 +73,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .chain(opt_tys.iter().zip(opt_spans.iter())
             .map(|(ty, sp)| quote_spanned!(*sp=> Changed<#ty>)))
         .collect();
-
-    let updated_filter: TokenStream2 = if changed_terms.len() == 1 {
-        let only = &changed_terms[0];
-        quote! { (With<#tag_ident>, #only) }
-    } else {
-        quote! { (With<#tag_ident>, Or<( #(#changed_terms),* )>) }
-    };
 
     // tuple type for reading components: Option<&T> for both required and optional
     let req_read_types: Vec<_> = req_tys.iter().zip(req_spans.iter())
@@ -190,9 +185,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let expanded = quote! {
         use bevy::prelude::{Added, App, Changed, Entity, Plugin, PostUpdate, Query, RemovedComponents, With, Or};
         use bevy_godot4::prelude::{SceneTreeRef, ExportMeta};
-        use godot::classes::{Node, RefCounted};
-        use godot::obj::{Base, Gd, NewGd};
-        use godot::prelude::{GodotClass, godot_api};
+        use godot::prelude::*;
+        use std::collections::HashMap;
+
 
         // DTO -----------------------------------------------------------------
         #[derive(GodotClass)]
@@ -259,7 +254,132 @@ pub fn expand(input: TokenStream) -> TokenStream {
         impl Plugin for #export_plugin_ident {
             fn build(&self, app: &mut App) {
                 use bevy_godot4::prelude::AsVisualSystem;
-                app.add_systems(PostUpdate, #system_ident.as_visual_system());
+                app.add_systems(PostUpdate, #system_ident);
+            }
+        }
+
+
+        #[derive(GodotClass)]
+        #[class(base = Node)]
+        pub struct #entity_spawn_handler_ident {
+            /// Scene that extends `#entity_node_ident`
+            #[var]
+            scene: Gd<PackedScene>,
+
+            /// Optional parent; empty = this Node
+            #[var]
+            parent_path: NodePath,
+
+            /// Cache of spawned nodes
+            map: HashMap<i64, Gd<#entity_node_ident>>,
+
+            #[base]
+            base: Base<Node>,
+        }
+
+        #[godot_api]
+        impl #entity_spawn_handler_ident {
+            #[func]
+            fn _on_created(&mut self, entity_id: i64, dto: Gd<#dto_ident>) {
+                // decide parent
+                let mut parent: Gd<Node> = if self.parent_path.is_empty() {
+                    self.base().clone().upcast()
+                } else {
+                    self.base().get_node_as::<Node>(&self.parent_path)
+                };
+
+                // instance + add
+                let inst = self.scene.instantiate().unwrap();
+                parent.add_child(&inst);
+
+                // downcast to typed entity
+                let Ok(mut ent) = inst.clone().try_cast::<#entity_node_ident>() else {
+                    godot_error!("Spawned scene must extend {}", stringify!(#entity_node_ident));
+                    return;
+                };
+
+                ent.bind_mut().entity_id = entity_id;
+
+                // apply dto (defer if not yet in tree)
+                if inst.is_inside_tree() {
+                    ent.bind_mut().apply_dto(dto);
+                } else {
+                    ent.call_deferred("apply_dto", &[Variant::from(dto)]);
+                }
+
+                self.map.insert(entity_id, ent);
+            }
+
+            #[func]
+            fn _on_updated(&mut self, entity_id: i64, dto: Gd<#dto_ident>) {
+                if let Some(ent) = self.map.get_mut(&entity_id) {
+                    ent.bind_mut().apply_dto(dto);
+                }
+            }
+
+            #[func]
+            fn _on_removed(&mut self, entity_id: i64) {
+                if let Some(ent) = self.map.remove(&entity_id) {
+                    if ent.is_instance_valid() { ent.upcast::<Node>().queue_free(); }
+                }
+            }
+        }
+
+        #[godot_api]
+        impl INode for #entity_spawn_handler_ident {
+            fn init(base: Base<Node>) -> Self {
+                Self {
+                    scene: PackedScene::new_gd(),
+                    parent_path: NodePath::default(),
+                    map: HashMap::new(),
+                    base,
+                }
+            }
+
+            fn ready(&mut self) {
+                let tree = self.base().get_tree().unwrap();
+                let root = tree.get_root().unwrap();
+                let Some(app) = root.try_get_node_as::<Node>("BevyAppSingleton") else {
+                    godot_error!("BevyAppSingleton not found at /root"); return;
+                };
+                let Some(mut exporter) = app.try_get_node_as::<Node>(stringify!(#exporter_ident)) else {
+                    godot_warn!("{} not found under BevyAppSingleton", stringify!(#exporter_ident)); return;
+                };
+
+                let on_created = self.base().callable("_on_created");
+                let on_updated = self.base().callable("_on_updated");
+                let on_removed = self.base().callable("_on_removed");
+
+                let _ = exporter.connect("created", &on_created);
+                let _ = exporter.connect("updated", &on_updated);
+                let _ = exporter.connect("removed", &on_removed);
+            }
+        }
+
+        #[derive(GodotClass)]
+        #[class(base = Node)]
+        pub struct #entity_node_ident {
+            #[var]
+            pub entity_id: i64,
+            #[base]
+            base: Base<Node>,
+        }
+
+        #[godot_api]
+        impl #entity_node_ident {
+            #[func]
+            fn apply_dto(&mut self, dto: Gd<#dto_ident>) {
+                self.signals().on_update().emit(&dto);
+            }
+
+            #[signal]
+            fn on_update(dto: Gd<#dto_ident>);
+        }
+
+        #[godot_api]
+        impl INode for #entity_node_ident {
+            fn init(base: Base<Node>) -> Self {
+                Self { entity_id: -1, base }
             }
         }
     };

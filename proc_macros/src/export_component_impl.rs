@@ -226,7 +226,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         pub struct #plugin_ident;
         impl Plugin for #plugin_ident {
             fn build(&self, app: &mut App) {
-                app.add_systems(PostUpdate, #system_ident.as_visual_system());
+                app.add_systems(PostUpdate, #system_ident);
             }
         }
     };
