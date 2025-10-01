@@ -1,10 +1,10 @@
 ﻿use proc_macro::TokenStream;
 use heck::ToSnakeCase;
-use syn::meta::ParseNestedMeta;
 use syn::spanned::Spanned;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     use quote::{format_ident};
+    use syn::{Type, TypePath, PathArguments, GenericArgument};
 
     let item: ::syn::ItemStruct = ::syn::parse_macro_input!(input);
 
@@ -35,19 +35,24 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let mut dto_field_types:  Vec<syn::Type>  = Vec::new();
     let mut dto_assigns:      Vec<proc_macro2::TokenStream> = Vec::new();
 
-    fn option_inner(ty: &syn::Type) -> Option<&syn::Type> {
-        if let syn::Type::Path(tp) = ty {
-            if let Some(seg) = tp.path.segments.last() {
-                if seg.ident == "Option" {
-                    if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
-                        if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                            return Some(inner);
-                        }
-                    }
-                }
-            }
+    fn option_inner(ty: &syn::Type) -> Option<syn::Type> {
+        let Type::Path(TypePath { qself: None, path }) = ty else {
+            return None;
+        };
+        let seg = path.segments.last()?;
+        if seg.ident != "Option" {
+            return None;
         }
-        None
+        let PathArguments::AngleBracketed(args) = &seg.arguments else {
+            return None;
+        };
+        if args.args.len() != 1 {
+            return None;
+        }
+        match args.args.first().unwrap() {
+            GenericArgument::Type(inner) => Some(inner.clone()),
+            _ => None,
+        }
     }
 
     for f in fields_iter {
@@ -58,23 +63,19 @@ pub fn expand(input: TokenStream) -> TokenStream {
             if !attr.path().is_ident("export") { continue; }
             include = true;
 
-            // #[export] or #[export(into(TargetType))]
             if let syn::Meta::List(list) = &attr.meta {
-                let parser = syn::meta::parser(|meta: ParseNestedMeta| {
+                let res = list.parse_args_with(syn::meta::parser(|meta: syn::meta::ParseNestedMeta| {
                     if meta.path.is_ident("into") {
-                        meta.parse_nested_meta(|inner| {
-                            let p = inner.path.clone();
-                            let t = syn::Type::Path(syn::TypePath{ qself: None, path: p });
-                            into_ty = Some(t);
-                            Ok(())
-                        })
+                        let ty: syn::Type = meta.input.parse()?;
+                        if !meta.input.is_empty() {
+                            return Err(meta.error("unexpected tokens after type"));
+                        }
+                        into_ty = Some(ty);
+                        Ok(())
                     } else {
                         Err(meta.error("supported options: into(TargetType)"))
                     }
-                });
-                if let Err(e) = syn::parse::Parser::parse2(parser, list.tokens.clone()) {
-                    return e.to_compile_error().into();
-                }
+                }));
             }
         }
 
@@ -85,34 +86,87 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             dto_field_idents.push(ident.clone());
 
-            if let Some(target_ty) = into_ty {
-                // Handle Option<T> → Option<Target>
-                if let Some(inner) = option_inner(&src_ty) {
-                    // Option<Src> -> Option<Target>, using &Src: Into<Target>
-                    dto_field_types.push(syn::parse_quote!(Option<#target_ty>));
+            if let Some(target_ty) = into_ty.clone() {
+                let src_is_opt  = option_inner(&src_ty);          // Option<S>?
+                let dst_is_opt  = option_inner(&target_ty);       // Option<T>?
 
-                    dto_assigns.push(quote::quote_spanned! { span=>
-                    // Nice error if the conversion is missing:
-                    const _: fn() = || {
-                        fn _assert<S, D>() where for<'a> &'a S: ::core::convert::Into<D> {}
-                        _assert::<#inner, #target_ty>();
-                    };
-                    d.#ident = c.#ident.as_ref().map(|v| ::core::convert::Into::<#target_ty>::into(v));
-                });
-                } else {
-                    // Src -> Target, using &Src: Into<Target>
-                    dto_field_types.push(target_ty.clone());
+                match (src_is_opt, dst_is_opt) {
+                    // Option<S> -> Option<T>
+                    (Some(src_inner), Some(dst_inner)) => {
+                        // Disallow Option<GString> (and guide the user)
+                        if let syn::Type::Path(tp) = &dst_inner {
+                            if tp.path.segments.last().map(|s| s.ident == "GString").unwrap_or(false) {
+                                return syn::Error::new(
+                                    span,
+                                    "Option<GString> is not supported by godot-rust. \
+                     Use #[export(into(GString))] instead; None will map to empty string."
+                                ).to_compile_error().into();
+                            }
+                        }
 
-                    dto_assigns.push(quote::quote_spanned! { span=>
-                    const _: fn() = || {
-                        fn _assert<S, D>() where for<'a> &'a S: ::core::convert::Into<D> {}
-                        _assert::<#src_ty, #target_ty>();
-                    };
-                    d.#ident = ::core::convert::Into::<#target_ty>::into(&c.#ident);
-                });
+                        dto_field_types.push(syn::parse_quote!(Option<#dst_inner>));
+                        dto_assigns.push(quote::quote_spanned! { span=>
+                            const _: fn() = || {
+                                fn _assert<S, D>() where for<'a> &'a S: ::core::convert::Into<D> {}
+                                _assert::<#src_inner, #dst_inner>();
+                            };
+                            d.#ident = c.#ident.as_ref().map(|v| ::core::convert::Into::<#dst_inner>::into(v));
+                        });
+                    }
+
+                    // Option<S> -> T   (we export as T and map None -> T::default())
+                    (Some(src_inner), None) => {
+                        dto_field_types.push(target_ty.clone());
+                        dto_assigns.push(quote::quote_spanned! { span=>
+                            const _: fn() = || {
+                                fn _assert_into<S, D>() where for<'a> &'a S: ::core::convert::Into<D> {}
+                                fn _assert_default<D: ::core::default::Default>() {}
+                                _assert_into::<#src_inner, #target_ty>();
+                                _assert_default::<#target_ty>();
+                            };
+                            d.#ident = c.#ident
+                                .as_ref()
+                                .map(|v| ::core::convert::Into::<#target_ty>::into(v))
+                                .unwrap_or_default();
+                        });
+                    }
+
+                    // S -> Option<T>   (wrap in Some)
+                    (None, Some(dst_inner)) => {
+                        // Same guard for Option<GString>
+                        if let syn::Type::Path(tp) = &dst_inner {
+                            if tp.path.segments.last().map(|s| s.ident == "GString").unwrap_or(false) {
+                                return syn::Error::new(
+                                    span,
+                                    "Option<GString> is not supported by godot-rust."
+                                ).to_compile_error().into();
+                            }
+                        }
+
+                        dto_field_types.push(syn::parse_quote!(Option<#dst_inner>));
+                        dto_assigns.push(quote::quote_spanned! { span=>
+                            const _: fn() = || {
+                                fn _assert<S, D>() where for<'a> &'a S: ::core::convert::Into<D> {}
+                                _assert::<#src_ty, #dst_inner>();
+                            };
+                            d.#ident = Some(::core::convert::Into::<#dst_inner>::into(&c.#ident));
+                        });
+                    }
+
+                    // S -> T
+                    (None, None) => {
+                        dto_field_types.push(target_ty.clone());
+                        dto_assigns.push(quote::quote_spanned! { span=>
+                            const _: fn() = || {
+                                fn _assert<S, D>() where for<'a> &'a S: ::core::convert::Into<D> {}
+                                _assert::<#src_ty, #target_ty>();
+                            };
+                            d.#ident = ::core::convert::Into::<#target_ty>::into(&c.#ident);
+                        });
+                    }
                 }
             } else {
-                // No conversion: copy as-is
+                // No conversion: copy as-is (works for Copy fields; otherwise require Clone or adjust)
                 dto_field_types.push(src_ty.clone());
                 dto_assigns.push(quote::quote! { d.#ident = c.#ident; });
             }
