@@ -8,7 +8,7 @@ use bevy::{
 };
 use godot::{
     builtin::{GString, Transform2D, Transform3D, Vector2, Vector3},
-    classes::{Node2D, Node3D, PackedScene, ResourceLoader},
+    classes::{Node2D, Node3D, PackedScene, ResourceLoader}
 };
 
 pub(crate) struct PackedScenePlugin;

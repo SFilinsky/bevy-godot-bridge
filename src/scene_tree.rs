@@ -1,7 +1,7 @@
 use bevy::{ecs::system::SystemParam, prelude::NonSendMut};
 use godot::{
     classes::{Engine, SceneTree},
-    obj::Gd,
+    obj::{Gd},
 };
 use std::marker::PhantomData;
 

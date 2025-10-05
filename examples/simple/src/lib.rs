@@ -9,7 +9,7 @@ use bevy_godot4::prelude::{
 };
 use godot::{
     builtin::Vector2,
-    classes::{ResourceLoader, Sprite2D},
+    classes::{ResourceLoader, Sprite2D}
 };
 use godot::{init::ExtensionLibrary, prelude::gdextension};
 

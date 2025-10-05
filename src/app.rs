@@ -1,7 +1,7 @@
 use bevy::app::App;
 use godot::{
     classes::{INode, Node},
-    obj::Base,
+    obj::{Base},
     prelude::{GodotClass, godot_api},
 };
 

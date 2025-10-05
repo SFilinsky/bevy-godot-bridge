@@ -16,12 +16,12 @@ The architecture in this crate is based on [bevy_godot](https://github.com/rand0
 2. Add this library as a dependency (along with the GDExtension godot crate):
 ```toml
 [dependencies]
-bevy = { version = "0.16", default-features = false, features = [
+bevy = { version = "0.17.2", default-features = false, features = [
     "bevy_asset",
     "bevy_state",
 ] }
 bevy_godot4 = { git = "https://github.com/jrockett6/bevy_godot4", branch = "main" }
-godot = "0.2.4"
+godot = "0.3.5"
 ```
 
 > **_NOTE:_** You can, of course, enable other features in `bevy`; in the above

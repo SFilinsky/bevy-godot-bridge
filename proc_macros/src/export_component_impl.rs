@@ -64,7 +64,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             include = true;
 
             if let syn::Meta::List(list) = &attr.meta {
-                let res = list.parse_args_with(syn::meta::parser(|meta: syn::meta::ParseNestedMeta| {
+                let _res = list.parse_args_with(syn::meta::parser(|meta: syn::meta::ParseNestedMeta| {
                     if meta.path.is_ident("into") {
                         let ty: syn::Type = meta.input.parse()?;
                         if !meta.input.is_empty() {
