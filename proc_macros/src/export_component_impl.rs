@@ -64,18 +64,28 @@ pub fn expand(input: TokenStream) -> TokenStream {
             include = true;
 
             if let syn::Meta::List(list) = &attr.meta {
-                let _res = list.parse_args_with(syn::meta::parser(|meta: syn::meta::ParseNestedMeta| {
+                let parser = syn::meta::parser(|meta: syn::meta::ParseNestedMeta| {
                     if meta.path.is_ident("into") {
-                        let ty: syn::Type = meta.input.parse()?;
-                        if !meta.input.is_empty() {
-                            return Err(meta.error("unexpected tokens after type"));
+                        // Support: #[export(into = Type)]  and  #[export(into(Type))]
+                        if meta.input.peek(syn::Token![=]) {
+                            let _eq: syn::Token![=] = meta.input.parse()?;
+                            let ty: syn::Type = meta.input.parse()?;
+                            into_ty = Some(ty);
+                            Ok(())
+                        } else {
+                            meta.parse_nested_meta(|inner| {
+                                let ty: syn::Type = inner.input.parse()?;
+                                into_ty = Some(ty);
+                                Ok(())
+                            })
                         }
-                        into_ty = Some(ty);
-                        Ok(())
                     } else {
-                        Err(meta.error("supported options: into(TargetType)"))
+                        Err(meta.error("supported options: into(<Type>) or into = <Type>"))
                     }
-                }));
+                });
+                if let Err(e) = syn::parse::Parser::parse2(parser, list.tokens.clone()) {
+                    return e.to_compile_error().into();
+                }
             }
         }
 
