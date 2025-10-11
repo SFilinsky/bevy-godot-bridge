@@ -4,6 +4,7 @@ use godot::{
     obj::Gd,
 };
 use std::marker::PhantomData;
+use godot::obj::Singleton;
 
 #[derive(SystemParam)]
 pub struct SceneTreeRef<'w, 's> {

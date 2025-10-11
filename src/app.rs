@@ -10,6 +10,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     sync::Mutex,
 };
+use godot::obj::Singleton;
 
 lazy_static::lazy_static! {
     #[doc(hidden)]

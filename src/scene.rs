@@ -10,6 +10,7 @@ use godot::{
     builtin::{GString, Transform2D, Transform3D, Vector2, Vector3},
     classes::{Node2D, Node3D, PackedScene, ResourceLoader},
 };
+use godot::obj::Singleton;
 
 pub(crate) struct PackedScenePlugin;
 impl Plugin for PackedScenePlugin {
