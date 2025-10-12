@@ -13,6 +13,6 @@ assets = [] # experimental feature, see assets::GodotResourceLoader
 [dependencies]
 anyhow = "1"
 bevy = { version = "0.17.2", default-features = false, features = ["bevy_asset", "bevy_log"] }
-godot = "0.3.5"
+godot = "0.4.0"
 bevy_godot4_proc_macros = { path = "./proc_macros" }
 lazy_static = "1.5.0"

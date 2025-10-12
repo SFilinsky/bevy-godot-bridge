@@ -12,6 +12,7 @@ use godot::{
     classes::{ResourceLoader, Sprite2D}
 };
 use godot::{init::ExtensionLibrary, prelude::gdextension};
+use godot::obj::Singleton;
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash, States)]
 enum GameState {

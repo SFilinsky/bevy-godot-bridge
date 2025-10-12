@@ -133,7 +133,7 @@ pub mod systems {
     use godot::classes::{Engine, Image, ImageTexture, MeshInstance3D, Node, PlaneMesh, SceneTree, StandardMaterial3D};
     use godot::classes::base_material_3d::{ShadingMode, TextureParam, Transparency};
     use godot::classes::image::Format;
-    use godot::obj::{Gd, NewAlloc, NewGd};
+    use godot::obj::{Gd, NewAlloc, NewGd, Singleton};
     use crate::debug::heatmap::resources::{DebugHeatmapVisualizationDriver, DebugHeatmapVisualizationRequests, Normalize};
 
     pub(super) fn ensure_driver_parent(mut driver: NonSendMut<DebugHeatmapVisualizationDriver>) {

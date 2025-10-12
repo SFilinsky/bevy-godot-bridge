@@ -10,6 +10,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     sync::Mutex,
 };
+use godot::obj::Singleton;
 use crate::app_action_queue::{ActionQueue};
 
 lazy_static::lazy_static! {

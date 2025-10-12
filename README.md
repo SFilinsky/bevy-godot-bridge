@@ -21,7 +21,7 @@ bevy = { version = "0.17.2", default-features = false, features = [
     "bevy_state",
 ] }
 bevy_godot4 = { git = "https://github.com/jrockett6/bevy_godot4", branch = "main" }
-godot = "0.3.5"
+godot = "0.4.0"
 ```
 
 > **_NOTE:_** You can, of course, enable other features in `bevy`; in the above
