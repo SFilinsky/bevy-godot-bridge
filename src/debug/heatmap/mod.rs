@@ -78,7 +78,7 @@ pub mod resources {
     }
 
     #[derive(Resource, Default)]
-    pub struct DebugHeatmapVisualizationRequests {
+    pub struct DebugHeatmapRequests {
         pub pending: HashMap<String, HeatmapRequest>,
     }
 
@@ -93,12 +93,12 @@ pub mod resources {
 
     // ---- NonSend driver: owns Gd handles, only touched on the main thread ----
     #[derive(Default)]
-    pub struct DebugHeatmapVisualizationDriver {
+    pub struct DebugHeatmapDriver {
         pub(super) parent: Option<Gd<Node>>,
         pub(super) nodes: HashMap<String, Gd<MeshInstance3D>>,
     }
 
-    impl DebugHeatmapVisualizationRequests {
+    impl DebugHeatmapRequests {
         /// Queue (or refresh) a heatmap under a stable key.
         pub fn set_heatmap(
             &mut self,
@@ -134,9 +134,9 @@ pub mod systems {
     use godot::classes::base_material_3d::{ShadingMode, TextureParam, Transparency};
     use godot::classes::image::Format;
     use godot::obj::{Gd, NewAlloc, NewGd, Singleton};
-    use crate::debug::heatmap::resources::{DebugHeatmapVisualizationDriver, DebugHeatmapVisualizationRequests, Normalize};
+    use crate::debug::heatmap::resources::{DebugHeatmapDriver, DebugHeatmapRequests, Normalize};
 
-    pub(super) fn ensure_driver_parent(mut driver: NonSendMut<DebugHeatmapVisualizationDriver>) {
+    pub(super) fn ensure_driver_parent(mut driver: NonSendMut<DebugHeatmapDriver>) {
         if driver.parent.is_some() {
             return;
         }
@@ -165,8 +165,8 @@ pub mod systems {
     }
 
     pub(super) fn apply_heatmaps(
-        mut reqs: ResMut<DebugHeatmapVisualizationRequests>,
-        mut driver: NonSendMut<DebugHeatmapVisualizationDriver>,
+        mut reqs: ResMut<DebugHeatmapRequests>,
+        mut driver: NonSendMut<DebugHeatmapDriver>,
     ) {
         if reqs.pending.is_empty() {
             return;
@@ -258,14 +258,14 @@ pub mod systems {
 pub mod plugin {
     use bevy::app::{App, FixedPreUpdate, FixedUpdate, Plugin};
     use bevy_godot4::debug::heatmap::systems::ensure_driver_parent;
-    use crate::debug::heatmap::resources::{DebugHeatmapVisualizationDriver, DebugHeatmapVisualizationRequests};
+    use crate::debug::heatmap::resources::{DebugHeatmapDriver, DebugHeatmapRequests};
     use crate::debug::heatmap::systems::apply_heatmaps;
 
     pub struct DebugHeatmapVisualizationPlugin;
     impl Plugin for DebugHeatmapVisualizationPlugin {
         fn build(&self, app: &mut App) {
-            app.init_resource::<DebugHeatmapVisualizationRequests>()
-                .insert_non_send_resource(DebugHeatmapVisualizationDriver::default())
+            app.init_resource::<DebugHeatmapRequests>()
+                .insert_non_send_resource(DebugHeatmapDriver::default())
                 .add_systems(FixedPreUpdate, ensure_driver_parent)
                 .add_systems(FixedUpdate, apply_heatmaps);
         }
