@@ -14,7 +14,7 @@ mod dto;
 mod debug;
 
 pub use tools::collect_children;
-pub use dto::ExportMeta;
+pub use dto::{ExportMeta, DTO, DtoFrom};
 
 pub mod prelude {
     pub use super::erased_gd::{ErasedGd, ErasedGdResource};
@@ -26,10 +26,12 @@ pub mod prelude {
     pub use bevy_godot4_proc_macros::{
         bevy_app,
         ExportComponent,
-        ExportEntity
+        ExportComponentNew,
+        ExportEntity,
+        export_bundle
     };
     pub use super::app_action_queue::{AppAction};
-    pub use crate::{collect_children, ExportMeta};
+    pub use crate::{collect_children, ExportMeta, DTO, DtoFrom};
     pub use super::debug::plugins::{DebugVisualizationPlugin};
     pub use super::debug::heatmap::resources::{DebugHeatmapRequests, HeatmapConfig};
     pub use super::debug::lines::resources::{DebugLineRequests, LineConfig};
