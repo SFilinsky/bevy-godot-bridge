@@ -2,11 +2,15 @@
 use heck::ToSnakeCase;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{bracketed, parse::{Parse, ParseStream}, parse_macro_input, Ident, Path, Result, Type, Token, LitStr};
+use syn::{
+    bracketed,
+    parse::{Parse, ParseStream},
+    parse_macro_input, Ident, Path, Result, Type, Token, LitStr,
+};
 
 /// Usage:
 /// export_bundle!{
-///   name: Unit,
+///   name: "Unit",
 ///   tag: UnitTag, // optional
 ///   dtos: [ TransformDto, HealthDto, Option<MovementDto> ],
 /// }
@@ -129,6 +133,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let system_ident = format_ident!("export_{}_entity_changes", base_snake);
     let entity_spawn_handler_ident = format_ident!("{}EntitySpawnHandler", base_ident);
     let entity_node_ident          = format_ident!("{}Entity", base_ident);
+    let updates_ident              = format_ident!("{}EntityUpdateInfo", base_ident);
 
     // Split items into required / optional DTO types
     let mut req_tys: Vec<Type> = Vec::new();
@@ -162,9 +167,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .chain(opt_fields.iter().cloned())
         .collect();
 
-    let all_field_names: Vec<syn::LitStr> =
-        all_fields.iter().map(|id| syn::LitStr::new(&id.to_string(), id.span())).collect();
-
     let req_field_names: Vec<syn::LitStr> =
         req_fields.iter().map(|id| syn::LitStr::new(&id.to_string(), id.span())).collect();
 
@@ -175,12 +177,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .iter()
         .cloned()
         .chain(opt_tys.iter().cloned())
-        .collect();
-
-    // Update signal names per DTO
-    let update_idents: Vec<Ident> = all_fields
-        .iter()
-        .map(|f| format_ident!("update_{}", f))
         .collect();
 
     // Bounds for DtoFrom on all DTOs
@@ -256,8 +252,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let removed_loop = if spec.tag.is_some() {
         quote! {
             for entity in removed.read() {
+                let id_i64 = entity.to_bits() as i64;
                 for exporter in exporters.iter_mut() {
-                    exporter.signals().removed().emit(entity.to_bits() as i64);
+                    { let mut ex = exporter.bind_mut(); ex.prev.remove(&id_i64); }
+                    exporter.signals().removed().emit(id_i64);
                 }
             }
         }
@@ -266,8 +264,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
             let mut removed_set: ::std::collections::HashSet<u64> = ::std::collections::HashSet::new();
             #( for entity in #removed_idents.read() { removed_set.insert(entity.to_bits()); } )*
             for id in removed_set.drain() {
+                let id_i64 = id as i64;
                 for exporter in exporters.iter_mut() {
-                    exporter.signals().removed().emit(id as i64);
+                    { let mut ex = exporter.bind_mut(); ex.prev.remove(&id_i64); }
+                    exporter.signals().removed().emit(id_i64);
                 }
             }
         }
@@ -366,38 +366,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
         }
     }
 
-    // Per-DTO update emission arms
-    let mut update_arms: Vec<TokenStream2> = Vec::new();
-    for (i, dto_ty) in req_tys.iter().enumerate() {
-        let comp = &req_comps[i];
-        let sig = &update_idents[i];
-        let q_id = &updated_req_idents[i];
-        update_arms.push(quote! {
-            for (entity, comp) in #q_id.iter() {
-                if created_ids.contains(&entity.to_bits()) { continue; }
-                let dto = <#dto_ty as DtoFrom<#comp>>::dto_from(comp);
-                for exporter in exporters.iter_mut() {
-                    exporter.signals().#sig().emit(entity.to_bits() as i64, &dto);
-                }
-            }
-        });
-    }
-    for (j, dto_ty) in opt_tys.iter().enumerate() {
-        let idx = req_tys.len() + j;
-        let comp = &opt_comps[j];
-        let sig = &update_idents[idx];
-        let q_id = &updated_opt_idents[j];
-        update_arms.push(quote! {
-            for (entity, comp) in #q_id.iter() {
-                if created_ids.contains(&entity.to_bits()) { continue; }
-                let dto = <#dto_ty as DtoFrom<#comp>>::dto_from(comp);
-                for exporter in exporters.iter_mut() {
-                    exporter.signals().#sig().emit(entity.to_bits() as i64, &dto);
-                }
-            }
-        });
-    }
-
     // Snapshot filter
     let snapshot_filter = if let Some(ref tag_ty) = spec.tag {
         quote! { With<#tag_ty> }
@@ -409,7 +377,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
         if let syn::Type::Path(tp) = ty {
             let p = &tp.path;
             if p.leading_colon.is_none() {
-                // e.g. `TransformDto`, `my_mod::HealthDto`
                 return Some(p.clone());
             }
         }
@@ -457,10 +424,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let expanded = quote! {
         mod #wrapper_module_ident {
 
-            // Generate component imports from super
             #( #import_uses )*
 
-            // Hoisted imports for generated code
             use bevy::prelude::*;
             use bevy_godot4::prelude::*;
             use bevy_godot4::godot::prelude::*;
@@ -471,6 +436,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use godot::classes::PackedScene;
             use godot::builtin::NodePath;
 
+            // -------- Per-entity typed UpdateInfo (bool flags) --------
+            #[derive(GodotClass)]
+            #[class(init, base=RefCounted)]
+            pub struct #updates_ident {
+                #( #[var] pub #all_fields: bool, )*
+                #[base] base: Base<RefCounted>,
+            }
+
             // -------- Wrapper DTO --------
             #[derive(GodotClass)]
             #[class(init, base=RefCounted)]
@@ -478,34 +451,37 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #( #wrapper_req_fields )*
                 #( #wrapper_opt_fields )*
 
-                /// Map: field name -> changed this frame
+                /// Typed updates struct
                 #[var]
-                pub updates: Dictionary,
+                pub updates: Gd<#updates_ident>,
 
                 #[base] base: Base<RefCounted>,
             }
 
             impl #wrapper_dto_ident {
-            fn from_snapshot(
-                #( #req_fields: Gd<#req_tys>, )*
-                #( #opt_fields: Option<Gd<#opt_tys>>, )*
-                mut updates: Dictionary,
-            ) -> Gd<Self> {
-                let mut dto = Self::new_gd();
-                {
-                    let mut d = dto.bind_mut();
-                    #( d.#req_fields = #req_fields; )*
-                    #( d.#opt_fields = #opt_fields; )*
-                    d.updates = updates;
+                fn from_snapshot(
+                    #( #req_fields: Gd<#req_tys>, )*
+                    #( #opt_fields: Option<Gd<#opt_tys>>, )*
+                    updates: Gd<#updates_ident>,
+                ) -> Gd<Self> {
+                    let mut dto = Self::new_gd();
+                    {
+                        let mut d = dto.bind_mut();
+                        #( d.#req_fields = #req_fields; )*
+                        #( d.#opt_fields = #opt_fields; )*
+                        d.updates = updates;
+                    }
+                    dto
                 }
-                dto
             }
-        }
 
             // -------- Exporter Node --------
             #[derive(GodotClass)]
             #[class(init, base=Node)]
             pub struct #exporter_ident {
+                /// Previous wrapper per entity id
+                prev: HashMap<i64, Gd<#wrapper_dto_ident>>,
+
                 #[base]
                 base: Base<Node>,
             }
@@ -513,7 +489,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[godot_api]
             impl #exporter_ident {
                 #[signal] fn created(entity_id: i64, dto: Gd<#wrapper_dto_ident>);
-                #[signal] fn updated(entity_id: i64, dto: Gd<#wrapper_dto_ident>);
+                #[signal] fn updated(entity_id: i64, curr: Gd<#wrapper_dto_ident>, prev: Gd<#wrapper_dto_ident>);
                 #[signal] fn removed(entity_id: i64);
             }
 
@@ -553,9 +529,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     #( #opt_assigns )*
 
                     // updates: everything true on creation
-                    let mut updates = Dictionary::default();
-                    #( updates.set(GString::from(#req_field_names), true); )*
-                    #( updates.set(GString::from(#opt_field_names), true); )*
+                    let mut updates = #updates_ident::new_gd();
+                    {
+                        let mut u = updates.bind_mut();
+                        #( u.#req_fields = true; )*
+                        #( u.#opt_fields = true; )*
+                    }
 
                     let wrapper = #wrapper_dto_ident::from_snapshot(
                         #( #req_fields, )*
@@ -563,18 +542,18 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         updates,
                     );
 
+                    let eid_i64 = entity.to_bits() as i64;
                     for exporter in exporters.iter_mut() {
-                        exporter.signals().created().emit(entity.to_bits() as i64, &wrapper);
+                        { let mut ex = exporter.bind_mut(); ex.prev.insert(eid_i64, wrapper.clone()); }
+                        exporter.signals().created().emit(eid_i64, &wrapper);
                     }
                 }
 
-                // UPDATED: accumulate which fields changed per entity, then emit one wrapper
+                // UPDATED (aggregate per-entity)
                 use ::std::collections::{HashMap as __HashMap, HashSet as __HashSet};
 
-                // 1) entity_bits -> set of changed field names
                 let mut changed: __HashMap<u64, __HashSet<&'static str>> = __HashMap::new();
 
-                // required DTO changes
                 #(
                 for (entity, _comp) in #updated_req_idents.iter() {
                     let eid = entity.to_bits();
@@ -582,7 +561,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
                 )*
 
-                // optional DTO changes
                 #(
                 for (entity, _comp) in #updated_opt_idents.iter() {
                     let eid = entity.to_bits();
@@ -590,7 +568,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
                 )*
 
-                // 2) For each entity with any changes, build wrapper + updates dict and emit one 'updated'
                 for (eid, set) in changed.into_iter() {
                     if created_ids.contains(&eid) { continue; }
 
@@ -600,38 +577,47 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         #( #req_assigns )*
                         #( #opt_assigns )*
 
-                        // start with all false, then mark true for what changed
-                        let mut updates = Dictionary::default();
-                        #( updates.set(GString::from(#all_field_names), false); )*
-                        // flip the ones we detected
-                        #(
-                            if set.contains(#req_field_names) {
-                                updates.set(GString::from(#req_field_names), true);
-                            }
-                        )*
-                        #(
-                            if set.contains(#opt_field_names) {
-                                updates.set(GString::from(#opt_field_names), true);
-                            }
-                        )*
+                        // Start with all false; flip the ones we detected to true
+                        let mut updates = #updates_ident::new_gd();
+                        {
+                            let mut u = updates.bind_mut();
+                            #( u.#all_fields = false; )*
+                            #(
+                                if set.contains(#req_field_names) {
+                                    u.#req_fields = true;
+                                }
+                            )*
+                            #(
+                                if set.contains(#opt_field_names) {
+                                    u.#opt_fields = true;
+                                }
+                            )*
+                        }
 
-                        let wrapper = #wrapper_dto_ident::from_snapshot(
+                        let curr = #wrapper_dto_ident::from_snapshot(
                             #( #req_fields, )*
                             #( #opt_fields, )*
                             updates,
                         );
 
+                        let eid_i64 = eid as i64;
+
                         for exporter in exporters.iter_mut() {
-                            exporter.signals().updated().emit(eid as i64, &wrapper);
+                            let prev = {
+                                let mut ex = exporter.bind_mut();
+                                let p = ex.prev.get(&eid_i64).cloned().unwrap_or_else(|| curr.clone());
+                                ex.prev.insert(eid_i64, curr.clone());
+                                p
+                            };
+
+                            exporter.signals().updated().emit(eid_i64, &curr, &prev);
                         }
                     }
                 }
 
-
                 // REMOVED:
                 #removed_loop
             }
-
 
             // -------- Plugin --------
             pub struct #plugin_ident;
@@ -660,18 +646,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             #[godot_api]
             impl #entity_node_ident {
-                /// Called right after instantiation (during "created").
-                /// Receives the *wrapper* DTO with full state.
-                #[func]
-                fn construct(&mut self, dto: Gd<#wrapper_dto_ident>) {
-                    // default behavior: forward as an update for user script to apply
-                    self.signals().on_update().emit(&dto);
-                }
-
                 /// Apply a full wrapper DTO (you can also call this from your scripts)
                 #[func]
-                fn apply_dto(&mut self, dto: Gd<#wrapper_dto_ident>) {
-                    self.signals().on_update().emit(&dto);
+                fn apply_dto(&mut self, dto: Gd<#wrapper_dto_ident>, prev: Gd<#wrapper_dto_ident>) {
+                    self.signals().on_update().emit(&dto, &prev);
                 }
 
                 /// Allow the game to opt into custom cleanup on remove.
@@ -680,13 +658,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     self.custom_cleanup_enabled = enabled;
                 }
 
+                /// Raised when a new wrapper is available.
+                /// Signature: on_update(curr, prev)
+                #[signal]
+                fn on_update(curr: Gd<#wrapper_dto_ident>, prev: Gd<#wrapper_dto_ident>);
+
                 /// Emitted when the Bevy entity despawns and we opted into custom cleanup.
                 #[signal]
                 fn on_remove();
-
-                /// Raised when a new wrapper is available (initial construct or manual apply).
-                #[signal]
-                fn on_update(dto: Gd<#wrapper_dto_ident>);
             }
 
             #[godot_api]
@@ -722,19 +701,16 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[godot_api]
             impl #entity_spawn_handler_ident {
                 #[func]
-                fn _on_created(&mut self, entity_id: i64, dto: Gd<#wrapper_dto_ident>) {
-                    // pick parent
+                fn _on_created(&mut self, entity_id: i64, curr: Gd<#wrapper_dto_ident>) {
                     let mut parent: Gd<Node> = if self.parent_path.is_empty() {
                         self.base().clone().upcast()
                     } else {
                         self.base().get_node_as::<Node>(&self.parent_path)
                     };
 
-                    // instance + add
                     let inst = self.scene.instantiate().unwrap();
                     parent.add_child(&inst);
 
-                    // ensure the scene extends the generated entity node type
                     let Ok(mut ent) = inst.clone().try_cast::<#entity_node_ident>() else {
                         godot_error!("Spawned scene must extend {}", stringify!(#entity_node_ident));
                         return;
@@ -742,21 +718,19 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     ent.bind_mut().entity_id = entity_id;
 
-                    // call "constructor" with wrapper dto (defer if not yet in tree)
-                    if inst.is_inside_tree() {
-                        ent.bind_mut().construct(dto);
-                    } else {
-                        ent.call_deferred("construct", &[Variant::from(dto)]);
+                    // For first frame, prev == curr (convenient default)
+                    if ent.is_instance_valid() {
+                        ent.bind_mut().apply_dto(curr.clone(), curr);
                     }
 
                     self.map.insert(entity_id, ent);
                 }
 
                 #[func]
-                fn _on_updated(&mut self, entity_id: i64, dto: Gd<#wrapper_dto_ident>) {
+                fn _on_updated(&mut self, entity_id: i64, curr: Gd<#wrapper_dto_ident>, prev: Gd<#wrapper_dto_ident>) {
                     if let Some(ent) = self.map.get_mut(&entity_id) {
                         if ent.is_instance_valid() {
-                            ent.bind_mut().apply_dto(dto);
+                            ent.bind_mut().apply_dto(curr, prev);
                         }
                     }
                 }
@@ -765,13 +739,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 fn _on_removed(&mut self, entity_id: i64) {
                     if let Some(mut ent) = self.map.remove(&entity_id) {
                         if ent.is_instance_valid() {
-                            // Snapshot custom flag before any mutation
                             let custom = { ent.bind().custom_cleanup_enabled };
                             if custom {
-                                // Delegate to user: just signal and keep node alive
                                 ent.bind_mut().signals().on_remove().emit();
                             } else {
-                                // Default behavior: destroy node
                                 ent.upcast::<Node>().queue_free();
                             }
                         }
@@ -807,9 +778,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let on_removed = self.base().callable("_on_removed");
 
                     let _ = exporter.connect("created", &on_created);
+                    // updated(curr, prev)
                     let _ = exporter.connect("updated", &on_updated);
                     let _ = exporter.connect("removed", &on_removed);
-                    // (We do not connect per-DTO updates here, by design. Creation uses wrapper.)
                 }
             }
 
