@@ -192,6 +192,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .map(|(dto, comp)| quote! { #dto: DTO + DtoFrom<#comp> })
         .collect();
 
+    // --- Filters -------------------------------------------------------------
+
     // CREATED filter
     let created_filter = if let Some(ref tag_ty) = spec.tag {
         quote! { Added<#tag_ty> }
@@ -283,7 +285,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let read_tuple: TokenStream2 = if read_types.is_empty() {
         quote! { () }
     } else {
-        quote! { ( #( #read_types ),* ) }
+        // Force each tuple element onto its own line in the expansion.
+        quote! {
+            (
+                #(
+                    #read_types,
+                )*
+            )
+        }
     };
 
     let read_vars: Vec<Ident> = all_fields.iter().map(|f| format_ident!("__{}", f)).collect();
@@ -291,7 +300,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let destructure = if read_vars.is_empty() {
         quote! { () }
     } else {
-        quote! { ( #( #read_vars ),* ) }
+        // One var per line for readability
+        quote! {
+            (
+                #(
+                    #read_vars,
+                )*
+            )
+        }
     };
 
     // Build wrapper assigns
@@ -344,25 +360,33 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .map(|j| format_ident!("updated_opt_{}", j))
         .collect();
 
-    // Build updated query decls
+    // Build updated query decls (each on its own line)
     let mut updated_decl: Vec<TokenStream2> = Vec::new();
     if let Some(ref tag_ty) = spec.tag {
         for (i, comp) in req_comps.iter().enumerate() {
             let id = &updated_req_idents[i];
-            updated_decl.push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
+            updated_decl.push(quote! {
+                #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>,
+            });
         }
         for (j, comp) in opt_comps.iter().enumerate() {
             let id = &updated_opt_idents[j];
-            updated_decl.push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
+            updated_decl.push(quote! {
+                #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>,
+            });
         }
     } else {
         for (i, comp) in req_comps.iter().enumerate() {
             let id = &updated_req_idents[i];
-            updated_decl.push(quote! { #id: Query<(Entity, &#comp), Changed<#comp>>, });
+            updated_decl.push(quote! {
+                #id: Query<(Entity, &#comp), Changed<#comp>>,
+            });
         }
         for (j, comp) in opt_comps.iter().enumerate() {
             let id = &updated_opt_idents[j];
-            updated_decl.push(quote! { #id: Query<(Entity, &#comp), Changed<#comp>>, });
+            updated_decl.push(quote! {
+                #id: Query<(Entity, &#comp), Changed<#comp>>,
+            });
         }
     }
 
@@ -422,8 +446,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
     // -------------------- EXPAND --------------------
     let expanded = quote! {
+        #[allow(clippy::type_complexity, clippy::too_many_arguments)]
         mod #wrapper_module_ident {
-
+            // -----------------------------------------------------------------
+            // Imports
+            // -----------------------------------------------------------------
             #( #import_uses )*
 
             use bevy::prelude::*;
@@ -431,12 +458,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use bevy_godot4::godot::prelude::*;
             use bevy_godot4::prelude::AsVisualSystem;
             use bevy_godot4::collect_children;
-            use std::collections::HashSet;
-            use std::collections::HashMap;
+            use ::std::collections::{HashMap, HashSet};
             use godot::classes::PackedScene;
             use godot::builtin::NodePath;
 
-            // -------- Per-entity typed UpdateInfo (bool flags) --------
+            // -----------------------------------------------------------------
+            // Per-entity typed UpdateInfo (bool flags)
+            // -----------------------------------------------------------------
             #[derive(GodotClass)]
             #[class(init, base=RefCounted)]
             pub struct #updates_ident {
@@ -444,7 +472,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[base] base: Base<RefCounted>,
             }
 
-            // -------- Wrapper DTO --------
+            // -----------------------------------------------------------------
+            // Wrapper DTO
+            // -----------------------------------------------------------------
             #[derive(GodotClass)]
             #[class(init, base=RefCounted)]
             pub struct #wrapper_dto_ident {
@@ -475,7 +505,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
-            // -------- Exporter Node --------
+            // -----------------------------------------------------------------
+            // Exporter Node
+            // -----------------------------------------------------------------
             #[derive(GodotClass)]
             #[class(init, base=Node)]
             pub struct #exporter_ident {
@@ -493,14 +525,36 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[signal] fn removed(entity_id: i64);
             }
 
-            // -------- System --------
+            // -----------------------------------------------------------------
+            // System
+            // -----------------------------------------------------------------
             #[allow(non_snake_case)]
             fn #system_ident(
-                created: Query<Entity, #created_filter>,
-                updated: Query<Entity, #updated_filter>,
+                // --- created ---
+                created: Query<
+                    Entity,
+                    #created_filter
+                >,
+
+                // --- updated ---
+                updated: Query<
+                    Entity,
+                    #updated_filter
+                >,
+
+                // --- removed ---
                 #removed_decl
-                snapshot: Query<#read_tuple, #snapshot_filter>,
+
+                // --- snapshot of all components on entity ---
+                snapshot: Query<
+                    #read_tuple,
+                    #snapshot_filter
+                >,
+
+                // --- per-component "changed" queries (each on its own line) ---
                 #( #updated_decl )*
+
+                // --- godot integration ---
                 mut scene_tree: SceneTreeRef,
             )
             where
@@ -519,7 +573,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 let mut created_ids: HashSet<u64> = HashSet::new();
 
-                // CREATED
+                // ---------------- CREATED ----------------
                 for entity in created.iter() {
                     created_ids.insert(entity.to_bits());
 
@@ -549,7 +603,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                // UPDATED (aggregate per-entity)
+                // ---------------- UPDATED ----------------
                 use ::std::collections::{HashMap as __HashMap, HashSet as __HashSet};
 
                 let mut changed: __HashMap<u64, __HashSet<&'static str>> = __HashMap::new();
@@ -615,11 +669,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                // REMOVED:
+                // ---------------- REMOVED ----------------
                 #removed_loop
             }
 
-            // -------- Plugin --------
+            // -----------------------------------------------------------------
+            // Plugin
+            // -----------------------------------------------------------------
             pub struct #plugin_ident;
             impl Plugin for #plugin_ident {
                 fn build(&self, app: &mut App) {
@@ -627,7 +683,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
-            // -------- Runtime Entity Node (one per in-game entity) --------
+            // -----------------------------------------------------------------
+            // Runtime Entity Node (one per in-game entity)
+            // -----------------------------------------------------------------
             #[derive(GodotClass)]
             #[class(base = Node)]
             pub struct #entity_node_ident {
@@ -679,7 +737,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
-            // -------- Spawn Handler (binds exporter signals & manages spawned scenes) --------
+            // -----------------------------------------------------------------
+            // Spawn Handler (binds exporter signals & manages spawned scenes)
+            // -----------------------------------------------------------------
             #[derive(GodotClass)]
             #[class(base = Node)]
             pub struct #entity_spawn_handler_ident {
@@ -784,7 +844,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
-        }
+        } // end module
 
         pub use #wrapper_module_ident::{ #wrapper_dto_ident, #exporter_ident, #plugin_ident };
     };
