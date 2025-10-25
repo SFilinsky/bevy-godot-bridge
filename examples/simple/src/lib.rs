@@ -1,21 +1,18 @@
+mod export_example;
+
 use bevy::{
     app::{App, Update},
     ecs::{schedule::IntoScheduleConfigs, system::Res},
     prelude::{AppExtStates, Commands, OnEnter, Query, Resource, States, in_state},
     state::app::StatesPlugin,
 };
-use bevy::prelude::{Component, Transform};
-use bevy_godot4::prelude::{AsPhysicsSystem, ErasedGd, ErasedGdResource, GodotScene, SystemDeltaTimer, bevy_app, export_bundle};
+use bevy_godot4::prelude::{AsPhysicsSystem, ErasedGd, ErasedGdResource, GodotScene, SystemDeltaTimer, bevy_app};
 use godot::{
     builtin::Vector2,
     classes::{ResourceLoader, Sprite2D}
 };
 use godot::{init::ExtensionLibrary, prelude::gdextension};
-use godot::builtin::Vector3;
-use godot::classes::RefCounted;
-use godot::obj::{Base, Gd, NewGd, Singleton};
-use godot::prelude::GodotClass;
-use bevy_godot4::{DtoFrom, DTO};
+use godot::obj::{Singleton};
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash, States)]
 enum GameState {
@@ -69,41 +66,4 @@ fn move_sprite(mut sprite: Query<&mut ErasedGd>, mut delta: SystemDeltaTimer) {
             y: position.y + delta,
         });
     }
-}
-
-#[derive(Component, Debug)]
-pub struct UnitTag {}
-
-
-#[derive(GodotClass)]
-#[class(init, base=RefCounted)]
-pub struct TransformDto {
-    #[var] pub translation: Vector3,
-    #[base] base: Base<RefCounted>,
-}
-
-impl DTO for TransformDto {
-    type Component = Transform;
-}
-
-impl DtoFrom<Transform> for TransformDto {
-    fn dto_from(t: &Transform) -> Gd<Self> {
-        let mut dto = TransformDto::new_gd();
-        {
-            let mut d = dto.bind_mut();
-            d.translation = Vector3::new(t.translation.x, t.translation.y, t.translation.z);
-        }
-        dto
-    }
-}
-
-export_bundle!{
-    name: "Transform",
-    dtos: [ TransformDto ],
-}
-
-export_bundle!{
-    name: "Unit",
-    tag: UnitTag,
-    dtos: [ TransformDto ],
 }

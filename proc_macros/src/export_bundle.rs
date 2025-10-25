@@ -150,6 +150,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let req_fields: Vec<Ident> = req_tys.iter().map(dto_field_ident).collect();
     let opt_fields: Vec<Ident> = opt_tys.iter().map(dto_field_ident).collect();
 
+    // **Locals for prev/curr identifiers used in expansion**
+    let req_prev_ids: Vec<Ident> = req_fields.iter().map(|f| format_ident!("prev_{}", f)).collect();
+    let req_curr_ids: Vec<Ident> = req_fields.iter().map(|f| format_ident!("curr_{}", f)).collect();
+    let opt_prev_ids: Vec<Ident> = opt_fields.iter().map(|f| format_ident!("prev_{}", f)).collect();
+    let opt_curr_ids: Vec<Ident> = opt_fields.iter().map(|f| format_ident!("curr_{}", f)).collect();
+
     // Component types for each DTO via <Dto as DTO>::Component
     let req_comps: Vec<TokenStream2> = req_tys
         .iter()
@@ -167,29 +173,23 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .chain(opt_fields.iter().cloned())
         .collect();
 
-    let req_field_names: Vec<syn::LitStr> =
-        req_fields.iter().map(|id| syn::LitStr::new(&id.to_string(), id.span())).collect();
-
-    let opt_field_names: Vec<syn::LitStr> =
-        opt_fields.iter().map(|id| syn::LitStr::new(&id.to_string(), id.span())).collect();
-
     let all_tys: Vec<Type> = req_tys
         .iter()
         .cloned()
         .chain(opt_tys.iter().cloned())
         .collect();
 
-    // Bounds for DtoFrom on all DTOs
+    // Bounds for DtoFrom on all DTOs — now also require PartialEq on DTO (inner type)
     let dtofrom_bounds_req: Vec<TokenStream2> = req_tys
         .iter()
         .zip(req_comps.iter())
-        .map(|(dto, comp)| quote! { #dto: DTO + DtoFrom<#comp> })
+        .map(|(dto, comp)| quote! { #dto: DTO + DtoFrom<#comp> + PartialEq })
         .collect();
 
     let dtofrom_bounds_opt: Vec<TokenStream2> = opt_tys
         .iter()
         .zip(opt_comps.iter())
-        .map(|(dto, comp)| quote! { #dto: DTO + DtoFrom<#comp> })
+        .map(|(dto, comp)| quote! { #dto: DTO + DtoFrom<#comp> + PartialEq })
         .collect();
 
     // --- Filters -------------------------------------------------------------
@@ -214,7 +214,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         }
     };
 
-    // UPDATED filter
+    // UPDATED filter – still use Changed to reduce the candidate set
     let changed_terms: Vec<_> = req_comps
         .iter()
         .chain(opt_comps.iter())
@@ -285,7 +285,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let read_tuple: TokenStream2 = if read_types.is_empty() {
         quote! { () }
     } else {
-        // Force each tuple element onto its own line in the expansion.
         quote! {
             (
                 #(
@@ -300,7 +299,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let destructure = if read_vars.is_empty() {
         quote! { () }
     } else {
-        // One var per line for readability
         quote! {
             (
                 #(
@@ -360,33 +358,25 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .map(|j| format_ident!("updated_opt_{}", j))
         .collect();
 
-    // Build updated query decls (each on its own line)
+    // Build updated query decls
     let mut updated_decl: Vec<TokenStream2> = Vec::new();
     if let Some(ref tag_ty) = spec.tag {
         for (i, comp) in req_comps.iter().enumerate() {
             let id = &updated_req_idents[i];
-            updated_decl.push(quote! {
-                #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>,
-            });
+            updated_decl.push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
         }
         for (j, comp) in opt_comps.iter().enumerate() {
             let id = &updated_opt_idents[j];
-            updated_decl.push(quote! {
-                #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>,
-            });
+            updated_decl.push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
         }
     } else {
         for (i, comp) in req_comps.iter().enumerate() {
             let id = &updated_req_idents[i];
-            updated_decl.push(quote! {
-                #id: Query<(Entity, &#comp), Changed<#comp>>,
-            });
+            updated_decl.push(quote! { #id: Query<(Entity, &#comp), Changed<#comp>>, });
         }
         for (j, comp) in opt_comps.iter().enumerate() {
             let id = &updated_opt_idents[j];
-            updated_decl.push(quote! {
-                #id: Query<(Entity, &#comp), Changed<#comp>>,
-            });
+            updated_decl.push(quote! { #id: Query<(Entity, &#comp), Changed<#comp>>, });
         }
     }
 
@@ -448,9 +438,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #[allow(clippy::type_complexity, clippy::too_many_arguments)]
         mod #wrapper_module_ident {
-            // -----------------------------------------------------------------
-            // Imports
-            // -----------------------------------------------------------------
+
             #( #import_uses )*
 
             use bevy::prelude::*;
@@ -462,9 +450,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use godot::classes::PackedScene;
             use godot::builtin::NodePath;
 
-            // -----------------------------------------------------------------
-            // Per-entity typed UpdateInfo (bool flags)
-            // -----------------------------------------------------------------
+            // -------- Per-entity typed UpdateInfo (bool flags) --------
             #[derive(GodotClass)]
             #[class(init, base=RefCounted)]
             pub struct #updates_ident {
@@ -472,9 +458,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[base] base: Base<RefCounted>,
             }
 
-            // -----------------------------------------------------------------
-            // Wrapper DTO
-            // -----------------------------------------------------------------
+            // -------- Wrapper DTO --------
             #[derive(GodotClass)]
             #[class(init, base=RefCounted)]
             pub struct #wrapper_dto_ident {
@@ -505,9 +489,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
-            // -----------------------------------------------------------------
-            // Exporter Node
-            // -----------------------------------------------------------------
+            // -------- Exporter Node --------
             #[derive(GodotClass)]
             #[class(init, base=Node)]
             pub struct #exporter_ident {
@@ -525,36 +507,33 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[signal] fn removed(entity_id: i64);
             }
 
-            // -----------------------------------------------------------------
-            // System
-            // -----------------------------------------------------------------
+            // -------- System --------
             #[allow(non_snake_case)]
             fn #system_ident(
-                // --- created ---
+                // created
                 created: Query<
                     Entity,
                     #created_filter
                 >,
 
-                // --- updated ---
+                // updated candidates (we'll refine via DTO equality)
                 updated: Query<
                     Entity,
                     #updated_filter
                 >,
 
-                // --- removed ---
+                // removed
                 #removed_decl
 
-                // --- snapshot of all components on entity ---
+                // snapshot of current components on entity
                 snapshot: Query<
                     #read_tuple,
                     #snapshot_filter
                 >,
 
-                // --- per-component "changed" queries (each on its own line) ---
+                // per-component 'Changed' queries (used to build candidate set)
                 #( #updated_decl )*
 
-                // --- godot integration ---
                 mut scene_tree: SceneTreeRef,
             )
             where
@@ -586,8 +565,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let mut updates = #updates_ident::new_gd();
                     {
                         let mut u = updates.bind_mut();
-                        #( u.#req_fields = true; )*
-                        #( u.#opt_fields = true; )*
+                        #( u.#all_fields = true; )*
                     }
 
                     let wrapper = #wrapper_dto_ident::from_snapshot(
@@ -605,24 +583,21 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 // ---------------- UPDATED ----------------
                 use ::std::collections::{HashMap as __HashMap, HashSet as __HashSet};
-
-                let mut changed: __HashMap<u64, __HashSet<&'static str>> = __HashMap::new();
+                let mut changed_eids: __HashSet<u64> = __HashSet::new();
 
                 #(
                 for (entity, _comp) in #updated_req_idents.iter() {
-                    let eid = entity.to_bits();
-                    changed.entry(eid).or_default().insert(#req_field_names);
+                    changed_eids.insert(entity.to_bits());
                 }
                 )*
 
                 #(
                 for (entity, _comp) in #updated_opt_idents.iter() {
-                    let eid = entity.to_bits();
-                    changed.entry(eid).or_default().insert(#opt_field_names);
+                    changed_eids.insert(entity.to_bits());
                 }
                 )*
 
-                for (eid, set) in changed.into_iter() {
+                for eid in changed_eids.into_iter() {
                     if created_ids.contains(&eid) { continue; }
 
                     let entity = Entity::from_bits(eid);
@@ -631,40 +606,98 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         #( #req_assigns )*
                         #( #opt_assigns )*
 
-                        // Start with all false; flip the ones we detected to true
-                        let mut updates = #updates_ident::new_gd();
-                        {
-                            let mut u = updates.bind_mut();
-                            #( u.#all_fields = false; )*
-                            #(
-                                if set.contains(#req_field_names) {
-                                    u.#req_fields = true;
-                                }
-                            )*
-                            #(
-                                if set.contains(#opt_field_names) {
-                                    u.#opt_fields = true;
-                                }
-                            )*
-                        }
-
-                        let curr = #wrapper_dto_ident::from_snapshot(
-                            #( #req_fields, )*
-                            #( #opt_fields, )*
-                            updates,
+                        // NOTE: curr must be mutable because we set curr.updates later
+                        let mut curr = #wrapper_dto_ident::from_snapshot(
+                            #( #req_fields.clone(), )*
+                            #( #opt_fields.clone(), )*
+                            #updates_ident::new_gd(), // will be set below
                         );
 
                         let eid_i64 = eid as i64;
 
                         for exporter in exporters.iter_mut() {
-                            let prev = {
-                                let mut ex = exporter.bind_mut();
-                                let p = ex.prev.get(&eid_i64).cloned().unwrap_or_else(|| curr.clone());
-                                ex.prev.insert(eid_i64, curr.clone());
-                                p
+                            // Pull previous wrapper (clone Option) immutably.
+                            let prev_opt: Option<Gd<#wrapper_dto_ident>> = {
+                                let ex = exporter.bind();
+                                ex.prev.get(&eid_i64).cloned()
                             };
 
-                            exporter.signals().updated().emit(eid_i64, &curr, &prev);
+                            // Compute updates via DTO equality, using borrows.
+                            let mut updates = #updates_ident::new_gd();
+                            let mut any_changed = false;
+
+                            if prev_opt.is_none() {
+                                // First-seen update under this exporter: all flags = true
+                                let mut u = updates.bind_mut();
+                                #( u.#all_fields = true; )*
+                                any_changed = true;
+                            } else if let Some(prev_ref) = prev_opt.as_ref() {
+                                // Extract per-field Gd clones into locals
+                                #(
+                                let (#req_prev_ids, #req_curr_ids) = {
+                                    let pw = prev_ref.bind();
+                                    let cw = curr.bind();
+                                    (pw.#req_fields.clone(), cw.#req_fields.clone())
+                                };
+                                )*
+                                #(
+                                let (#opt_prev_ids, #opt_curr_ids) = {
+                                    let pw = prev_ref.bind();
+                                    let cw = curr.bind();
+                                    (pw.#opt_fields.clone(), cw.#opt_fields.clone())
+                                };
+                                )*
+
+                                {
+                                    let mut u = updates.bind_mut();
+
+                                    // required fields equality
+                                    #(
+                                    let changed = {
+                                        let pb = #req_prev_ids.bind();
+                                        let cb = #req_curr_ids.bind();
+                                        *pb != *cb
+                                    };
+                                    if changed { u.#req_fields = true; any_changed = true; } else { u.#req_fields = false; }
+                                    )*
+
+                                    // optional fields equality (Option<Gd<Dto>>)
+                                    #(
+                                    let changed = match (#opt_prev_ids, #opt_curr_ids) {
+                                        (None, None) => false,
+                                        (Some(p), Some(c)) => {
+                                            let pb = p.bind();
+                                            let cb = c.bind();
+                                            *pb != *cb
+                                        }
+                                        _ => true,
+                                    };
+                                    if changed { u.#opt_fields = true; any_changed = true; } else { u.#opt_fields = false; }
+                                    )*
+                                }
+                            }
+
+                            if !any_changed {
+                                // No actual DTO changes; skip emit and DO NOT overwrite cache.
+                                continue;
+                            }
+
+                            // Attach updates to curr (requires curr to be mutable binding)
+                            {
+                                let mut c = curr.bind_mut();
+                                c.updates = updates.clone();
+                            }
+
+                            // Prepare prev_for_emit without moving prev_opt.
+                            let prev_for_emit: Gd<#wrapper_dto_ident> =
+                                prev_opt.as_ref().cloned().unwrap_or_else(|| curr.clone());
+
+                            // Emit and update cache AFTER successful compute
+                            {
+                                let mut ex = exporter.bind_mut();
+                                ex.prev.insert(eid_i64, curr.clone());
+                            }
+                            exporter.signals().updated().emit(eid_i64, &curr, &prev_for_emit);
                         }
                     }
                 }
@@ -673,9 +706,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #removed_loop
             }
 
-            // -----------------------------------------------------------------
-            // Plugin
-            // -----------------------------------------------------------------
+            // -------- Plugin --------
             pub struct #plugin_ident;
             impl Plugin for #plugin_ident {
                 fn build(&self, app: &mut App) {
@@ -683,9 +714,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
-            // -----------------------------------------------------------------
-            // Runtime Entity Node (one per in-game entity)
-            // -----------------------------------------------------------------
+            // -------- Runtime Entity Node (one per in-game entity) --------
             #[derive(GodotClass)]
             #[class(base = Node)]
             pub struct #entity_node_ident {
@@ -737,9 +766,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
-            // -----------------------------------------------------------------
-            // Spawn Handler (binds exporter signals & manages spawned scenes)
-            // -----------------------------------------------------------------
+            // -------- Spawn Handler (binds exporter signals & manages spawned scenes) --------
             #[derive(GodotClass)]
             #[class(base = Node)]
             pub struct #entity_spawn_handler_ident {
@@ -844,7 +871,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
-        } // end module
+        }
 
         pub use #wrapper_module_ident::{ #wrapper_dto_ident, #exporter_ident, #plugin_ident };
     };
