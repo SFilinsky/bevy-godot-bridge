@@ -33,6 +33,7 @@ pub mod prelude {
     pub use super::app_action_queue::{AppAction};
     pub use crate::{collect_children, ExportMeta, DTO, DtoFrom};
     pub use super::debug::plugins::{DebugVisualizationPlugin};
+    pub use super::debug::cuboids::resources::{DebugCuboidRequests, CuboidConfig};
     pub use super::debug::heatmap::resources::{DebugHeatmapRequests, HeatmapConfig};
     pub use super::debug::lines::resources::{DebugLineRequests, LineConfig};
 }

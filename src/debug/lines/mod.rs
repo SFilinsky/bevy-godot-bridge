@@ -69,14 +69,14 @@ pub mod resources {
 }
 
 pub mod systems {
-    use bevy::prelude::{NonSendMut, ResMut};
+    use bevy::prelude::{NonSendMut, Res, ResMut};
     use godot::builtin::{NodePath, PackedColorArray, PackedVector3Array, Variant, VariantArray};
     use godot::classes::{ArrayMesh, Engine, MeshInstance3D, SceneTree, StandardMaterial3D};
     use godot::classes::base_material_3d::{Flags, ShadingMode};
     use godot::classes::mesh::{ArrayType, PrimitiveType};
     use godot::meta::ToGodot;
     use godot::obj::{EngineEnum, Gd, NewAlloc, NewGd, Singleton};
-
+    use crate::debug::debug_manager::DebugMode;
     use crate::debug::lines::resources::{DebugLineRequests, LineDriver};
 
     pub(super) fn ensure_parent(mut driver: NonSendMut<LineDriver>) {
@@ -101,6 +101,7 @@ pub mod systems {
     }
 
     pub(super) fn apply_lines(
+        debug_res: Res<DebugMode>,
         mut reqs: ResMut<DebugLineRequests>,
         mut driver: NonSendMut<LineDriver>,
     ) {
@@ -109,6 +110,7 @@ pub mod systems {
         }
 
         let Some(mut parent) = driver.parent.as_ref().cloned() else { return; };
+
         // Take requests for this frame.
         let pending = std::mem::take(&mut reqs.pending);
 
@@ -123,6 +125,12 @@ pub mod systems {
                 driver.nodes.insert(key.clone(), n.clone());
                 n
             };
+
+            if !debug_res.on {
+                mi.set_visible(false);
+                continue;
+            }
+            mi.set_visible(true);
 
             // Build mesh: 2 verts + per-vertex color.
             let mut verts = PackedVector3Array::new();

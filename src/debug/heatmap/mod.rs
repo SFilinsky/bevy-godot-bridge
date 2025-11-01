@@ -128,12 +128,13 @@ pub mod resources {
 }
 
 pub mod systems {
-    use bevy::prelude::{NonSendMut, ResMut};
+    use bevy::prelude::{NonSendMut, Res, ResMut};
     use godot::builtin::{NodePath, Vector2, Vector3};
     use godot::classes::{Engine, Image, ImageTexture, MeshInstance3D, Node, PlaneMesh, SceneTree, StandardMaterial3D};
     use godot::classes::base_material_3d::{ShadingMode, TextureParam, Transparency};
     use godot::classes::image::Format;
     use godot::obj::{Gd, NewAlloc, NewGd, Singleton};
+    use bevy_godot4::debug::debug_manager::DebugMode;
     use crate::debug::heatmap::resources::{DebugHeatmapDriver, DebugHeatmapRequests, Normalize};
 
     pub(super) fn ensure_driver_parent(mut driver: NonSendMut<DebugHeatmapDriver>) {
@@ -165,6 +166,7 @@ pub mod systems {
     }
 
     pub(super) fn apply_heatmaps(
+        debug_res: Res<DebugMode>,
         mut reqs: ResMut<DebugHeatmapRequests>,
         mut driver: NonSendMut<DebugHeatmapDriver>,
     ) {
@@ -176,6 +178,8 @@ pub mod systems {
         };
 
         let pending = std::mem::take(&mut reqs.pending);
+
+
 
         for (key, request) in pending {
             let mut mesh_instance = if let Some(node) = driver.nodes.get(&key) {
@@ -199,6 +203,12 @@ pub mod systems {
                 driver.nodes.insert(key.clone(), mesh_instance.clone());
                 mesh_instance
             };
+
+            if !debug_res.on {
+                mesh_instance.set_visible(false);
+                continue;
+            }
+            mesh_instance.set_visible(true);
 
             {
                 let (x,y,z) = request.config.world_pos;
