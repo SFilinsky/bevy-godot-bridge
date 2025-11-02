@@ -835,6 +835,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         }
                     }
                 }
+
+
+                #[func]
+                fn get_entity_or_null(&mut self, entity_id: i64) -> Option<Gd<#entity_node_ident>> {
+                    return self.map.get(&entity_id).cloned()
+                }
             }
 
             #[godot_api]
