@@ -256,7 +256,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             for entity in removed.read() {
                 let id_i64 = entity.to_bits() as i64;
                 for exporter in exporters.iter_mut() {
-                    { let mut ex = exporter.bind_mut(); ex.prev.remove(&id_i64); }
+                    { let mut ex = exporter.bind_mut(); ex.state_cache.remove(&id_i64); }
                     exporter.signals().removed().emit(id_i64);
                 }
             }
@@ -268,7 +268,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             for id in removed_set.drain() {
                 let id_i64 = id as i64;
                 for exporter in exporters.iter_mut() {
-                    { let mut ex = exporter.bind_mut(); ex.prev.remove(&id_i64); }
+                    { let mut ex = exporter.bind_mut(); ex.state_cache.remove(&id_i64); }
                     exporter.signals().removed().emit(id_i64);
                 }
             }
@@ -494,7 +494,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[class(init, base=Node)]
             pub struct #exporter_ident {
                 /// Previous wrapper per entity id
-                prev: HashMap<i64, Gd<#wrapper_dto_ident>>,
+                state_cache: HashMap<i64, Gd<#wrapper_dto_ident>>,
 
                 #[base]
                 base: Base<Node>,
@@ -576,7 +576,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     let eid_i64 = entity.to_bits() as i64;
                     for exporter in exporters.iter_mut() {
-                        { let mut ex = exporter.bind_mut(); ex.prev.insert(eid_i64, wrapper.clone()); }
+                        { let mut ex = exporter.bind_mut(); ex.state_cache.insert(eid_i64, wrapper.clone()); }
                         exporter.signals().created().emit(eid_i64, &wrapper);
                     }
                 }
@@ -619,7 +619,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             // Pull previous wrapper (clone Option) immutably.
                             let prev_opt: Option<Gd<#wrapper_dto_ident>> = {
                                 let ex = exporter.bind();
-                                ex.prev.get(&eid_i64).cloned()
+                                ex.state_cache.get(&eid_i64).cloned()
                             };
 
                             // Compute updates via DTO equality, using borrows.
@@ -695,7 +695,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             // Emit and update cache AFTER successful compute
                             {
                                 let mut ex = exporter.bind_mut();
-                                ex.prev.insert(eid_i64, curr.clone());
+                                ex.state_cache.insert(eid_i64, curr.clone());
                             }
                             exporter.signals().updated().emit(eid_i64, &curr, &prev_for_emit);
                         }
@@ -722,6 +722,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[var]
                 pub entity_id: i64,
 
+                #[var]
+                pub last_state: Option<Gd<#wrapper_dto_ident>>,
+
                 /// When true, removal will NOT free this node; instead we emit `on_remove`.
                 /// Toggle via `set_custom_cleanup(true)`.
                 #[var]
@@ -737,6 +740,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[func]
                 fn apply_dto(&mut self, dto: Gd<#wrapper_dto_ident>, prev: Gd<#wrapper_dto_ident>) {
                     self.signals().on_update().emit(&dto, &prev);
+                    self.last_state = Some(dto);
                 }
 
                 /// Allow the game to opt into custom cleanup on remove.
@@ -760,8 +764,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 fn init(base: Base<Node>) -> Self {
                     Self {
                         entity_id: -1,
+                        last_state: None,
                         custom_cleanup_enabled: false,
-                        base,
+                        base
                     }
                 }
             }
