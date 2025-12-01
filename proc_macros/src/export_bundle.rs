@@ -11,12 +11,12 @@ use syn::{
 /// Usage:
 /// export_bundle!{
 ///   name: "Unit",
-///   tag: UnitTag, // optional
+///   tag: UnitTag,
 ///   dtos: [ TransformDto, HealthDto, Option<MovementDto> ],
 /// }
 struct Spec {
     name: LitStr,
-    tag: Option<Path>,
+    tag: Path,
     items: Vec<DtoItem>,
 }
 
@@ -77,6 +77,7 @@ impl Parse for Spec {
         }
 
         let name = name.ok_or_else(|| syn::Error::new(input.span(), "missing `name: ...`"))?;
+        let tag = tag.ok_or_else(|| syn::Error::new(input.span(), "missing `tag: ...`"))?;
         let items =
             items.ok_or_else(|| syn::Error::new(input.span(), "missing `dtos: [ ... ]`"))?;
 
@@ -115,6 +116,40 @@ fn dto_field_ident(ty: &Type) -> Ident {
 
     let base = base.strip_suffix("Dto").unwrap_or(&base).to_string();
     format_ident!("{}", base.to_snake_case())
+}
+
+// --- helpers ---------------------------------------------------------------
+fn strip_option(ty: &Type) -> Type {
+    if let Type::Path(tp) = ty {
+        if let Some(seg) = tp.path.segments.last() {
+            if seg.ident == "Option" {
+                if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = ab.args.first() {
+                        return inner.clone();
+                    }
+                }
+            }
+        }
+    }
+    ty.clone()
+}
+
+fn relative_type_path(ty: &syn::Type) -> Option<syn::Path> {
+    if let syn::Type::Path(tp) = ty {
+        let p = &tp.path;
+        if p.leading_colon.is_none() {
+            return Some(p.clone());
+        }
+    }
+    None
+}
+
+fn relative_path(path: &syn::Path) -> Option<syn::Path> {
+    if path.leading_colon.is_none() {
+        Some(path.clone())
+    } else {
+        None
+    }
 }
 
 pub fn expand(input: TokenStream) -> TokenStream {
@@ -179,7 +214,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .chain(opt_tys.iter().cloned())
         .collect();
 
-    // Bounds for DtoFrom on all DTOs — now also require PartialEq on DTO (inner type)
+    // Bounds for DtoFrom on all DTOs — require PartialEq on DTO (inner type)
     let dtofrom_bounds_req: Vec<TokenStream2> = req_tys
         .iter()
         .zip(req_comps.iter())
@@ -193,26 +228,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .collect();
 
     // --- Filters -------------------------------------------------------------
+    let tag_ty = &spec.tag;
 
-    // CREATED filter
-    let created_filter = if let Some(ref tag_ty) = spec.tag {
-        quote! { Added<#tag_ty> }
-    } else {
-        let added_terms: Vec<_> = req_comps
-            .iter()
-            .chain(opt_comps.iter())
-            .map(|c| quote! { Added<#c> })
-            .collect();
-
-        if added_terms.is_empty() {
-            quote! { () }
-        } else if added_terms.len() == 1 {
-            let only = &added_terms[0];
-            quote! { #only }
-        } else {
-            quote! { Or<( #( #added_terms ),* )> }
-        }
-    };
+    // CREATED filter: tag added
+    let created_filter = quote! { Added<#tag_ty> };
 
     // UPDATED filter – still use Changed to reduce the candidate set
     let changed_terms: Vec<_> = req_comps
@@ -221,56 +240,24 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .map(|c| quote! { Changed<#c> })
         .collect();
 
-    let updated_filter = if let Some(ref tag_ty) = spec.tag {
-        if changed_terms.is_empty() {
-            quote! { With::<#tag_ty> }
-        } else if changed_terms.len() == 1 {
-            let only = &changed_terms[0];
-            quote! { (With::<#tag_ty>, #only) }
-        } else {
-            quote! { (With::<#tag_ty>, Or<( #( #changed_terms ),* )>) }
-        }
-    } else if changed_terms.is_empty() {
-        quote! { () }
+    let updated_filter = if changed_terms.is_empty() {
+        quote! { With::<#tag_ty> }
     } else if changed_terms.len() == 1 {
         let only = &changed_terms[0];
-        quote! { #only }
+        quote! { (With::<#tag_ty>, #only) }
     } else {
-        quote! { Or<( #( #changed_terms ),* )> }
+        quote! { (With::<#tag_ty>, Or<( #( #changed_terms ),* )>) }
     };
 
-    // REMOVED decl + loop (dynamic idents)
-    let removed_idents: Vec<Ident> = req_fields
-        .iter()
-        .map(|f| format_ident!("__removed_{}", f))
-        .collect();
+    // REMOVED decl + loop
+    let removed_decl = quote! { mut removed: RemovedComponents<#tag_ty>, };
 
-    let removed_decl = if let Some(ref tag_ty) = spec.tag {
-        quote! { mut removed: RemovedComponents<#tag_ty>, }
-    } else {
-        quote! { #( mut #removed_idents: RemovedComponents<#req_comps>, )* }
-    };
-
-    let removed_loop = if spec.tag.is_some() {
-        quote! {
-            for entity in removed.read() {
-                let id_i64 = entity.to_bits() as i64;
-                for exporter in exporters.iter_mut() {
-                    { let mut ex = exporter.bind_mut(); ex.state_cache.remove(&id_i64); }
-                    exporter.signals().removed().emit(id_i64);
-                }
-            }
-        }
-    } else {
-        quote! {
-            let mut removed_set: ::std::collections::HashSet<u64> = ::std::collections::HashSet::new();
-            #( for entity in #removed_idents.read() { removed_set.insert(entity.to_bits()); } )*
-            for id in removed_set.drain() {
-                let id_i64 = id as i64;
-                for exporter in exporters.iter_mut() {
-                    { let mut ex = exporter.bind_mut(); ex.state_cache.remove(&id_i64); }
-                    exporter.signals().removed().emit(id_i64);
-                }
+    let removed_loop = quote! {
+        for entity in removed.read() {
+            let id_i64 = entity.to_bits() as i64;
+            for exporter in exporters.iter_mut() {
+                { let mut ex = exporter.bind_mut(); ex.state_cache.remove(&id_i64); }
+                exporter.signals().removed().emit(id_i64);
             }
         }
     };
@@ -358,52 +345,19 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .map(|j| format_ident!("updated_opt_{}", j))
         .collect();
 
-    // Build updated query decls
+    // Build updated query decls (always With<tag>)
     let mut updated_decl: Vec<TokenStream2> = Vec::new();
-    if let Some(ref tag_ty) = spec.tag {
-        for (i, comp) in req_comps.iter().enumerate() {
-            let id = &updated_req_idents[i];
-            updated_decl.push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
-        }
-        for (j, comp) in opt_comps.iter().enumerate() {
-            let id = &updated_opt_idents[j];
-            updated_decl.push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
-        }
-    } else {
-        for (i, comp) in req_comps.iter().enumerate() {
-            let id = &updated_req_idents[i];
-            updated_decl.push(quote! { #id: Query<(Entity, &#comp), Changed<#comp>>, });
-        }
-        for (j, comp) in opt_comps.iter().enumerate() {
-            let id = &updated_opt_idents[j];
-            updated_decl.push(quote! { #id: Query<(Entity, &#comp), Changed<#comp>>, });
-        }
+    for (i, comp) in req_comps.iter().enumerate() {
+        let id = &updated_req_idents[i];
+        updated_decl.push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
+    }
+    for (j, comp) in opt_comps.iter().enumerate() {
+        let id = &updated_opt_idents[j];
+        updated_decl.push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
     }
 
-    // Snapshot filter
-    let snapshot_filter = if let Some(ref tag_ty) = spec.tag {
-        quote! { With<#tag_ty> }
-    } else {
-        quote! { () }
-    };
-
-    fn relative_type_path(ty: &syn::Type) -> Option<syn::Path> {
-        if let syn::Type::Path(tp) = ty {
-            let p = &tp.path;
-            if p.leading_colon.is_none() {
-                return Some(p.clone());
-            }
-        }
-        None
-    }
-
-    fn relative_path(path: &syn::Path) -> Option<syn::Path> {
-        if path.leading_colon.is_none() {
-            Some(path.clone())
-        } else {
-            None
-        }
-    }
+    // Snapshot filter (always With<tag>)
+    let snapshot_filter = quote! { With<#tag_ty> };
 
     // DTO paths (req + opt)
     let mut import_paths: Vec<syn::Path> = Vec::new();
@@ -412,11 +366,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
             import_paths.push(p);
         }
     }
-    // Optional tag path
-    if let Some(ref tag_ty) = spec.tag {
-        if let Some(p) = relative_path(tag_ty) {
-            import_paths.push(p);
-        }
+    // Tag path
+    if let Some(p) = relative_path(&spec.tag) {
+        import_paths.push(p);
     }
 
     // Dedup by stringified path
@@ -841,10 +793,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
-
                 #[func]
                 fn get_entity_or_null(&mut self, entity_id: i64) -> Option<Gd<#entity_node_ident>> {
-                    return self.map.get(&entity_id).cloned()
+                    self.map.get(&entity_id).cloned()
                 }
             }
 
@@ -888,20 +839,4 @@ pub fn expand(input: TokenStream) -> TokenStream {
     };
 
     expanded.into()
-}
-
-// --- helpers ---------------------------------------------------------------
-fn strip_option(ty: &Type) -> Type {
-    if let Type::Path(tp) = ty {
-        if let Some(seg) = tp.path.segments.last() {
-            if seg.ident == "Option" {
-                if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = ab.args.first() {
-                        return inner.clone();
-                    }
-                }
-            }
-        }
-    }
-    ty.clone()
 }
