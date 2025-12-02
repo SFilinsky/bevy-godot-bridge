@@ -139,24 +139,24 @@ impl INode for BevyApp {
     }
 
     fn physics_process(&mut self, _delta_seconds: f64) {
-        if godot::classes::Engine::singleton().is_editor_hint() {
-            return;
-        }
-
-        self.apply_pending_actions();
-
-        if let Some(app) = self.app.as_mut() {
-
-            Self::update_clock(app);
-
-            app.insert_resource(GodotPhysicsFrame);
-            if let Err(e) = catch_unwind(AssertUnwindSafe(|| app.update())) {
-                self.app = None;
-
-                eprintln!("bevy app update panicked");
-                resume_unwind(e);
-            }
-            app.world_mut().remove_resource::<GodotPhysicsFrame>();
-        }
+        // if godot::classes::Engine::singleton().is_editor_hint() {
+        //     return;
+        // }
+        //
+        // self.apply_pending_actions();
+        //
+        // if let Some(app) = self.app.as_mut() {
+        //
+        //     Self::update_clock(app);
+        //
+        //     app.insert_resource(GodotPhysicsFrame);
+        //     if let Err(e) = catch_unwind(AssertUnwindSafe(|| app.update())) {
+        //         self.app = None;
+        //
+        //         eprintln!("bevy app update panicked");
+        //         resume_unwind(e);
+        //     }
+        //     app.world_mut().remove_resource::<GodotPhysicsFrame>();
+        // }
     }
 }
