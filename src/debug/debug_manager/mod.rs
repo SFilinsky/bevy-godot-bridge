@@ -9,7 +9,7 @@ use godot::prelude::*;
 /// Process-wide flag readable from Bevy.
 static DEBUG_FLAG: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
 
-/// Read current debug flag (for Bevy bridge).
+/// Read current debug flag (for Bevy bevy_godot4).
 pub fn get_debug_flag() -> bool {
     DEBUG_FLAG.load(Ordering::Relaxed)
 }

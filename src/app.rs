@@ -1,20 +1,21 @@
-use bevy::app::{App};
+use bevy::app::App;
 use godot::{
     classes::{INode, Node},
-    obj::{Base},
+    obj::Base,
     prelude::{GodotClass, godot_api},
 };
 
+use crate::app_action_queue::ActionQueue;
+use crate::performance::init_performance_tracing;
 use crate::prelude::*;
-use std::{
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
-    sync::Mutex,
-};
 use bevy::DefaultPlugins;
 use bevy::prelude::{Fixed, Time, Virtual};
 use bevy::time::TimeUpdateStrategy;
 use godot::obj::Singleton;
-use crate::app_action_queue::{ActionQueue};
+use std::{
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    sync::Mutex,
+};
 
 lazy_static::lazy_static! {
     #[doc(hidden)]
@@ -31,7 +32,7 @@ struct GodotClock {
 pub struct BevyApp {
     app: Option<App>,
 
-    pub action_queue: ActionQueue
+    pub action_queue: ActionQueue,
 }
 
 impl BevyApp {
@@ -56,12 +57,12 @@ impl BevyApp {
     fn configure_manual_time(app: &mut App) {
         app.init_resource::<GodotClock>();
         // We will feed Real time ourselves before every `app.update()`.
-        app.insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::ZERO));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::ZERO,
+        ));
         app.insert_resource(Time::<Fixed>::from_hz(60.0));
 
-
-        let mut virtual_time  = app.world_mut()
-            .resource_mut::<Time<Virtual>>();
+        let mut virtual_time = app.world_mut().resource_mut::<Time<Virtual>>();
 
         // Cap virtual time jumps to avoid huge dt after long stalls.
         // ~20 FPS cap for big spikes
@@ -96,9 +97,10 @@ impl INode for BevyApp {
             return;
         }
 
+        init_performance_tracing();
+
         let mut app = App::new();
         (APP_BUILDER_FN.lock().unwrap().as_mut().unwrap())(&mut app);
-
 
         app.add_plugins(DefaultPlugins)
             .add_plugins(crate::scene::PackedScenePlugin)
@@ -124,7 +126,6 @@ impl INode for BevyApp {
         self.apply_pending_actions();
 
         if let Some(app) = self.app.as_mut() {
-
             Self::update_clock(app);
 
             app.insert_resource(GodotVisualFrame);
