@@ -164,6 +164,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let entity_spawn_handler_ident = format_ident!("{}EntitySpawnHandler", base_ident);
     let entity_node_ident = format_ident!("{}Entity", base_ident);
     let updates_ident = format_ident!("{}EntityUpdateInfo", base_ident);
+    let exporter_accessor_ident = format_ident!("{}ExporterAccessor", base_ident);
+    let exporter_accessor_impl_ident = format_ident!("{}ExporterAccessorImpl", base_ident);
 
     // Split items into required / optional DTO types
     let mut req_tys: Vec<Type> = Vec::new();
@@ -491,6 +493,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #( #import_uses )*
 
             use bevy::prelude::*;
+            use bevy::ecs::system::SystemParam;
             use bevy_godot4::prelude::*;
             use bevy_godot4::godot::prelude::*;
             use bevy_godot4::prelude::AsVisualSystem;
@@ -498,8 +501,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use ::std::collections::{HashMap, HashSet};
             use godot::classes::PackedScene;
             use godot::builtin::NodePath;
+            use std::marker::PhantomData;
 
-           #[derive(Clone, Debug, Default)]
+
+            #[derive(Clone, Debug, Default)]
             struct SnapshotRust {
                 #( #snapshot_req_fields )*
                 #( #snapshot_opt_fields )*
@@ -511,6 +516,45 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     #( #snapshot_clone_from_opt )*
                 }
             }
+
+            #[derive(SystemParam)]
+            struct #exporter_accessor_ident<'w, 's> {
+                gd: NonSendMut<'w, #exporter_accessor_impl_ident>,
+                phantom: PhantomData<&'s ()>,
+            }
+
+            impl #exporter_accessor_ident<'_, '_> {
+                fn get(&mut self, scene_tree: &mut SceneTreeRef) -> Vec<Gd<#exporter_ident>> {
+                    if let Some(cached) = self.gd.0.as_ref() {
+                        let mut out: Vec<Gd<#exporter_ident>> = Vec::new();
+                        for e in cached.iter() {
+                            if e.is_instance_valid() {
+                                out.push(e.clone());
+                            }
+                        }
+                        if !out.is_empty() {
+                            return out;
+                        }
+                    }
+
+                    let Some(mut host) = scene_tree
+                        .get()
+                        .get_root()
+                        .unwrap()
+                        .get_node_or_null("BevyAppSingleton")
+                    else {
+                        self.gd.0 = Some(Vec::new());
+                        return Vec::new();
+                    };
+
+                    let exporters = collect_children::<#exporter_ident>(host, true);
+                    self.gd.0 = Some(exporters.clone());
+                    exporters
+                }
+            }
+
+            #[derive(Debug, Default)]
+            struct #exporter_accessor_impl_ident(Option<Vec<Gd<#exporter_ident>>>);
 
             // -------- Per-entity typed UpdateInfo (bool flags) --------
             #[derive(GodotClass)]
@@ -600,6 +644,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #( #updated_decl )*
 
                 mut scene_tree: SceneTreeRef,
+                mut exporter_accessor: #exporter_accessor_ident,
             )
             where
                 #( #dtofrom_bounds_req, )*
@@ -614,14 +659,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     return;
                 }
 
-                let Some(mut host) = scene_tree
-                    .get()
-                    .get_root()
-                    .unwrap()
-                    .get_node_or_null("BevyAppSingleton")
-                else { return; };
-
-                let mut exporters = collect_children::<#exporter_ident>(host, true);
+                let mut exporters = exporter_accessor.get(&mut scene_tree);
                 if exporters.is_empty() { return; }
 
                 let mut created_ids: HashSet<u64> = HashSet::new();
@@ -783,6 +821,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             pub struct #plugin_ident;
             impl Plugin for #plugin_ident {
                 fn build(&self, app: &mut App) {
+                    app.init_non_send_resource::<#exporter_accessor_impl_ident>();
                     app.add_systems(PostUpdate, #system_ident);
                 }
             }
