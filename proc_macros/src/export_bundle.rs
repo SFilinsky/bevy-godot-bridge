@@ -234,6 +234,17 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .map(|(dto, comp)| quote! { #dto: DTO + DtoFrom<#comp> + PartialEq })
         .collect();
 
+    // NEW: bounds for cached Rust snapshot
+    let comp_bounds_req: Vec<TokenStream2> = req_comps
+        .iter()
+        .map(|c| quote! { #c: Clone + PartialEq })
+        .collect();
+
+    let comp_bounds_opt: Vec<TokenStream2> = opt_comps
+        .iter()
+        .map(|c| quote! { #c: Clone + PartialEq })
+        .collect();
+
     // --- Filters -------------------------------------------------------------
     let tag_ty = &spec.tag;
 
@@ -263,7 +274,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
         for entity in removed.read() {
             let id_i64 = entity.to_bits() as i64;
             for exporter in exporters.iter_mut() {
-                { let mut ex = exporter.bind_mut(); ex.state_cache.remove(&id_i64); }
+                {
+                    let mut ex = exporter.bind_mut();
+                    ex.state_cache.remove(&id_i64);
+                    ex.state_cache_rust.remove(&id_i64);
+                }
                 exporter.signals().removed().emit(id_i64);
             }
         }
@@ -305,7 +320,53 @@ pub fn expand(input: TokenStream) -> TokenStream {
         }
     };
 
-    // Build wrapper assigns
+    // Rust snapshot struct + build expressions
+    let snapshot_ident = format_ident!("{}EntitySnapshot", base_ident);
+
+    let snap_field_tys: Vec<TokenStream2> = req_comps
+        .iter()
+        .map(|c| quote! { #c })
+        .chain(opt_comps.iter().map(|c| quote! { Option<#c> }))
+        .collect();
+
+    let snap_fields: Vec<TokenStream2> = all_fields
+        .iter()
+        .zip(snap_field_tys.iter())
+        .map(|(f, ty)| quote! { pub #f: #ty, })
+        .collect();
+
+    let snap_req_assigns: Vec<TokenStream2> = req_fields
+        .iter()
+        .zip(req_comps.iter())
+        .zip(read_vars.iter().take(req_fields.len()))
+        .map(|((field, _comp_ty), src_var)| {
+            quote! {
+                let #field = match #src_var {
+                    Some(comp) => comp.clone(),
+                    None => { continue; }
+                };
+            }
+        })
+        .collect();
+
+    let snap_opt_assigns: Vec<TokenStream2> = opt_fields
+        .iter()
+        .zip(opt_comps.iter())
+        .zip(read_vars.iter().skip(req_fields.len()))
+        .map(|((field, _comp_ty), src_var)| {
+            quote! {
+                let #field = #src_var.cloned();
+            }
+        })
+        .collect();
+
+    let snap_build = quote! {
+        let snapshot_rust = #snapshot_ident {
+            #( #all_fields: #all_fields, )*
+        };
+    };
+
+    // Build wrapper assigns (DTO creation) - keep as-is
     let req_assigns: Vec<_> = req_fields
         .iter()
         .zip(req_tys.iter())
@@ -439,6 +500,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use godot::classes::PackedScene;
             use godot::builtin::NodePath;
 
+            #[derive(Clone, PartialEq)]
+            pub struct #snapshot_ident {
+                #( #snap_fields )*
+            }
+
             // -------- Per-entity typed UpdateInfo (bool flags) --------
             #[derive(GodotClass)]
             #[class(init, base=RefCounted)]
@@ -484,6 +550,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             pub struct #exporter_ident {
                 /// Previous wrapper per entity id
                 state_cache: HashMap<i64, Gd<#wrapper_dto_ident>>,
+                state_cache_rust: HashMap<i64, #snapshot_ident>,
 
                 #[base]
                 base: Base<Node>,
@@ -528,6 +595,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
             where
                 #( #dtofrom_bounds_req, )*
                 #( #dtofrom_bounds_opt, )*
+                #( #comp_bounds_req, )*
+                #( #comp_bounds_opt, )*
             {
                 let any_created = !created.is_empty();
                 let any_removed = !removed.is_empty();
@@ -554,6 +623,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     let Ok(#destructure) = snapshot.get(entity) else { continue; };
 
+                    #( #snap_req_assigns )*
+                    #( #snap_opt_assigns )*
+                    #snap_build
+
                     #( #req_assigns )*
                     #( #opt_assigns )*
 
@@ -572,7 +645,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     let eid_i64 = entity.to_bits() as i64;
                     for exporter in exporters.iter_mut() {
-                        { let mut ex = exporter.bind_mut(); ex.state_cache.insert(eid_i64, wrapper.clone()); }
+                        {
+                            let mut ex = exporter.bind_mut();
+                            ex.state_cache.insert(eid_i64, wrapper.clone());
+                            ex.state_cache_rust.insert(eid_i64, snapshot_rust.clone());
+                        }
                         exporter.signals().created().emit(eid_i64, &wrapper);
                     }
                 }
@@ -599,99 +676,71 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let entity = Entity::from_bits(eid);
 
                     if let Ok(#destructure) = snapshot.get(entity) {
-                        #( #req_assigns )*
-                        #( #opt_assigns )*
-
-                        // NOTE: curr must be mutable because we set curr.updates later
-                        let mut curr = #wrapper_dto_ident::from_snapshot(
-                            #( #req_fields.clone(), )*
-                            #( #opt_fields.clone(), )*
-                            #updates_ident::new_gd(), // will be set below
-                        );
+                        #( #snap_req_assigns )*
+                        #( #snap_opt_assigns )*
+                        #snap_build
 
                         let eid_i64 = eid as i64;
 
                         for exporter in exporters.iter_mut() {
-                            // Pull previous wrapper (clone Option) immutably.
-                            let prev_opt: Option<Gd<#wrapper_dto_ident>> = {
+                            let prev_rust_opt: Option<#snapshot_ident> = {
                                 let ex = exporter.bind();
-                                ex.state_cache.get(&eid_i64).cloned()
+                                ex.state_cache_rust.get(&eid_i64).cloned()
                             };
 
-                            // Compute updates via DTO equality, using borrows.
                             let mut updates = #updates_ident::new_gd();
                             let mut any_changed = false;
 
-                            if prev_opt.is_none() {
-                                // First-seen update under this exporter: all flags = true
+                            if prev_rust_opt.is_none() {
                                 let mut u = updates.bind_mut();
                                 #( u.#all_fields = true; )*
                                 any_changed = true;
-                            } else if let Some(prev_ref) = prev_opt.as_ref() {
-                                // Extract per-field Gd clones into locals
-                                #(
-                                let (#req_prev_ids, #req_curr_ids) = {
-                                    let pw = prev_ref.bind();
-                                    let cw = curr.bind();
-                                    (pw.#req_fields.clone(), cw.#req_fields.clone())
-                                };
-                                )*
-                                #(
-                                let (#opt_prev_ids, #opt_curr_ids) = {
-                                    let pw = prev_ref.bind();
-                                    let cw = curr.bind();
-                                    (pw.#opt_fields.clone(), cw.#opt_fields.clone())
-                                };
-                                )*
-
+                            } else if let Some(prev_rust) = prev_rust_opt.as_ref() {
+                                let curr_rust = &snapshot_rust;
                                 {
                                     let mut u = updates.bind_mut();
-
-                                    // required fields equality
                                     #(
-                                    let changed = {
-                                        let pb = #req_prev_ids.bind();
-                                        let cb = #req_curr_ids.bind();
-                                        *pb != *cb
-                                    };
+                                    let changed = prev_rust.#req_fields != curr_rust.#req_fields;
                                     if changed { u.#req_fields = true; any_changed = true; } else { u.#req_fields = false; }
                                     )*
-
-                                    // optional fields equality (Option<Gd<Dto>>)
                                     #(
-                                    let changed = match (#opt_prev_ids, #opt_curr_ids) {
-                                        (None, None) => false,
-                                        (Some(p), Some(c)) => {
-                                            let pb = p.bind();
-                                            let cb = c.bind();
-                                            *pb != *cb
-                                        }
-                                        _ => true,
-                                    };
+                                    let changed = prev_rust.#opt_fields != curr_rust.#opt_fields;
                                     if changed { u.#opt_fields = true; any_changed = true; } else { u.#opt_fields = false; }
                                     )*
                                 }
                             }
 
                             if !any_changed {
-                                // No actual DTO changes; skip emit and DO NOT overwrite cache.
                                 continue;
                             }
 
-                            // Attach updates to curr (requires curr to be mutable binding)
+                            let prev_opt: Option<Gd<#wrapper_dto_ident>> = {
+                                let ex = exporter.bind();
+                                ex.state_cache.get(&eid_i64).cloned()
+                            };
+
+                            // Only build DTO wrapper now that we know it changed.
+                            #( #req_assigns )*
+                            #( #opt_assigns )*
+
+                            let mut curr = #wrapper_dto_ident::from_snapshot(
+                                #( #req_fields, )*
+                                #( #opt_fields, )*
+                                #updates_ident::new_gd(), // will be set below
+                            );
+
                             {
                                 let mut c = curr.bind_mut();
                                 c.updates = updates.clone();
                             }
 
-                            // Prepare prev_for_emit without moving prev_opt.
                             let prev_for_emit: Gd<#wrapper_dto_ident> =
                                 prev_opt.as_ref().cloned().unwrap_or_else(|| curr.clone());
 
-                            // Emit and update cache AFTER successful compute
                             {
                                 let mut ex = exporter.bind_mut();
                                 ex.state_cache.insert(eid_i64, curr.clone());
+                                ex.state_cache_rust.insert(eid_i64, snapshot_rust.clone());
                             }
                             exporter.signals().updated().emit(eid_i64, &curr, &prev_for_emit);
                         }
