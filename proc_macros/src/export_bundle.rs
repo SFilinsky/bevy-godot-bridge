@@ -1,11 +1,11 @@
-﻿use proc_macro::TokenStream;
-use heck::ToSnakeCase;
+﻿use heck::ToSnakeCase;
+use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
-    bracketed,
+    Ident, LitStr, Path, Result, Token, Type, bracketed,
     parse::{Parse, ParseStream},
-    parse_macro_input, Ident, Path, Result, Type, Token, LitStr,
+    parse_macro_input,
 };
 
 /// Usage:
@@ -104,12 +104,7 @@ fn dto_field_ident(ty: &Type) -> Ident {
     let base = if raw.starts_with("Option <") || raw.starts_with("Option<") {
         let cut = raw.trim();
         let inner = &cut[cut.find('<').unwrap() + 1..cut.rfind('>').unwrap()];
-        inner
-            .trim()
-            .split("::")
-            .last()
-            .unwrap_or(inner)
-            .to_string()
+        inner.trim().split("::").last().unwrap_or(inner).to_string()
     } else {
         last_seg_name(ty)
     };
@@ -167,8 +162,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let plugin_ident = format_ident!("{}EntityExportPlugin", base_ident);
     let system_ident = format_ident!("export_{}_entity_changes", base_snake);
     let entity_spawn_handler_ident = format_ident!("{}EntitySpawnHandler", base_ident);
-    let entity_node_ident          = format_ident!("{}Entity", base_ident);
-    let updates_ident              = format_ident!("{}EntityUpdateInfo", base_ident);
+    let entity_node_ident = format_ident!("{}Entity", base_ident);
+    let updates_ident = format_ident!("{}EntityUpdateInfo", base_ident);
 
     // Split items into required / optional DTO types
     let mut req_tys: Vec<Type> = Vec::new();
@@ -186,10 +181,22 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let opt_fields: Vec<Ident> = opt_tys.iter().map(dto_field_ident).collect();
 
     // **Locals for prev/curr identifiers used in expansion**
-    let req_prev_ids: Vec<Ident> = req_fields.iter().map(|f| format_ident!("prev_{}", f)).collect();
-    let req_curr_ids: Vec<Ident> = req_fields.iter().map(|f| format_ident!("curr_{}", f)).collect();
-    let opt_prev_ids: Vec<Ident> = opt_fields.iter().map(|f| format_ident!("prev_{}", f)).collect();
-    let opt_curr_ids: Vec<Ident> = opt_fields.iter().map(|f| format_ident!("curr_{}", f)).collect();
+    let req_prev_ids: Vec<Ident> = req_fields
+        .iter()
+        .map(|f| format_ident!("prev_{}", f))
+        .collect();
+    let req_curr_ids: Vec<Ident> = req_fields
+        .iter()
+        .map(|f| format_ident!("curr_{}", f))
+        .collect();
+    let opt_prev_ids: Vec<Ident> = opt_fields
+        .iter()
+        .map(|f| format_ident!("prev_{}", f))
+        .collect();
+    let opt_curr_ids: Vec<Ident> = opt_fields
+        .iter()
+        .map(|f| format_ident!("curr_{}", f))
+        .collect();
 
     // Component types for each DTO via <Dto as DTO>::Component
     let req_comps: Vec<TokenStream2> = req_tys
@@ -281,7 +288,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
         }
     };
 
-    let read_vars: Vec<Ident> = all_fields.iter().map(|f| format_ident!("__{}", f)).collect();
+    let read_vars: Vec<Ident> = all_fields
+        .iter()
+        .map(|f| format_ident!("__{}", f))
+        .collect();
 
     let destructure = if read_vars.is_empty() {
         quote! { () }
@@ -322,8 +332,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .collect();
 
     // Wrapper DTO fields (zip)
-    let wrapper_req_field_types: Vec<_> = req_tys.iter().map(|dto_ty| quote! { Gd<#dto_ty> }).collect();
-    let wrapper_opt_field_types: Vec<_> = opt_tys.iter().map(|dto_ty| quote! { Option<Gd<#dto_ty>> }).collect();
+    let wrapper_req_field_types: Vec<_> = req_tys
+        .iter()
+        .map(|dto_ty| quote! { Gd<#dto_ty> })
+        .collect();
+    let wrapper_opt_field_types: Vec<_> = opt_tys
+        .iter()
+        .map(|dto_ty| quote! { Option<Gd<#dto_ty>> })
+        .collect();
 
     let wrapper_req_fields: Vec<TokenStream2> = req_fields
         .iter()
@@ -349,11 +365,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let mut updated_decl: Vec<TokenStream2> = Vec::new();
     for (i, comp) in req_comps.iter().enumerate() {
         let id = &updated_req_idents[i];
-        updated_decl.push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
+        updated_decl
+            .push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
     }
     for (j, comp) in opt_comps.iter().enumerate() {
         let id = &updated_opt_idents[j];
-        updated_decl.push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
+        updated_decl
+            .push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
     }
 
     // Snapshot filter (always With<tag>)
@@ -385,6 +403,25 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
         })
         .collect();
+
+    let any_updated_terms: Vec<TokenStream2> = updated_req_idents
+        .iter()
+        .map(|id| quote! { !#id.is_empty() })
+        .chain(
+            updated_opt_idents
+                .iter()
+                .map(|id| quote! { !#id.is_empty() }),
+        )
+        .collect();
+
+    let any_updated_expr = if any_updated_terms.is_empty() {
+        quote! { false }
+    } else if any_updated_terms.len() == 1 {
+        let t = &any_updated_terms[0];
+        quote! { #t }
+    } else {
+        quote! { #( #any_updated_terms )||* }
+    };
 
     // -------------------- EXPAND --------------------
     let expanded = quote! {
@@ -492,6 +529,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #( #dtofrom_bounds_req, )*
                 #( #dtofrom_bounds_opt, )*
             {
+                let any_created = !created.is_empty();
+                let any_removed = !removed.is_empty();
+                let any_updated = #any_updated_expr;
+                if !any_created && !any_removed && !any_updated {
+                    return;
+                }
+
                 let Some(mut host) = scene_tree
                     .get()
                     .get_root()
