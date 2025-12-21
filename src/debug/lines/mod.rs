@@ -15,7 +15,10 @@ pub mod resources {
     }
     impl Default for LineConfig {
         fn default() -> Self {
-            Self { always_on_top: false, world_origin: None }
+            Self {
+                always_on_top: false,
+                world_origin: None,
+            }
         }
     }
 
@@ -45,7 +48,12 @@ pub mod resources {
         ) {
             self.pending.insert(
                 key.into(),
-                LineRequest { a, b, color, config },
+                LineRequest {
+                    a,
+                    b,
+                    color,
+                    config,
+                },
             );
         }
 
@@ -69,24 +77,28 @@ pub mod resources {
 }
 
 pub mod systems {
-    use bevy::prelude::{NonSendMut, Res, ResMut};
-    use godot::builtin::{NodePath, PackedColorArray, PackedVector3Array, Variant, VariantArray};
-    use godot::classes::{ArrayMesh, Engine, MeshInstance3D, SceneTree, StandardMaterial3D};
-    use godot::classes::base_material_3d::{Flags, ShadingMode};
-    use godot::classes::mesh::{ArrayType, PrimitiveType};
-    use godot::meta::ToGodot;
-    use godot::obj::{EngineEnum, Gd, NewAlloc, NewGd, Singleton};
     use crate::debug::debug_manager::DebugMode;
     use crate::debug::lines::resources::{DebugLineRequests, LineDriver};
+    use bevy::prelude::{NonSendMut, Res, ResMut};
+    use godot::builtin::{NodePath, PackedColorArray, PackedVector3Array, VarArray, Variant};
+    use godot::classes::base_material_3d::{Flags, ShadingMode};
+    use godot::classes::mesh::{ArrayType, PrimitiveType};
+    use godot::classes::{ArrayMesh, Engine, MeshInstance3D, SceneTree, StandardMaterial3D};
+    use godot::meta::ToGodot;
+    use godot::obj::{EngineEnum, Gd, NewAlloc, NewGd, Singleton};
 
     pub(super) fn ensure_parent(mut driver: NonSendMut<LineDriver>) {
         if driver.parent.is_some() {
             return;
         }
         let engine = Engine::singleton();
-        let Some(loop_obj) = engine.get_main_loop() else { return; };
+        let Some(loop_obj) = engine.get_main_loop() else {
+            return;
+        };
         let tree = loop_obj.cast::<SceneTree>();
-        let Some(mut root) = tree.get_root() else { return; };
+        let Some(mut root) = tree.get_root() else {
+            return;
+        };
 
         let path = NodePath::from("BevyDebug");
         let parent: Gd<_> = if let Some(n) = root.try_get_node_as::<godot::classes::Node>(&path) {
@@ -109,7 +121,9 @@ pub mod systems {
             return;
         }
 
-        let Some(mut parent) = driver.parent.as_ref().cloned() else { return; };
+        let Some(mut parent) = driver.parent.as_ref().cloned() else {
+            return;
+        };
 
         // Take requests for this frame.
         let pending = std::mem::take(&mut reqs.pending);
@@ -141,10 +155,10 @@ pub mod systems {
             cols.push(req.color);
             cols.push(req.color);
 
-            let mut arrays = VariantArray::new();
+            let mut arrays = VarArray::new();
             arrays.resize(ArrayType::MAX.ord() as usize, &Variant::nil());
             arrays.set(ArrayType::VERTEX.ord() as usize, &verts.to_variant());
-            arrays.set(ArrayType::COLOR .ord() as usize, &cols.to_variant());
+            arrays.set(ArrayType::COLOR.ord() as usize, &cols.to_variant());
 
             let mut arr_mesh = ArrayMesh::new_gd();
             // Newer bindings take the typed enum directly:
@@ -171,9 +185,9 @@ pub mod systems {
 }
 
 pub mod plugin {
-    use bevy::app::{App, FixedPreUpdate, FixedUpdate, Plugin};
     use crate::debug::lines::resources::{DebugLineRequests, LineDriver};
     use crate::debug::lines::systems::{apply_lines, ensure_parent};
+    use bevy::app::{App, FixedPreUpdate, FixedUpdate, Plugin};
 
     pub struct DebugLineVisualizationPlugin;
     impl Plugin for DebugLineVisualizationPlugin {
