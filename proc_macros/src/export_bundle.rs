@@ -36,12 +36,8 @@ impl Parse for Spec {
             input.parse::<Token![:]>()?;
 
             match key.to_string().as_str() {
-                "name" => {
-                    name = Some(input.parse()?);
-                }
-                "tag" => {
-                    tag = Some(input.parse()?);
-                }
+                "name" => name = Some(input.parse()?),
+                "tag" => tag = Some(input.parse()?),
                 "dtos" => {
                     let list;
                     bracketed!(list in input);
@@ -224,7 +220,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .iter()
         .map(|c| quote! { #c: Clone + PartialEq })
         .collect();
-
     let comp_bounds_opt: Vec<TokenStream2> = opt_comps
         .iter()
         .map(|c| quote! { #c: Clone + PartialEq })
@@ -264,7 +259,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     ex.state_cache.remove(&id_i64);
                     ex.state_cache_rust.remove(&id_i64);
                 }
-                // batched: removed will be emitted via batch
             }
         }
     };
@@ -331,7 +325,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         })
         .collect();
 
-    // Build Rust snapshot assigns (cloning components, but updating cache uses clone_from later)
+    // Build Rust snapshot assigns
     let req_rust_assigns: Vec<_> = req_fields
         .iter()
         .zip(req_comps.iter())
@@ -350,14 +344,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .iter()
         .zip(opt_comps.iter())
         .zip(read_vars.iter().skip(req_fields.len()))
-        .map(|((field, _comp_ty), src_var)| {
-            quote! {
-                let #field = #src_var.cloned();
-            }
-        })
+        .map(|((field, _comp_ty), src_var)| quote! { let #field = #src_var.cloned(); })
         .collect();
 
-    // Wrapper DTO fields (zip)
+    // Wrapper DTO fields
     let wrapper_req_field_types: Vec<_> = req_tys
         .iter()
         .map(|dto_ty| quote! { Gd<#dto_ty> })
@@ -400,7 +390,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             .push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
     }
 
-    // Snapshot filter (always With<tag>)
+    // Snapshot filter
     let snapshot_filter = quote! { With<#tag_ty> };
 
     // DTO paths (req + opt)
@@ -410,12 +400,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
             import_paths.push(p);
         }
     }
-    // Tag path
     if let Some(p) = relative_path(&spec.tag) {
         import_paths.push(p);
     }
 
-    // Dedup by stringified path
+    // Dedup uses
     use std::collections::HashSet;
     let mut seen: HashSet<String> = HashSet::new();
     let import_uses: Vec<TokenStream2> = import_paths
@@ -497,7 +486,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use bevy::ecs::system::SystemParam;
             use bevy_godot4::prelude::*;
             use bevy_godot4::godot::prelude::*;
-            use bevy_godot4::prelude::AsVisualSystem;
             use bevy_godot4::collect_children;
             use ::std::collections::{HashMap, HashSet};
             use godot::classes::PackedScene;
@@ -571,7 +559,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #( #wrapper_req_fields )*
                 #( #wrapper_opt_fields )*
 
-                /// Typed updates struct
                 #[var]
                 pub updates: Gd<#updates_ident>,
 
@@ -595,7 +582,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
-            // -------- Batch payload (typed, no Variant container) --------
+            // -------- Batch payload --------
             #[derive(GodotClass)]
             #[class(init, base=RefCounted)]
             pub struct #batch_ident {
@@ -615,14 +602,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[derive(GodotClass)]
             #[class(init, base=Node)]
             pub struct #exporter_ident {
-                /// Previous wrapper per entity id
                 state_cache: HashMap<i64, Gd<#wrapper_dto_ident>>,
-
-                /// Previous Rust snapshot per entity id (for fast compare)
                 state_cache_rust: HashMap<i64, SnapshotRust>,
-
-                #[base]
-                base: Base<Node>,
+                #[base] base: Base<Node>,
             }
 
             #[godot_api]
@@ -633,30 +615,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
             // -------- System --------
             #[allow(non_snake_case)]
             fn #system_ident(
-                // created
-                created: Query<
-                    Entity,
-                    #created_filter
-                >,
-
-                // updated candidates (we'll refine via Rust snapshot equality)
-                updated: Query<
-                    Entity,
-                    #updated_filter
-                >,
-
-                // removed
+                created: Query<Entity, #created_filter>,
+                updated: Query<Entity, #updated_filter>,
                 #removed_decl
-
-                // snapshot of current components on entity
-                snapshot: Query<
-                    #read_tuple,
-                    #snapshot_filter
-                >,
-
-                // per-component 'Changed' queries (used to build candidate set)
+                snapshot: Query<#read_tuple, #snapshot_filter>,
                 #( #updated_decl )*
-
                 mut scene_tree: SceneTreeRef,
                 mut exporter_accessor: #exporter_accessor_ident,
             )
@@ -678,7 +641,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 let mut created_ids_set: HashSet<u64> = HashSet::new();
 
-                // We collect removed ids once; per-exporter we'll emit them in batch.
                 let mut removed_ids_vec: Vec<i64> = Vec::new();
                 if any_removed {
                     for entity in removed.read() {
@@ -687,15 +649,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 // ---------------- CREATED ----------------
-                // For CREATED we currently build per-exporter anyway because caches are per-exporter.
-                // We'll also batch per-exporter below.
                 if any_created {
                     for entity in created.iter() {
                         created_ids_set.insert(entity.to_bits());
 
                         let Ok(#destructure) = snapshot.get(entity) else { continue; };
 
-                        // Build Rust snapshot once
                         #( #req_rust_assigns )*
                         #( #opt_rust_assigns )*
                         let snapshot_rust = SnapshotRust {
@@ -703,11 +662,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             #( #opt_fields: #opt_fields.clone(), )*
                         };
 
-                        // Godot DTO creation as before
                         #( #snap_req_assigns )*
                         #( #snap_opt_assigns )*
 
-                        // updates: everything true on creation
                         let mut updates = #updates_ident::new_gd();
                         {
                             let mut u = updates.bind_mut();
@@ -721,19 +678,16 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         );
 
                         let eid_i64 = entity.to_bits() as i64;
-
                         for exporter in exporters.iter_mut() {
-                            {
-                                let mut ex = exporter.bind_mut();
-                                ex.state_cache.insert(eid_i64, wrapper.clone());
-                                ex.state_cache_rust.insert(eid_i64, snapshot_rust.clone());
-                            }
+                            let mut ex = exporter.bind_mut();
+                            ex.state_cache.insert(eid_i64, wrapper.clone());
+                            ex.state_cache_rust.insert(eid_i64, snapshot_rust.clone());
                         }
                     }
                 }
 
                 // ---------------- UPDATED ----------------
-                use ::std::collections::{HashSet as __HashSet};
+                use ::std::collections::HashSet as __HashSet;
                 let mut changed_eids: __HashSet<u64> = __HashSet::new();
 
                 #(
@@ -748,7 +702,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
                 )*
 
-                // Per-exporter batching containers
                 struct __BatchAcc {
                     created_ids: PackedInt64Array,
                     created: Array<Gd<#wrapper_dto_ident>>,
@@ -770,11 +723,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     });
                 }
 
-                // Fill CREATED batches from caches (cheap: just ids + cached wrapper clones)
+                // Fill CREATED batches from caches
                 if any_created {
                     for (idx, exporter) in exporters.iter().enumerate() {
-                        let mut acc = &mut batches[idx];
                         let ex = exporter.bind();
+                        let acc = &mut batches[idx];
 
                         for eid_u64 in created_ids_set.iter().copied() {
                             let eid_i64 = eid_u64 as i64;
@@ -786,15 +739,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                // UPDATED: compute per entity, then per exporter decide if changed, and push to that exporter's batch.
+                // UPDATED
                 if any_updated {
                     for eid in changed_eids.into_iter() {
                         if created_ids_set.contains(&eid) { continue; }
 
                         let entity = Entity::from_bits(eid);
-
                         if let Ok(#destructure) = snapshot.get(entity) {
-                            // Build Rust snapshot once per entity
                             #( #req_rust_assigns )*
                             #( #opt_rust_assigns )*
                             let snapshot_rust = SnapshotRust {
@@ -805,7 +756,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             let eid_i64 = eid as i64;
 
                             for (idx, exporter) in exporters.iter_mut().enumerate() {
-                                // Compute updates using Rust snapshot compare
                                 let mut updates = #updates_ident::new_gd();
                                 let mut any_changed = false;
 
@@ -815,7 +765,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                 };
 
                                 if prev_missing {
-                                    // First-seen update under this exporter: all flags = true
                                     let mut u = updates.bind_mut();
                                     #( u.#all_fields = true; )*
                                     any_changed = true;
@@ -823,35 +772,29 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                     let ex = exporter.bind();
                                     let prev_rust = ex.state_cache_rust.get(&eid_i64).unwrap();
 
-                                    {
-                                        let mut u = updates.bind_mut();
-
-                                        #(
-                                        let changed = prev_rust.#req_fields != snapshot_rust.#req_fields;
-                                        if changed { u.#req_fields = true; any_changed = true; } else { u.#req_fields = false; }
-                                        )*
-
-                                        #(
-                                        let changed = prev_rust.#opt_fields != snapshot_rust.#opt_fields;
-                                        if changed { u.#opt_fields = true; any_changed = true; } else { u.#opt_fields = false; }
-                                        )*
-                                    }
+                                    let mut u = updates.bind_mut();
+                                    #(
+                                    let changed = prev_rust.#req_fields != snapshot_rust.#req_fields;
+                                    if changed { u.#req_fields = true; any_changed = true; } else { u.#req_fields = false; }
+                                    )*
+                                    #(
+                                    let changed = prev_rust.#opt_fields != snapshot_rust.#opt_fields;
+                                    if changed { u.#opt_fields = true; any_changed = true; } else { u.#opt_fields = false; }
+                                    )*
                                 }
 
                                 if !any_changed {
                                     continue;
                                 }
 
-                                // Build Godot DTOs only if something changed for this exporter
                                 #( #snap_req_assigns )*
                                 #( #snap_opt_assigns )*
 
                                 let mut curr = #wrapper_dto_ident::from_snapshot(
                                     #( #req_fields.clone(), )*
                                     #( #opt_fields.clone(), )*
-                                    #updates_ident::new_gd(), // will be set below
+                                    #updates_ident::new_gd(),
                                 );
-
                                 {
                                     let mut c = curr.bind_mut();
                                     c.updates = updates.clone();
@@ -859,17 +802,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                                 let prev_for_emit: Gd<#wrapper_dto_ident> = {
                                     let ex = exporter.bind();
-                                    ex.state_cache
-                                        .get(&eid_i64)
-                                        .cloned()
-                                        .unwrap_or_else(|| curr.clone())
+                                    ex.state_cache.get(&eid_i64).cloned().unwrap_or_else(|| curr.clone())
                                 };
 
                                 {
                                     let mut ex = exporter.bind_mut();
-
                                     ex.state_cache.insert(eid_i64, curr.clone());
-
                                     if let Some(prev) = ex.state_cache_rust.get_mut(&eid_i64) {
                                         prev.clone_from_in_place(&snapshot_rust);
                                     } else {
@@ -877,8 +815,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                     }
                                 }
 
-                                // push into this exporter's batch (IMPORTANT: push by reference)
-                                let mut acc = &mut batches[idx];
+                                let acc = &mut batches[idx];
                                 acc.updated_ids.push(eid_i64);
                                 acc.updated_curr.push(&curr);
                                 acc.updated_prev.push(&prev_for_emit);
@@ -887,7 +824,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                // REMOVED: apply removals to caches and add ids to each exporter's batch
+                // REMOVED
                 if any_removed && !removed_ids_vec.is_empty() {
                     for (idx, exporter) in exporters.iter_mut().enumerate() {
                         {
@@ -898,17 +835,16 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             }
                         }
 
-                        let mut acc = &mut batches[idx];
+                        let acc = &mut batches[idx];
                         for &id_i64 in removed_ids_vec.iter() {
                             acc.removed_ids.push(id_i64);
                         }
                     }
                 }
 
-                // Emit batch per exporter (only if something is non-empty)
+                // Emit batch per exporter
                 for (idx, exporter) in exporters.iter_mut().enumerate() {
                     let acc = &mut batches[idx];
-
                     let any =
                         acc.created_ids.len() > 0
                         || acc.updated_ids.len() > 0
@@ -923,18 +859,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         let mut b = batch.bind_mut();
                         b.created_ids = acc.created_ids.clone();
                         b.created = acc.created.clone();
-
                         b.updated_ids = acc.updated_ids.clone();
                         b.updated_curr = acc.updated_curr.clone();
                         b.updated_prev = acc.updated_prev.clone();
-
                         b.removed_ids = acc.removed_ids.clone();
                     }
 
                     exporter.signals().batch().emit(&batch);
                 }
 
-                // keep old removed_loop for structure, but it's now a no-op emitter-wise
                 #removed_loop
             }
 
@@ -947,49 +880,30 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
-            // -------- Runtime Entity Node (one per in-game entity) --------
+            // -------- Runtime Entity Node (virtual hooks, no signals) --------
             #[derive(GodotClass)]
             #[class(base = Node)]
             pub struct #entity_node_ident {
-                /// Unique ECS entity id from Bevy
-                #[var]
-                pub entity_id: i64,
-
-                #[var]
-                pub last_state: Option<Gd<#wrapper_dto_ident>>,
-
-                /// When true, removal will NOT free this node; instead we emit `on_remove`.
-                /// Toggle via `set_custom_cleanup(true)`.
-                #[var]
-                custom_cleanup_enabled: bool,
-
-                #[base]
-                base: Base<Node>,
+                #[var] pub entity_id: i64,
+                #[var] pub last_state: Option<Gd<#wrapper_dto_ident>>,
+                #[var] custom_cleanup_enabled: bool,
+                #[base] base: Base<Node>,
             }
 
             #[godot_api]
             impl #entity_node_ident {
-                /// Apply a full wrapper DTO (you can also call this from your scripts)
-                #[func]
-                fn apply_dto(&mut self, dto: Gd<#wrapper_dto_ident>, prev: Gd<#wrapper_dto_ident>) {
-                    self.signals().on_update().emit(&dto, &prev);
-                    self.last_state = Some(dto);
-                }
-
-                /// Allow the game to opt into custom cleanup on remove.
                 #[func]
                 fn set_custom_cleanup(&mut self, enabled: bool) {
                     self.custom_cleanup_enabled = enabled;
                 }
 
-                /// Raised when a new wrapper is available.
-                /// Signature: on_update(curr, prev)
-                #[signal]
-                fn on_update(curr: Gd<#wrapper_dto_ident>, prev: Gd<#wrapper_dto_ident>);
+                #[func(virtual)]
+                fn on_updated(&mut self, curr: Gd<#wrapper_dto_ident>, _prev: Gd<#wrapper_dto_ident>) {
+                    self.last_state = Some(curr);
+                }
 
-                /// Emitted when the Bevy entity despawns and we opted into custom cleanup.
-                #[signal]
-                fn on_remove();
+                #[func(virtual)]
+                fn on_removed(&mut self) {}
             }
 
             #[godot_api]
@@ -999,39 +913,34 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         entity_id: -1,
                         last_state: None,
                         custom_cleanup_enabled: false,
-                        base
+                        base,
                     }
                 }
             }
 
-            // -------- Spawn Handler (binds exporter signals & manages spawned scenes) --------
+            // -------- Spawn Handler --------
             #[derive(GodotClass)]
             #[class(base = Node)]
             pub struct #entity_spawn_handler_ident {
-                /// Scene that must extend `#entity_node_ident`
-                #[var]
-                scene: Gd<PackedScene>,
-
-                /// Optional parent; empty = this Node
-                #[var]
-                parent_path: NodePath,
-
-                /// Cache of spawned nodes
+                #[var] scene: Gd<PackedScene>,
+                #[var] parent_path: NodePath,
                 map: HashMap<i64, Gd<#entity_node_ident>>,
-
-                #[base]
-                base: Base<Node>,
+                #[base] base: Base<Node>,
             }
 
             #[godot_api]
             impl #entity_spawn_handler_ident {
-                #[func]
-                fn _on_created(&mut self, entity_id: i64, curr: Gd<#wrapper_dto_ident>) {
-                    let mut parent: Gd<Node> = if self.parent_path.is_empty() {
+                fn parent_node(&mut self) -> Gd<Node> {
+                    if self.parent_path.is_empty() {
                         self.base().clone().upcast()
                     } else {
                         self.base().get_node_as::<Node>(&self.parent_path)
-                    };
+                    }
+                }
+
+                #[func]
+                fn _on_created(&mut self, entity_id: i64, curr: Gd<#wrapper_dto_ident>) {
+                    let mut parent: Gd<Node> = self.parent_node();
 
                     let inst = self.scene.instantiate().unwrap();
                     parent.add_child(&inst);
@@ -1045,7 +954,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     // For first frame, prev == curr (convenient default)
                     if ent.is_instance_valid() {
-                        ent.bind_mut().apply_dto(curr.clone(), curr);
+                        ent.bind_mut().on_updated(curr.clone(), curr);
                     }
 
                     self.map.insert(entity_id, ent);
@@ -1055,7 +964,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 fn _on_updated(&mut self, entity_id: i64, curr: Gd<#wrapper_dto_ident>, prev: Gd<#wrapper_dto_ident>) {
                     if let Some(ent) = self.map.get_mut(&entity_id) {
                         if ent.is_instance_valid() {
-                            ent.bind_mut().apply_dto(curr, prev);
+                            ent.bind_mut().on_updated(curr, prev);
                         }
                     }
                 }
@@ -1063,13 +972,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[func]
                 fn _on_removed(&mut self, entity_id: i64) {
                     if let Some(mut ent) = self.map.remove(&entity_id) {
-                        if ent.is_instance_valid() {
-                            let custom = { ent.bind().custom_cleanup_enabled };
-                            if custom {
-                                ent.bind_mut().signals().on_remove().emit();
-                            } else {
-                                ent.upcast::<Node>().queue_free();
-                            }
+                        if !ent.is_instance_valid() {
+                            return;
+                        }
+
+                        let custom = { ent.bind().custom_cleanup_enabled };
+                        if custom {
+                            ent.bind_mut().on_removed();
+                        } else {
+                            ent.upcast::<Node>().queue_free();
                         }
                     }
                 }
@@ -1078,35 +989,28 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 fn _on_batch(&mut self, batch: Gd<#batch_ident>) {
                     let b = batch.bind();
 
-                    // CREATED (ids and dtos aligned by index)
-                    let created_len = b.created_ids.len();
-                    for i in 0..created_len {
-                        let idx = i as usize;
-                        let id = b.created_ids.get(i);
-                        let dto = b.created.get(idx);
-                        if let (Some(entity_id), Some(curr)) = (id, dto) {
-                            self._on_created(entity_id, curr);
-                        }
+                    // CREATED
+                    let created_len: usize = b.created_ids.len() as usize;
+                    for idx in 0..created_len {
+                        let Some(entity_id) = b.created_ids.get(idx) else { continue; };
+                        let Some(curr) = b.created.get(idx) else { continue; };
+                        self._on_created(entity_id, curr);
                     }
 
-                    // UPDATED (ids, curr, prev aligned by index)
-                    let updated_len = b.updated_ids.len();
-                    for i in 0..updated_len {
-                        let idx = i as usize;
-                        let id = b.updated_ids.get(i);
-                        let curr = b.updated_curr.get(idx);
-                        let prev = b.updated_prev.get(idx);
-                        if let (Some(entity_id), Some(curr), Some(prev)) = (id, curr, prev) {
-                            self._on_updated(entity_id, curr, prev);
-                        }
+                    // UPDATED
+                    let updated_len: usize = b.updated_ids.len() as usize;
+                    for idx in 0..updated_len {
+                        let Some(entity_id) = b.updated_ids.get(idx) else { continue; };
+                        let Some(curr) = b.updated_curr.get(idx) else { continue; };
+                        let Some(prev) = b.updated_prev.get(idx) else { continue; };
+                        self._on_updated(entity_id, curr, prev);
                     }
 
                     // REMOVED
-                    let removed_len = b.removed_ids.len();
-                    for i in 0..removed_len {
-                        if let Some(entity_id) = b.removed_ids.get(i) {
-                            self._on_removed(entity_id);
-                        }
+                    let removed_len: usize = b.removed_ids.len() as usize;
+                    for idx in 0..removed_len {
+                        let Some(entity_id) = b.removed_ids.get(idx) else { continue; };
+                        self._on_removed(entity_id);
                     }
                 }
 
@@ -1143,7 +1047,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let _ = exporter.connect("batch", &on_batch);
                 }
             }
-
         }
 
         pub use #wrapper_module_ident::{ #wrapper_dto_ident, #exporter_ident, #plugin_ident };
