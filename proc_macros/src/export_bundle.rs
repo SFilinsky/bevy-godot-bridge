@@ -299,7 +299,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         }
     };
 
-    // Build wrapper assigns (Godot DTO creation)
+    // Build wrapper assigns (Godot DTO creation) — used for initial creation only
     let snap_req_assigns: Vec<_> = req_fields
         .iter()
         .zip(req_tys.iter())
@@ -345,6 +345,48 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .zip(opt_comps.iter())
         .zip(read_vars.iter().skip(req_fields.len()))
         .map(|((field, _comp_ty), src_var)| quote! { let #field = #src_var.cloned(); })
+        .collect();
+
+    // In-place wrapper update (nested DTO refs stable; updates happen by mutating existing DTOs)
+    let update_req_in_place: Vec<_> = req_fields
+        .iter()
+        .zip(req_tys.iter())
+        .zip(req_comps.iter())
+        .zip(read_vars.iter().take(req_fields.len()))
+        .map(|(((field, dto_ty), comp_ty), src_var)| {
+            quote! {
+                match #src_var {
+                    Some(comp) => {
+                        let mut dto = d.#field.clone();
+                        <#dto_ty as DtoFrom<#comp_ty>>::update(&mut dto, comp);
+                    }
+                    None => { continue; } // required missing -> skip emit
+                };
+            }
+        })
+        .collect();
+
+    let update_opt_in_place: Vec<_> = opt_fields
+        .iter()
+        .zip(opt_tys.iter())
+        .zip(opt_comps.iter())
+        .zip(read_vars.iter().skip(req_fields.len()))
+        .map(|(((field, dto_ty), comp_ty), src_var)| {
+            quote! {
+                match #src_var {
+                    Some(comp) => {
+                        if let Some(mut dto) = d.#field.clone() {
+                            <#dto_ty as DtoFrom<#comp_ty>>::update(&mut dto, comp);
+                        } else {
+                            d.#field = Some(<#dto_ty as DtoFrom<#comp_ty>>::dto_from(comp));
+                        }
+                    }
+                    None => {
+                        d.#field = None;
+                    }
+                };
+            }
+        })
         .collect();
 
     // Wrapper DTO fields
@@ -602,9 +644,44 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[derive(GodotClass)]
             #[class(init, base=Node)]
             pub struct #exporter_ident {
-                state_cache: HashMap<i64, Gd<#wrapper_dto_ident>>,
+                state_cache: HashMap<i64, __EntityDtoRing>,
                 state_cache_rust: HashMap<i64, SnapshotRust>,
                 #[base] base: Base<Node>,
+            }
+
+            /// Per-entity DTO ring to avoid allocations and guarantee referential inequality.
+            ///
+            /// Ring idea:
+            /// - `curr` is the current "version" emitted to Godot.
+            /// - `prev` is the previous `curr` (stable reference, used for diffs/animations).
+            /// - `spare` is a pre-created vacant instance we can rotate into `curr`.
+            ///
+            /// On update:
+            /// - rotate: `prev <- curr`, `curr <- spare`, `spare <- old prev`
+            /// - update `curr` in-place (including nested DTO contents) so nested references remain stable.
+            #[derive(Clone, Debug)]
+            struct __EntityDtoRing {
+                curr: Gd<#wrapper_dto_ident>,
+                prev: Gd<#wrapper_dto_ident>,
+                spare: Gd<#wrapper_dto_ident>,
+            }
+
+            impl __EntityDtoRing {
+                fn new(
+                    curr: Gd<#wrapper_dto_ident>,
+                    prev: Gd<#wrapper_dto_ident>,
+                    spare: Gd<#wrapper_dto_ident>,
+                ) -> Self {
+                    Self { curr, prev, spare }
+                }
+
+                fn rotate(&mut self) {
+                    // prev <- curr, curr <- spare, spare <- prev
+                    let old_curr = self.curr.clone();
+                    self.curr = self.spare.clone();
+                    self.spare = self.prev.clone();
+                    self.prev = old_curr;
+                }
             }
 
             #[godot_api]
@@ -658,29 +735,55 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         #( #req_rust_assigns )*
                         #( #opt_rust_assigns )*
                         let snapshot_rust = SnapshotRust {
-                            #( #req_fields: #req_fields.clone(), )*
-                            #( #opt_fields: #opt_fields.clone(), )*
+                            #( #req_fields: #req_fields, )*
+                            #( #opt_fields: #opt_fields, )*
                         };
 
                         #( #snap_req_assigns )*
                         #( #snap_opt_assigns )*
 
-                        let mut updates = #updates_ident::new_gd();
+                        let mut updates0 = #updates_ident::new_gd();
                         {
-                            let mut u = updates.bind_mut();
+                            let mut u = updates0.bind_mut();
                             #( u.#all_fields = true; )*
                         }
 
-                        let wrapper = #wrapper_dto_ident::from_snapshot(
+                        let mut updates1 = #updates_ident::new_gd();
+                        {
+                            let mut u = updates1.bind_mut();
+                            #( u.#all_fields = true; )*
+                        }
+
+                        let mut updates2 = #updates_ident::new_gd();
+                        {
+                            let mut u = updates2.bind_mut();
+                            #( u.#all_fields = true; )*
+                        }
+
+                        let curr = #wrapper_dto_ident::from_snapshot(
+                            #( #req_fields.clone(), )*
+                            #( #opt_fields.clone(), )*
+                            updates0,
+                        );
+
+                        let prev = #wrapper_dto_ident::from_snapshot(
+                            #( #req_fields.clone(), )*
+                            #( #opt_fields.clone(), )*
+                            updates1,
+                        );
+
+                        let spare = #wrapper_dto_ident::from_snapshot(
                             #( #req_fields, )*
                             #( #opt_fields, )*
-                            updates,
+                            updates2,
                         );
+
+                        let ring = __EntityDtoRing::new(curr, prev, spare);
 
                         let eid_i64 = entity.to_bits() as i64;
                         for exporter in exporters.iter_mut() {
                             let mut ex = exporter.bind_mut();
-                            ex.state_cache.insert(eid_i64, wrapper.clone());
+                            ex.state_cache.insert(eid_i64, ring.clone());
                             ex.state_cache_rust.insert(eid_i64, snapshot_rust.clone());
                         }
                     }
@@ -731,9 +834,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                         for eid_u64 in created_ids_set.iter().copied() {
                             let eid_i64 = eid_u64 as i64;
-                            if let Some(dto) = ex.state_cache.get(&eid_i64) {
+                            if let Some(ring) = ex.state_cache.get(&eid_i64) {
                                 acc.created_ids.push(eid_i64);
-                                acc.created.push(dto); // push &Gd<T>
+                                acc.created.push(&ring.curr);
                             }
                         }
                     }
@@ -756,7 +859,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             let eid_i64 = eid as i64;
 
                             for (idx, exporter) in exporters.iter_mut().enumerate() {
-                                let mut updates = #updates_ident::new_gd();
                                 let mut any_changed = false;
 
                                 let prev_missing = {
@@ -764,13 +866,28 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                     !ex.state_cache_rust.contains_key(&eid_i64)
                                 };
 
+                                let mut updates: Gd<#updates_ident>;
                                 if prev_missing {
+                                    let mut ex = exporter.bind_mut();
+                                    if let Some(ring) = ex.state_cache.get_mut(&eid_i64) {
+                                        updates = ring.curr.bind().updates.clone();
+                                    } else {
+                                        // No ring yet; skip and let it be created via CREATED path.
+                                        continue;
+                                    }
+
                                     let mut u = updates.bind_mut();
                                     #( u.#all_fields = true; )*
                                     any_changed = true;
                                 } else {
                                     let ex = exporter.bind();
                                     let prev_rust = ex.state_cache_rust.get(&eid_i64).unwrap();
+
+                                    let ring = match ex.state_cache.get(&eid_i64) {
+                                        Some(r) => r,
+                                        None => { continue; }
+                                    };
+                                    updates = ring.curr.bind().updates.clone();
 
                                     let mut u = updates.bind_mut();
                                     #(
@@ -787,27 +904,21 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                     continue;
                                 }
 
-                                #( #snap_req_assigns )*
-                                #( #snap_opt_assigns )*
-
-                                let mut curr = #wrapper_dto_ident::from_snapshot(
-                                    #( #req_fields.clone(), )*
-                                    #( #opt_fields.clone(), )*
-                                    #updates_ident::new_gd(),
-                                );
-                                {
-                                    let mut c = curr.bind_mut();
-                                    c.updates = updates.clone();
-                                }
-
-                                let prev_for_emit: Gd<#wrapper_dto_ident> = {
-                                    let ex = exporter.bind();
-                                    ex.state_cache.get(&eid_i64).cloned().unwrap_or_else(|| curr.clone())
+                                let (mut curr_for_emit, prev_for_emit): (Gd<#wrapper_dto_ident>, Gd<#wrapper_dto_ident>) = {
+                                    let mut ex = exporter.bind_mut();
+                                    let Some(ring) = ex.state_cache.get_mut(&eid_i64) else { continue; };
+                                    ring.rotate();
+                                    (ring.curr.clone(), ring.prev.clone())
                                 };
 
                                 {
+                                    let mut d = curr_for_emit.bind_mut();
+                                    #( #update_req_in_place )*
+                                    #( #update_opt_in_place )*
+                                }
+
+                                {
                                     let mut ex = exporter.bind_mut();
-                                    ex.state_cache.insert(eid_i64, curr.clone());
                                     if let Some(prev) = ex.state_cache_rust.get_mut(&eid_i64) {
                                         prev.clone_from_in_place(&snapshot_rust);
                                     } else {
@@ -817,7 +928,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                                 let acc = &mut batches[idx];
                                 acc.updated_ids.push(eid_i64);
-                                acc.updated_curr.push(&curr);
+                                acc.updated_curr.push(&curr_for_emit);
                                 acc.updated_prev.push(&prev_for_emit);
                             }
                         }
