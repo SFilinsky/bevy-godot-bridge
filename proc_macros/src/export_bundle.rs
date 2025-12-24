@@ -179,6 +179,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let req_fields: Vec<Ident> = req_tys.iter().map(dto_field_ident).collect();
     let opt_fields: Vec<Ident> = opt_tys.iter().map(dto_field_ident).collect();
 
+    let req_fields0: Vec<Ident> = req_fields.iter().map(|f| format_ident!("{}0", f)).collect();
+    let req_fields1: Vec<Ident> = req_fields.iter().map(|f| format_ident!("{}1", f)).collect();
+    let req_fields2: Vec<Ident> = req_fields.iter().map(|f| format_ident!("{}2", f)).collect();
+
+    let opt_fields0: Vec<Ident> = opt_fields.iter().map(|f| format_ident!("{}0", f)).collect();
+    let opt_fields1: Vec<Ident> = opt_fields.iter().map(|f| format_ident!("{}1", f)).collect();
+    let opt_fields2: Vec<Ident> = opt_fields.iter().map(|f| format_ident!("{}2", f)).collect();
+
     // Component types for each DTO via <Dto as DTO>::Component
     let req_comps: Vec<TokenStream2> = req_tys
         .iter()
@@ -292,9 +300,17 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .zip(req_tys.iter())
         .zip(read_vars.iter().take(req_fields.len()))
         .map(|((field, dto_ty), src_var)| {
+            let f0 = format_ident!("{}0", field);
+            let f1 = format_ident!("{}1", field);
+            let f2 = format_ident!("{}2", field);
+
             quote! {
-                let #field = match #src_var {
-                    Some(comp) => <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp),
+                let (#f0, #f1, #f2) = match #src_var {
+                    Some(comp) => (
+                        <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp),
+                        <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp),
+                        <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp),
+                    ),
                     None => { continue; } // required missing -> skip emit
                 };
             }
@@ -306,9 +322,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .zip(opt_tys.iter())
         .zip(read_vars.iter().skip(req_fields.len()))
         .map(|((field, dto_ty), src_var)| {
+            let f0 = format_ident!("{}0", field);
+            let f1 = format_ident!("{}1", field);
+            let f2 = format_ident!("{}2", field);
+
             quote! {
-                let #field = #src_var.map(|comp| <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp));
-            }
+            let #f0 = #src_var.map(|comp| <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp));
+            let #f1 = #src_var.map(|comp| <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp));
+            let #f2 = #src_var.map(|comp| <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp));
+        }
         })
         .collect();
 
@@ -344,8 +366,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
             quote! {
                 match #src_var {
                     Some(comp) => {
-                        let mut dto = d.#field.clone();
-                        <#dto_ty as DtoFrom<#comp_ty>>::update(&mut dto, comp);
+                        let ref mut dto = d.#field;
+                        <#dto_ty as DtoFrom<#comp_ty>>::update(dto, comp);
                     }
                     None => { continue; } // required missing -> skip emit
                 };
@@ -362,8 +384,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
             quote! {
                 match #src_var {
                     Some(comp) => {
-                        if let Some(mut dto) = d.#field.clone() {
-                            <#dto_ty as DtoFrom<#comp_ty>>::update(&mut dto, comp);
+                        if let Some(ref mut dto) = d.#field {
+                            <#dto_ty as DtoFrom<#comp_ty>>::update(dto, comp);
                         } else {
                             d.#field = Some(<#dto_ty as DtoFrom<#comp_ty>>::dto_from(comp));
                         }
@@ -743,20 +765,20 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         }
 
                         let curr = #wrapper_dto_ident::from_snapshot(
-                            #( #req_fields.clone(), )*
-                            #( #opt_fields.clone(), )*
+                            #( #req_fields0, )*
+                            #( #opt_fields0, )*
                             updates0,
                         );
 
                         let prev = #wrapper_dto_ident::from_snapshot(
-                            #( #req_fields.clone(), )*
-                            #( #opt_fields.clone(), )*
+                            #( #req_fields1, )*
+                            #( #opt_fields1, )*
                             updates1,
                         );
 
                         let spare = #wrapper_dto_ident::from_snapshot(
-                            #( #req_fields, )*
-                            #( #opt_fields, )*
+                            #( #req_fields2, )*
+                            #( #opt_fields2, )*
                             updates2,
                         );
 
