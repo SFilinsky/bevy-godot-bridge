@@ -696,6 +696,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 let Some(mut exporter) = exporter_accessor.get(&mut scene_tree) else { return; };
+                let mut exporter = exporter.bind_mut();
 
                 let mut created_ids_set: HashSet<u64> = HashSet::new();
 
@@ -763,9 +764,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                         let eid_i64 = entity.to_bits() as i64;
                         {
-                            let mut ex = exporter.bind_mut();
-                            ex.state_cache.insert(eid_i64, ring);
-                            ex.state_cache_rust.insert(eid_i64, snapshot_rust);
+                            exporter.state_cache.insert(eid_i64, ring);
+                            exporter.state_cache_rust.insert(eid_i64, snapshot_rust);
                         }
                     }
                 }
@@ -806,10 +806,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 // Fill CREATED batch from cache
                 if any_created {
-                    let ex = exporter.bind();
                     for eid_u64 in created_ids_set.iter().copied() {
                         let eid_i64 = eid_u64 as i64;
-                        if let Some(ring) = ex.state_cache.get(&eid_i64) {
+                        if let Some(ring) = exporter.state_cache.get(&eid_i64) {
                             acc.created_ids.push(eid_i64);
                             acc.created.push(&ring.curr);
                         }
@@ -835,14 +834,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             let mut any_changed = false;
 
                             let prev_missing = {
-                                let ex = exporter.bind();
-                                !ex.state_cache_rust.contains_key(&eid_i64)
+                                !exporter.state_cache_rust.contains_key(&eid_i64)
                             };
 
                             let mut updates: Gd<#updates_ident>;
                             if prev_missing {
-                                let mut ex = exporter.bind_mut();
-                                if let Some(ring) = ex.state_cache.get_mut(&eid_i64) {
+                                if let Some(ring) = exporter.state_cache.get_mut(&eid_i64) {
                                     updates = ring.curr.bind().updates.clone();
                                 } else {
                                     // No ring yet; skip and let it be created via CREATED path.
@@ -853,10 +850,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                 #( u.#all_fields = true; )*
                                 any_changed = true;
                             } else {
-                                let ex = exporter.bind();
-                                let prev_rust = ex.state_cache_rust.get(&eid_i64).unwrap();
+                                let prev_rust = exporter.state_cache_rust.get(&eid_i64).unwrap();
 
-                                let ring = match ex.state_cache.get(&eid_i64) {
+                                let ring = match exporter.state_cache.get(&eid_i64) {
                                     Some(r) => r,
                                     None => { continue; }
                                 };
@@ -878,8 +874,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             }
 
                             let (mut curr_for_emit, prev_for_emit): (Gd<#wrapper_dto_ident>, Gd<#wrapper_dto_ident>) = {
-                                let mut ex = exporter.bind_mut();
-                                let Some(ring) = ex.state_cache.get_mut(&eid_i64) else { continue; };
+                                let Some(ring) = exporter.state_cache.get_mut(&eid_i64) else { continue; };
                                 ring.rotate();
                                 (ring.curr.clone(), ring.prev.clone())
                             };
@@ -891,11 +886,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             }
 
                             {
-                                let mut ex = exporter.bind_mut();
-                                if let Some(prev) = ex.state_cache_rust.get_mut(&eid_i64) {
+                                if let Some(prev) = exporter.state_cache_rust.get_mut(&eid_i64) {
                                     prev.clone_from_in_place(&snapshot_rust);
                                 } else {
-                                    ex.state_cache_rust.insert(eid_i64, snapshot_rust);
+                                    exporter.state_cache_rust.insert(eid_i64, snapshot_rust);
                                 }
                             }
 
@@ -909,10 +903,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 // REMOVED
                 if any_removed && !removed_ids_vec.is_empty() {
                     {
-                        let mut ex = exporter.bind_mut();
                         for &id_i64 in removed_ids_vec.iter() {
-                            ex.state_cache.remove(&id_i64);
-                            ex.state_cache_rust.remove(&id_i64);
+                            exporter.state_cache.remove(&id_i64);
+                            exporter.state_cache_rust.remove(&id_i64);
                         }
                     }
 
