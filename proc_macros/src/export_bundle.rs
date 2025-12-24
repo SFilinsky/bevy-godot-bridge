@@ -677,10 +677,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 fn rotate(&mut self) {
                     // prev <- curr, curr <- spare, spare <- prev
-                    let old_curr = self.curr.clone();
-                    self.curr = self.spare.clone();
-                    self.spare = self.prev.clone();
-                    self.prev = old_curr;
+                    std::mem::swap(&mut self.prev, &mut self.curr);
+                    std::mem::swap(&mut self.curr, &mut self.spare);
                 }
             }
 
