@@ -247,21 +247,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
         quote! { (With::<#tag_ty>, Or<( #( #changed_terms ),* )>) }
     };
 
-    // REMOVED decl + loop
+    // REMOVED decl
     let removed_decl = quote! { mut removed: RemovedComponents<#tag_ty>, };
-
-    let removed_loop = quote! {
-        for entity in removed.read() {
-            let id_i64 = entity.to_bits() as i64;
-            for exporter in exporters.iter_mut() {
-                {
-                    let mut ex = exporter.bind_mut();
-                    ex.state_cache.remove(&id_i64);
-                    ex.state_cache_rust.remove(&id_i64);
-                }
-            }
-        }
-    };
 
     // Snapshot tuple and vars (Option<&Ci> for all Ci; req then opt)
     let read_types: Vec<_> = req_comps
@@ -528,7 +515,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use bevy::ecs::system::SystemParam;
             use bevy_godot4::prelude::*;
             use bevy_godot4::godot::prelude::*;
-            use bevy_godot4::collect_children;
             use ::std::collections::{HashMap, HashSet};
             use godot::classes::PackedScene;
             use godot::builtin::{NodePath, PackedInt64Array};
@@ -554,16 +540,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             impl #exporter_accessor_ident<'_, '_> {
-                fn get(&mut self, scene_tree: &mut SceneTreeRef) -> Vec<Gd<#exporter_ident>> {
+                fn get(&mut self, scene_tree: &mut SceneTreeRef) -> Option<Gd<#exporter_ident>> {
                     if let Some(cached) = self.gd.0.as_ref() {
-                        let mut out: Vec<Gd<#exporter_ident>> = Vec::new();
-                        for e in cached.iter() {
-                            if e.is_instance_valid() {
-                                out.push(e.clone());
-                            }
-                        }
-                        if !out.is_empty() {
-                            return out;
+                        if cached.is_instance_valid() {
+                            return Some(cached.clone());
                         }
                     }
 
@@ -573,18 +553,22 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         .unwrap()
                         .get_node_or_null("BevyAppSingleton")
                     else {
-                        self.gd.0 = Some(Vec::new());
-                        return Vec::new();
+                        self.gd.0 = None;
+                        return None;
                     };
 
-                    let exporters = collect_children::<#exporter_ident>(host, true);
-                    self.gd.0 = Some(exporters.clone());
-                    exporters
+                    let Some(exporter) = host.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident)) else {
+                        self.gd.0 = None;
+                        return None;
+                    };
+
+                    self.gd.0 = Some(exporter.clone());
+                    Some(exporter)
                 }
             }
 
             #[derive(Debug, Default)]
-            struct #exporter_accessor_impl_ident(Option<Vec<Gd<#exporter_ident>>>);
+            struct #exporter_accessor_impl_ident(Option<Gd<#exporter_ident>>);
 
             // -------- Per-entity typed UpdateInfo (bool flags) --------
             #[derive(GodotClass)]
@@ -711,8 +695,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     return;
                 }
 
-                let mut exporters = exporter_accessor.get(&mut scene_tree);
-                if exporters.is_empty() { return; }
+                let Some(mut exporter) = exporter_accessor.get(&mut scene_tree) else { return; };
 
                 let mut created_ids_set: HashSet<u64> = HashSet::new();
 
@@ -779,10 +762,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         let ring = __EntityDtoRing::new(curr, prev, spare);
 
                         let eid_i64 = entity.to_bits() as i64;
-                        for exporter in exporters.iter_mut() {
+                        {
                             let mut ex = exporter.bind_mut();
-                            ex.state_cache.insert(eid_i64, ring.clone());
-                            ex.state_cache_rust.insert(eid_i64, snapshot_rust.clone());
+                            ex.state_cache.insert(eid_i64, ring);
+                            ex.state_cache_rust.insert(eid_i64, snapshot_rust);
                         }
                     }
                 }
@@ -812,30 +795,23 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     removed_ids: PackedInt64Array,
                 }
 
-                let mut batches: Vec<__BatchAcc> = Vec::with_capacity(exporters.len());
-                for _ in 0..exporters.len() {
-                    batches.push(__BatchAcc {
-                        created_ids: PackedInt64Array::new(),
-                        created: Array::new(),
-                        updated_ids: PackedInt64Array::new(),
-                        updated_curr: Array::new(),
-                        updated_prev: Array::new(),
-                        removed_ids: PackedInt64Array::new(),
-                    });
-                }
+                let mut acc = __BatchAcc {
+                    created_ids: PackedInt64Array::new(),
+                    created: Array::new(),
+                    updated_ids: PackedInt64Array::new(),
+                    updated_curr: Array::new(),
+                    updated_prev: Array::new(),
+                    removed_ids: PackedInt64Array::new(),
+                };
 
-                // Fill CREATED batches from caches
+                // Fill CREATED batch from cache
                 if any_created {
-                    for (idx, exporter) in exporters.iter().enumerate() {
-                        let ex = exporter.bind();
-                        let acc = &mut batches[idx];
-
-                        for eid_u64 in created_ids_set.iter().copied() {
-                            let eid_i64 = eid_u64 as i64;
-                            if let Some(ring) = ex.state_cache.get(&eid_i64) {
-                                acc.created_ids.push(eid_i64);
-                                acc.created.push(&ring.curr);
-                            }
+                    let ex = exporter.bind();
+                    for eid_u64 in created_ids_set.iter().copied() {
+                        let eid_i64 = eid_u64 as i64;
+                        if let Some(ring) = ex.state_cache.get(&eid_i64) {
+                            acc.created_ids.push(eid_i64);
+                            acc.created.push(&ring.curr);
                         }
                     }
                 }
@@ -856,113 +832,102 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                             let eid_i64 = eid as i64;
 
-                            for (idx, exporter) in exporters.iter_mut().enumerate() {
-                                let mut any_changed = false;
+                            let mut any_changed = false;
 
-                                let prev_missing = {
-                                    let ex = exporter.bind();
-                                    !ex.state_cache_rust.contains_key(&eid_i64)
-                                };
+                            let prev_missing = {
+                                let ex = exporter.bind();
+                                !ex.state_cache_rust.contains_key(&eid_i64)
+                            };
 
-                                let mut updates: Gd<#updates_ident>;
-                                if prev_missing {
-                                    let mut ex = exporter.bind_mut();
-                                    if let Some(ring) = ex.state_cache.get_mut(&eid_i64) {
-                                        updates = ring.curr.bind().updates.clone();
-                                    } else {
-                                        // No ring yet; skip and let it be created via CREATED path.
-                                        continue;
-                                    }
-
-                                    let mut u = updates.bind_mut();
-                                    #( u.#all_fields = true; )*
-                                    any_changed = true;
-                                } else {
-                                    let ex = exporter.bind();
-                                    let prev_rust = ex.state_cache_rust.get(&eid_i64).unwrap();
-
-                                    let ring = match ex.state_cache.get(&eid_i64) {
-                                        Some(r) => r,
-                                        None => { continue; }
-                                    };
+                            let mut updates: Gd<#updates_ident>;
+                            if prev_missing {
+                                let mut ex = exporter.bind_mut();
+                                if let Some(ring) = ex.state_cache.get_mut(&eid_i64) {
                                     updates = ring.curr.bind().updates.clone();
-
-                                    let mut u = updates.bind_mut();
-                                    #(
-                                    let changed = prev_rust.#req_fields != snapshot_rust.#req_fields;
-                                    if changed { u.#req_fields = true; any_changed = true; } else { u.#req_fields = false; }
-                                    )*
-                                    #(
-                                    let changed = prev_rust.#opt_fields != snapshot_rust.#opt_fields;
-                                    if changed { u.#opt_fields = true; any_changed = true; } else { u.#opt_fields = false; }
-                                    )*
-                                }
-
-                                if !any_changed {
+                                } else {
+                                    // No ring yet; skip and let it be created via CREATED path.
                                     continue;
                                 }
 
-                                let (mut curr_for_emit, prev_for_emit): (Gd<#wrapper_dto_ident>, Gd<#wrapper_dto_ident>) = {
-                                    let mut ex = exporter.bind_mut();
-                                    let Some(ring) = ex.state_cache.get_mut(&eid_i64) else { continue; };
-                                    ring.rotate();
-                                    (ring.curr.clone(), ring.prev.clone())
+                                let mut u = updates.bind_mut();
+                                #( u.#all_fields = true; )*
+                                any_changed = true;
+                            } else {
+                                let ex = exporter.bind();
+                                let prev_rust = ex.state_cache_rust.get(&eid_i64).unwrap();
+
+                                let ring = match ex.state_cache.get(&eid_i64) {
+                                    Some(r) => r,
+                                    None => { continue; }
                                 };
+                                updates = ring.curr.bind().updates.clone();
 
-                                {
-                                    let mut d = curr_for_emit.bind_mut();
-                                    #( #update_req_in_place )*
-                                    #( #update_opt_in_place )*
-                                }
-
-                                {
-                                    let mut ex = exporter.bind_mut();
-                                    if let Some(prev) = ex.state_cache_rust.get_mut(&eid_i64) {
-                                        prev.clone_from_in_place(&snapshot_rust);
-                                    } else {
-                                        ex.state_cache_rust.insert(eid_i64, snapshot_rust.clone());
-                                    }
-                                }
-
-                                let acc = &mut batches[idx];
-                                acc.updated_ids.push(eid_i64);
-                                acc.updated_curr.push(&curr_for_emit);
-                                acc.updated_prev.push(&prev_for_emit);
+                                let mut u = updates.bind_mut();
+                                #(
+                                let changed = prev_rust.#req_fields != snapshot_rust.#req_fields;
+                                if changed { u.#req_fields = true; any_changed = true; } else { u.#req_fields = false; }
+                                )*
+                                #(
+                                let changed = prev_rust.#opt_fields != snapshot_rust.#opt_fields;
+                                if changed { u.#opt_fields = true; any_changed = true; } else { u.#opt_fields = false; }
+                                )*
                             }
+
+                            if !any_changed {
+                                continue;
+                            }
+
+                            let (mut curr_for_emit, prev_for_emit): (Gd<#wrapper_dto_ident>, Gd<#wrapper_dto_ident>) = {
+                                let mut ex = exporter.bind_mut();
+                                let Some(ring) = ex.state_cache.get_mut(&eid_i64) else { continue; };
+                                ring.rotate();
+                                (ring.curr.clone(), ring.prev.clone())
+                            };
+
+                            {
+                                let mut d = curr_for_emit.bind_mut();
+                                #( #update_req_in_place )*
+                                #( #update_opt_in_place )*
+                            }
+
+                            {
+                                let mut ex = exporter.bind_mut();
+                                if let Some(prev) = ex.state_cache_rust.get_mut(&eid_i64) {
+                                    prev.clone_from_in_place(&snapshot_rust);
+                                } else {
+                                    ex.state_cache_rust.insert(eid_i64, snapshot_rust);
+                                }
+                            }
+
+                            acc.updated_ids.push(eid_i64);
+                            acc.updated_curr.push(&curr_for_emit);
+                            acc.updated_prev.push(&prev_for_emit);
                         }
                     }
                 }
 
                 // REMOVED
                 if any_removed && !removed_ids_vec.is_empty() {
-                    for (idx, exporter) in exporters.iter_mut().enumerate() {
-                        {
-                            let mut ex = exporter.bind_mut();
-                            for &id_i64 in removed_ids_vec.iter() {
-                                ex.state_cache.remove(&id_i64);
-                                ex.state_cache_rust.remove(&id_i64);
-                            }
-                        }
-
-                        let acc = &mut batches[idx];
+                    {
+                        let mut ex = exporter.bind_mut();
                         for &id_i64 in removed_ids_vec.iter() {
-                            acc.removed_ids.push(id_i64);
+                            ex.state_cache.remove(&id_i64);
+                            ex.state_cache_rust.remove(&id_i64);
                         }
+                    }
+
+                    for &id_i64 in removed_ids_vec.iter() {
+                        acc.removed_ids.push(id_i64);
                     }
                 }
 
-                // Emit batch per exporter
-                for (idx, exporter) in exporters.iter_mut().enumerate() {
-                    let acc = &mut batches[idx];
-                    let any =
-                        acc.created_ids.len() > 0
-                        || acc.updated_ids.len() > 0
-                        || acc.removed_ids.len() > 0;
+                // Emit batch
+                let any =
+                    acc.created_ids.len() > 0
+                    || acc.updated_ids.len() > 0
+                    || acc.removed_ids.len() > 0;
 
-                    if !any {
-                        continue;
-                    }
-
+                if any {
                     let mut batch = #batch_ident::new_gd();
                     {
                         let mut b = batch.bind_mut();
@@ -976,8 +941,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     exporter.signals().batch().emit(&batch);
                 }
-
-                #removed_loop
             }
 
             // -------- Plugin --------
