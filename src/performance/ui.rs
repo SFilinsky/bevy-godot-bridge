@@ -37,6 +37,9 @@ pub struct PerformanceHud {
     #[export]
     max_rows: i32,
 
+    #[export]
+    system_name_filter: GString,
+
     metrics: Option<Gd<PerformanceMetrics>>,
 
     #[var]
@@ -57,6 +60,7 @@ impl INode for PerformanceHud {
             container_path: NodePath::from(""),
             refresh_interval_sec: 0.25,
             max_rows: 60,
+            system_name_filter: "".into(),
             metrics: None,
             container: None,
             labels: Vec::new(),
@@ -213,6 +217,11 @@ impl PerformanceHud {
 
         // Systems below schedules
         for (name, a1, a5, a30, calls) in systems.iter() {
+            if self.system_name_filter.len() > 0
+                && !name.contains(&self.system_name_filter.to_string())
+            {
+                continue;
+            }
             lines.push(format!(
                 "{:<22} a1 {:>7.3}  a5 {:>7.3}  a30 {:>7.3} ms   calls {}",
                 name, *a1, *a5, *a30, *calls
