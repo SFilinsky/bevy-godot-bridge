@@ -931,12 +931,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let mut batch = #batch_ident::new_gd();
                     {
                         let mut b = batch.bind_mut();
-                        b.created_ids = acc.created_ids.clone();
-                        b.created = acc.created.clone();
-                        b.updated_ids = acc.updated_ids.clone();
-                        b.updated_curr = acc.updated_curr.clone();
-                        b.updated_prev = acc.updated_prev.clone();
-                        b.removed_ids = acc.removed_ids.clone();
+                        b.created_ids = acc.created_ids;
+                        b.created = acc.created;
+                        b.updated_ids = acc.updated_ids;
+                        b.updated_curr = acc.updated_curr;
+                        b.updated_prev = acc.updated_prev;
+                        b.removed_ids = acc.removed_ids;
                     }
 
                     exporter.signals().batch().emit(&batch);
