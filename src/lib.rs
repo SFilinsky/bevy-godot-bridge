@@ -32,7 +32,7 @@ pub mod prelude {
     };
     pub use crate::import::{
         components::GodotEntity, importers::EntityImporter, plugins::EntityInitializationPlugin,
-        sets::PostEntityInitSet,
+        position::plugins::PositionInitializationPlugin, sets::PostEntityInitSet,
     };
     pub use crate::{DTO, DtoFrom, ExportMeta, collect_children};
     pub use bevy_godot4_proc_macros::{

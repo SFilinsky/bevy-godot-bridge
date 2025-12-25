@@ -1,5 +1,7 @@
-﻿/// Bevy-side component that tags entities originating from Godot and lets
-/// other importer systems (e.g., colliders) find the right Bevy entity by ID.
+﻿pub mod position;
+
+/// Bevy-side component that tags entities originating from Godot and lets
+/// other importer systems (e.g., transforms, colliders) find the right Bevy entity by ID.
 pub mod components {
     use bevy::prelude::Component;
 
@@ -10,16 +12,16 @@ pub mod components {
 }
 
 pub mod intentions {
-    use bevy::prelude::{Message, Vec3};
+    use bevy::prelude::Message;
 
     /// Intention coming from Godot to initialize a backend entity.
-    /// Carries a Godot-generated stable ID to allow follow-up requests
-    /// (collider, archetype data, etc.) to target the correct Bevy entity.
+    ///
+    /// Contains only stable `godot_id` and human-friendly `name`.
+    /// Position/Transform import is handled by a separate importer/plugin.
     #[derive(Message, Debug, Clone)]
     pub struct InitializeEntityIntention {
         pub godot_id: i64,
         pub name: String,
-        pub position: Vec3,
     }
 }
 
@@ -37,15 +39,11 @@ mod systems {
         Lazy::new(|| Mutex::new(VecDeque::new()));
 
     /// Called from the Godot-facing importer (in the same process).
-    pub fn enqueue_entity(godot_id: i64, name: String, position: Vec3) {
+    pub fn enqueue_entity(godot_id: i64, name: String) {
         INIT_QUEUE
             .lock()
             .unwrap()
-            .push_back(InitializeEntityIntention {
-                godot_id,
-                name,
-                position,
-            });
+            .push_back(InitializeEntityIntention { godot_id, name });
     }
 
     /// Drain local queue into Bevy's message channel.
@@ -58,42 +56,23 @@ mod systems {
 
     /// Optional logging to confirm we actually got messages.
     pub(super) fn log_intentions(mut ev: MessageReader<InitializeEntityIntention>) {
-        for InitializeEntityIntention {
-            godot_id,
-            name,
-            position,
-        } in ev.read().cloned()
-        {
-            godot_print!(
-                "[EntityInit] request godot_id={} name='{}' at ({:.2},{:.2},{:.2})",
-                godot_id,
-                name,
-                position.x,
-                position.y,
-                position.z
-            );
+        for InitializeEntityIntention { godot_id, name } in ev.read().cloned() {
+            godot_print!("[EntityInit] request godot_id={} name='{}'", godot_id, name);
         }
     }
 
     /// Handle entity initialization on the Bevy side.
     ///
-    /// For now this:
-    /// - spawns a fixed rigid body at the given position
-    /// - tags entity with `GodotEntity { godot_id }`
+    /// This file intentionally does NOT insert Transform.
+    /// A separate transform/position importer will set it (or not).
     pub(super) fn handle_initialize_entity(
         mut ev: MessageReader<InitializeEntityIntention>,
         mut cmd: Commands,
     ) {
-        for InitializeEntityIntention {
-            godot_id,
-            name,
-            position,
-        } in ev.read().cloned()
-        {
+        for InitializeEntityIntention { godot_id, name } in ev.read().cloned() {
             cmd.spawn((
                 Name::new(format!("GodotLevelEntity:{name}")),
                 GodotEntity { godot_id },
-                Transform::from_translation(position),
             ));
         }
     }
@@ -101,8 +80,7 @@ mod systems {
 
 pub mod importers {
     use super::systems::enqueue_entity;
-    use bevy::prelude::Vec3;
-    use godot::classes::{Node, Node3D};
+    use godot::classes::Node;
     use godot::global::{godot_error, godot_print};
     use godot::obj::Base;
     use godot::prelude::*;
@@ -111,7 +89,7 @@ pub mod importers {
     /// Global ID generator for Godot-authored entities.
     ///
     /// - IDs are generated on the Godot side *before* any Bevy systems run,
-    ///   so collider/other requests can reference them immediately.
+    ///   so follow-up requests (transform, collider, etc.) can reference them immediately.
     /// - IDs are unique within the process lifetime.
     static NEXT_ENTITY_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -122,19 +100,14 @@ pub mod importers {
 
     /// Godot-facing node that registers an entity into Bevy.
     ///
-    /// Key additions:
-    /// - auto-generated unique `entity_id` (Godot-side)
-    /// - exposed getter so other scripts can read it and send follow-up requests
+    /// This node is the "anchor" for other importer nodes:
+    /// - It generates `entity_id` early (enter_tree)
+    /// - It enqueues the entity initialization (ready)
+    ///
+    /// Position/Transform is handled by a separate importer/plugin.
     #[derive(GodotClass)]
     #[class(init, base=Node)]
     pub struct EntityImporter {
-        /// Root node of the entity in the Godot scene.
-        ///
-        /// REQUIRED: if not set, we log an error and skip registration.
-        #[export]
-        #[var]
-        entity_root: Option<Gd<Node3D>>,
-
         /// Godot-generated unique ID for this entity.
         ///
         /// We generate it automatically if it's 0.
@@ -142,6 +115,13 @@ pub mod importers {
         #[export]
         #[var]
         entity_id: i64,
+
+        /// Optional explicit name override.
+        ///
+        /// If empty, we default to this node's name.
+        #[export]
+        #[var]
+        entity_name: GString,
 
         #[base]
         base: Base<Node>,
@@ -153,7 +133,6 @@ pub mod importers {
         fn generate_entity_id(&mut self) -> u64 {
             if self.entity_id <= 0 {
                 let entity_id = alloc_entity_id();
-                // Store as i64 for Godot friendliness.
                 self.entity_id = entity_id as i64;
             }
             self.entity_id as u64
@@ -166,36 +145,36 @@ pub mod importers {
             self.register_internal();
         }
 
+        fn derive_name(&self) -> String {
+            let n = self.entity_name.to_string();
+            if n.trim().is_empty() {
+                self.base().get_name().to_string()
+            } else {
+                n
+            }
+        }
+
         fn register_internal(&mut self) {
-            let Some(root) = self.entity_root.as_ref() else {
+            if self.entity_id <= 0 {
                 let path = self.base().get_path();
                 godot_error!(
-                    "EntityImporter at '{path}' has no 'entity_root' set. \
-                     Please assign a Node3D in the inspector."
+                    "EntityImporter at '{path}' has invalid entity_id={} (should never happen). \
+                     Did enter_tree() run?",
+                    self.entity_id
                 );
                 return;
-            };
+            }
 
             let godot_id = self.entity_id;
-
-            // Name of the entity comes from the entity_root node.
-            let name = root.get_name().to_string();
-
-            // World position of the entity root.
-            let xform = root.get_global_transform();
-            let origin = xform.origin;
-            let position = Vec3::new(origin.x as f32, origin.y as f32, origin.z as f32);
+            let name = self.derive_name();
 
             godot_print!(
-                "[EntityInit] Registering godot_id={} name='{}' at ({:.2},{:.2},{:.2})",
+                "[EntityInit] Registering godot_id={} name='{}'",
                 godot_id,
-                name,
-                position.x,
-                position.y,
-                position.z
+                name
             );
 
-            enqueue_entity(godot_id, name, position);
+            enqueue_entity(godot_id, name);
         }
     }
 
@@ -216,17 +195,19 @@ pub mod importers {
 pub mod sets {
     use bevy::prelude::SystemSet;
 
+    /// Spawns entities tagged with `GodotEntity { godot_id }`.
     #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
     pub struct EntityInitSet;
 
+    /// Downstream importers can run after entity init (transforms, colliders, etc.).
     #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
     pub struct PostEntityInitSet;
 }
 
 pub mod plugins {
     use super::intentions::InitializeEntityIntention;
+    use super::sets::{EntityInitSet, PostEntityInitSet};
     use super::systems::{drain_intentions, handle_initialize_entity, log_intentions};
-    use crate::import::sets::{EntityInitSet, PostEntityInitSet};
     use bevy::prelude::*;
 
     pub struct EntityInitializationPlugin;
