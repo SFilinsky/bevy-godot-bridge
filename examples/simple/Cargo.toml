@@ -16,5 +16,5 @@ bevy = { version = "0.17.2", default-features = false, features = [
     "bevy_asset",
     "bevy_state",
 ] }
-bevy_godot4 = { path = "../../../bevy_godot4" }
+bevy_godot4 = { path = "../../" }
 godot = "0.4.0"
