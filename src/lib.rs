@@ -8,6 +8,7 @@ mod assets;
 mod debug;
 mod dto;
 mod erased_gd;
+mod import;
 mod performance;
 mod scene;
 mod scene_tree;
@@ -28,6 +29,10 @@ pub mod prelude {
     pub use super::scene_tree::SceneTreeRef;
     pub use super::utils::{
         AsPhysicsSystem, AsVisualSystem, GodotPhysicsFrame, GodotVisualFrame, SystemDeltaTimer,
+    };
+    pub use crate::import::{
+        components::GodotEntity, importers::EntityImporter, plugins::EntityInitializationPlugin,
+        sets::PostEntityInitSet,
     };
     pub use crate::{DTO, DtoFrom, ExportMeta, collect_children};
     pub use bevy_godot4_proc_macros::{
