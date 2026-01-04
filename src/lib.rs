@@ -15,7 +15,7 @@ mod scene_tree;
 mod tools;
 mod utils;
 
-pub use dto::{DTO, DtoFrom, ExportMeta};
+pub use dto::DataTransferConfig;
 pub use tools::collect_children;
 
 pub mod prelude {
@@ -34,9 +34,9 @@ pub mod prelude {
         components::GodotEntity, importers::EntityImporter, plugins::EntityInitializationPlugin,
         position::plugins::PositionInitializationPlugin, sets::PostEntityInitSet,
     };
-    pub use crate::{DTO, DtoFrom, ExportMeta, collect_children};
+    pub use crate::{DataTransferConfig, collect_children};
     pub use bevy_godot4_proc_macros::{
-        ExportComponent, ExportComponentNew, ExportEntity, bevy_app, export_bundle,
+        ExportComponent, ExportComponentNew, ExportEntity, bevy_app, export_bundle, import_queue,
     };
 }
 pub use app::{APP_BUILDER_FN, BevyApp};

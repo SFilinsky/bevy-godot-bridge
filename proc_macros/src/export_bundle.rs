@@ -12,24 +12,30 @@ use syn::{
 /// export_bundle!{
 ///   name: "Unit",
 ///   tag: UnitTag,
-///   dtos: [ TransformDto, HealthDto, Option<MovementDto> ],
+///   components: [ TransformExportConfig, FactionExportConfig, Option<MovementExportConfig> ],
 /// }
+///
+/// Each `*ExportConfig` implements:
+/// - bevy_godot4::DataTransferConfig
+///   - type DataType = <bevy component>
+///   - type DtoType = <GodotClass DTO>
+///   - update_dto / update_data
 struct Spec {
     name: LitStr,
     tag: Path,
-    items: Vec<DtoItem>,
+    items: Vec<Item>,
 }
 
-enum DtoItem {
-    Required(Type), // FooDto
-    Optional(Type), // Option<FooDto>
+enum Item {
+    Required(Type), // FooExportConfig
+    Optional(Type), // Option<FooExportConfig>
 }
 
 impl Parse for Spec {
     fn parse(input: ParseStream) -> Result<Self> {
         let mut name: Option<LitStr> = None;
         let mut tag: Option<Path> = None;
-        let mut items: Option<Vec<DtoItem>> = None;
+        let mut items: Option<Vec<Item>> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -38,18 +44,18 @@ impl Parse for Spec {
             match key.to_string().as_str() {
                 "name" => name = Some(input.parse()?),
                 "tag" => tag = Some(input.parse()?),
-                "dtos" => {
+                "components" => {
                     let list;
                     bracketed!(list in input);
 
-                    let mut v: Vec<DtoItem> = Vec::new();
+                    let mut v: Vec<Item> = Vec::new();
                     while !list.is_empty() {
                         let ty: Type = list.parse()?;
                         let ts = quote!(#ty).to_string();
                         if ts.starts_with("Option <") || ts.starts_with("Option<") {
-                            v.push(DtoItem::Optional(ty));
+                            v.push(Item::Optional(ty));
                         } else {
-                            v.push(DtoItem::Required(ty));
+                            v.push(Item::Required(ty));
                         }
                         if list.peek(Token![,]) {
                             list.parse::<Token![,]>()?;
@@ -62,7 +68,7 @@ impl Parse for Spec {
                 other => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        format!("unknown key `{other}`; expected `name`, `tag`, or `dtos`"),
+                        format!("unknown key `{other}`; expected `name`, `tag`, or `components`"),
                     ));
                 }
             }
@@ -75,37 +81,36 @@ impl Parse for Spec {
         let name = name.ok_or_else(|| syn::Error::new(input.span(), "missing `name: ...`"))?;
         let tag = tag.ok_or_else(|| syn::Error::new(input.span(), "missing `tag: ...`"))?;
         let items =
-            items.ok_or_else(|| syn::Error::new(input.span(), "missing `dtos: [ ... ]`"))?;
+            items.ok_or_else(|| syn::Error::new(input.span(), "missing `components: [ ... ]`"))?;
 
         Ok(Spec { name, tag, items })
     }
 }
 
-fn dto_field_ident(ty: &Type) -> Ident {
-    fn last_seg_name(ty: &Type) -> String {
-        match ty {
-            Type::Path(tp) => tp
-                .path
-                .segments
-                .last()
-                .map(|s| s.ident.to_string())
-                .unwrap_or_else(|| "dto".to_string()),
-            Type::Paren(p) => last_seg_name(&p.elem),
-            _ => "dto".to_string(),
-        }
-    }
+/// Derive field name from meta/config type name:
+/// TransformExportConfig -> transform
+/// FactionTransfer -> faction
+fn dto_field_ident_from_cfg(cfg_ty: &Type) -> Ident {
+    let raw = quote!(#cfg_ty).to_string();
 
-    // Strip Option<...> for field naming if present
-    let raw = quote!(#ty).to_string();
+    // Strip Option<...>
     let base = if raw.starts_with("Option <") || raw.starts_with("Option<") {
         let cut = raw.trim();
         let inner = &cut[cut.find('<').unwrap() + 1..cut.rfind('>').unwrap()];
         inner.trim().split("::").last().unwrap_or(inner).to_string()
     } else {
-        last_seg_name(ty)
+        raw.trim()
+            .split("::")
+            .last()
+            .unwrap_or(raw.trim())
+            .to_string()
     };
 
-    let base = base.strip_suffix("Dto").unwrap_or(&base).to_string();
+    let base = base
+        .strip_suffix("TransferConfig")
+        .unwrap_or(&base)
+        .to_string();
+
     format_ident!("{}", base.to_snake_case())
 }
 
@@ -164,85 +169,85 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let exporter_accessor_impl_ident = format_ident!("{}ExporterAccessorImpl", base_ident);
     let batch_ident = format_ident!("{}EntityBatch", base_ident);
 
-    // Split items into required / optional DTO types
-    let mut req_tys: Vec<Type> = Vec::new();
-    let mut opt_tys: Vec<Type> = Vec::new();
-
+    // Split items into required/optional config types
+    let mut required_type_list: Vec<Type> = Vec::new();
+    let mut optional_type_list: Vec<Type> = Vec::new();
     for it in spec.items.iter() {
         match it {
-            DtoItem::Required(ty) => req_tys.push(strip_option(ty)),
-            DtoItem::Optional(ty) => opt_tys.push(strip_option(ty)),
+            Item::Required(ty) => required_type_list.push(strip_option(ty)),
+            Item::Optional(ty) => optional_type_list.push(strip_option(ty)),
         }
     }
 
-    // Field idents for each DTO
-    let req_fields: Vec<Ident> = req_tys.iter().map(dto_field_ident).collect();
-    let opt_fields: Vec<Ident> = opt_tys.iter().map(dto_field_ident).collect();
-
-    let req_fields0: Vec<Ident> = req_fields.iter().map(|f| format_ident!("{}0", f)).collect();
-    let req_fields1: Vec<Ident> = req_fields.iter().map(|f| format_ident!("{}1", f)).collect();
-    let req_fields2: Vec<Ident> = req_fields.iter().map(|f| format_ident!("{}2", f)).collect();
-
-    let opt_fields0: Vec<Ident> = opt_fields.iter().map(|f| format_ident!("{}0", f)).collect();
-    let opt_fields1: Vec<Ident> = opt_fields.iter().map(|f| format_ident!("{}1", f)).collect();
-    let opt_fields2: Vec<Ident> = opt_fields.iter().map(|f| format_ident!("{}2", f)).collect();
-
-    // Component types for each DTO via <Dto as DTO>::Component
-    let req_comps: Vec<TokenStream2> = req_tys
+    // Field idents derived from config names
+    let required_field_list: Vec<Ident> = required_type_list
         .iter()
-        .map(|t| quote! { <#t as DTO>::Component })
+        .map(dto_field_ident_from_cfg)
         .collect();
-    let opt_comps: Vec<TokenStream2> = opt_tys
+    let optional_field_list: Vec<Ident> = optional_type_list
         .iter()
-        .map(|t| quote! { <#t as DTO>::Component })
+        .map(dto_field_ident_from_cfg)
         .collect();
 
-    // All fields/types (req then opt)
-    let all_fields: Vec<Ident> = req_fields
+    let required_field_list0: Vec<Ident> = required_field_list
+        .iter()
+        .map(|f| format_ident!("{}0", f))
+        .collect();
+    let required_field_list1: Vec<Ident> = required_field_list
+        .iter()
+        .map(|f| format_ident!("{}1", f))
+        .collect();
+    let required_field_list2: Vec<Ident> = required_field_list
+        .iter()
+        .map(|f| format_ident!("{}2", f))
+        .collect();
+
+    let optional_field_list0: Vec<Ident> = optional_field_list
+        .iter()
+        .map(|f| format_ident!("{}0", f))
+        .collect();
+    let optional_field_list1: Vec<Ident> = optional_field_list
+        .iter()
+        .map(|f| format_ident!("{}1", f))
+        .collect();
+    let optional_field_list2: Vec<Ident> = optional_field_list
+        .iter()
+        .map(|f| format_ident!("{}2", f))
+        .collect();
+
+    // Associated types
+    let required_component_type_list: Vec<TokenStream2> = required_type_list
+        .iter()
+        .map(|c| quote! { <#c as DataTransferConfig>::DataType })
+        .collect();
+    let optional_component_type_list: Vec<TokenStream2> = optional_type_list
+        .iter()
+        .map(|c| quote! { <#c as DataTransferConfig>::DataType })
+        .collect();
+
+    let required_dto_type_list: Vec<TokenStream2> = required_type_list
+        .iter()
+        .map(|c| quote! { <#c as DataTransferConfig>::DtoType })
+        .collect();
+    let optional_dto_type_list: Vec<TokenStream2> = optional_type_list
+        .iter()
+        .map(|c| quote! { <#c as DataTransferConfig>::DtoType })
+        .collect();
+
+    // All fields (req then opt)
+    let all_field_list: Vec<Ident> = required_field_list
         .iter()
         .cloned()
-        .chain(opt_fields.iter().cloned())
+        .chain(optional_field_list.iter().cloned())
         .collect();
 
-    let all_tys: Vec<Type> = req_tys
-        .iter()
-        .cloned()
-        .chain(opt_tys.iter().cloned())
-        .collect();
-
-    // Bounds for DtoFrom on all DTOs — require PartialEq on DTO (inner type)
-    let dtofrom_bounds_req: Vec<TokenStream2> = req_tys
-        .iter()
-        .zip(req_comps.iter())
-        .map(|(dto, comp)| quote! { #dto: DTO + DtoFrom<#comp> + PartialEq })
-        .collect();
-
-    let dtofrom_bounds_opt: Vec<TokenStream2> = opt_tys
-        .iter()
-        .zip(opt_comps.iter())
-        .map(|(dto, comp)| quote! { #dto: DTO + DtoFrom<#comp> + PartialEq })
-        .collect();
-
-    // Bounds for component cloning into SnapshotRust
-    let comp_bounds_req: Vec<TokenStream2> = req_comps
-        .iter()
-        .map(|c| quote! { #c: Clone + PartialEq })
-        .collect();
-    let comp_bounds_opt: Vec<TokenStream2> = opt_comps
-        .iter()
-        .map(|c| quote! { #c: Clone + PartialEq })
-        .collect();
-
-    // --- Filters -------------------------------------------------------------
+    // Filters
     let tag_ty = &spec.tag;
-
-    // CREATED filter: tag added
     let created_filter = quote! { Added<#tag_ty> };
 
-    // UPDATED filter – still use Changed to reduce the candidate set
-    let changed_terms: Vec<_> = req_comps
+    let changed_terms: Vec<_> = required_component_type_list
         .iter()
-        .chain(opt_comps.iter())
+        .chain(optional_component_type_list.iter())
         .map(|c| quote! { Changed<#c> })
         .collect();
 
@@ -255,29 +260,26 @@ pub fn expand(input: TokenStream) -> TokenStream {
         quote! { (With::<#tag_ty>, Or<( #( #changed_terms ),* )>) }
     };
 
-    // REMOVED decl
     let removed_decl = quote! { mut removed: RemovedComponents<#tag_ty>, };
 
-    // Snapshot tuple and vars (Option<&Ci> for all Ci; req then opt)
-    let read_types: Vec<_> = req_comps
+    // Snapshot tuple
+    let read_types: Vec<_> = required_component_type_list
         .iter()
         .map(|c| quote! { Option<& #c> })
-        .chain(opt_comps.iter().map(|c| quote! { Option<& #c> }))
+        .chain(
+            optional_component_type_list
+                .iter()
+                .map(|c| quote! { Option<& #c> }),
+        )
         .collect();
 
     let read_tuple: TokenStream2 = if read_types.is_empty() {
         quote! { () }
     } else {
-        quote! {
-            (
-                #(
-                    #read_types,
-                )*
-            )
-        }
+        quote! { ( #( #read_types, )* ) }
     };
 
-    let read_vars: Vec<Ident> = all_fields
+    let read_vars: Vec<Ident> = all_field_list
         .iter()
         .map(|f| format_ident!("__{}", f))
         .collect();
@@ -285,21 +287,75 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let destructure = if read_vars.is_empty() {
         quote! { () }
     } else {
-        quote! {
-            (
-                #(
-                    #read_vars,
-                )*
-            )
-        }
+        quote! { ( #( #read_vars, )* ) }
     };
 
-    // Build wrapper assigns (Godot DTO creation) — used for initial creation only
-    let snap_req_assigns: Vec<_> = req_fields
+    // SnapshotRust fields
+    let snapshot_req_field_types: Vec<TokenStream2> = required_component_type_list
         .iter()
-        .zip(req_tys.iter())
-        .zip(read_vars.iter().take(req_fields.len()))
-        .map(|((field, dto_ty), src_var)| {
+        .map(|c| quote! { #c })
+        .collect();
+    let snapshot_opt_field_types: Vec<TokenStream2> = optional_component_type_list
+        .iter()
+        .map(|c| quote! { Option<#c> })
+        .collect();
+
+    let snapshot_req_fields: Vec<TokenStream2> = required_field_list
+        .iter()
+        .zip(snapshot_req_field_types.iter())
+        .map(|(f, ty)| quote! { pub #f: #ty, })
+        .collect();
+
+    let snapshot_opt_fields: Vec<TokenStream2> = optional_field_list
+        .iter()
+        .zip(snapshot_opt_field_types.iter())
+        .map(|(f, ty)| quote! { pub #f: #ty, })
+        .collect();
+
+    let snapshot_clone_from_req: Vec<TokenStream2> = required_field_list
+        .iter()
+        .map(|f| quote! { self.#f.clone_from(&other.#f); })
+        .collect();
+
+    let snapshot_clone_from_opt: Vec<TokenStream2> = optional_field_list
+        .iter()
+        .map(|f| {
+            quote! {
+                match (&mut self.#f, &other.#f) {
+                    (Some(dst), Some(src)) => { dst.clone_from(src); }
+                    (None, None) => {}
+                    _ => { self.#f = other.#f.clone(); }
+                }
+            }
+        })
+        .collect();
+
+    // Build snapshot assigns
+    let req_rust_assigns: Vec<_> = required_field_list
+        .iter()
+        .zip(read_vars.iter().take(required_field_list.len()))
+        .map(|(field, src_var)| {
+            quote! {
+                let #field = match #src_var {
+                    Some(comp) => <_ as Clone>::clone(comp),
+                    None => { continue; }
+                };
+            }
+        })
+        .collect();
+
+    let opt_rust_assigns: Vec<_> = optional_field_list
+        .iter()
+        .zip(read_vars.iter().skip(required_field_list.len()))
+        .map(|(field, src_var)| quote! { let #field = #src_var.cloned(); })
+        .collect();
+
+    // Creation DTO allocation from components via DataTransferConfig
+    let snap_req_assigns: Vec<_> = required_field_list
+        .iter()
+        .zip(required_type_list.iter())
+        .zip(read_vars.iter().take(required_field_list.len()))
+        .map(|((field, cfg_ty), src_var)| {
             let f0 = format_ident!("{}0", field);
             let f1 = format_ident!("{}1", field);
             let f2 = format_ident!("{}2", field);
@@ -307,146 +363,118 @@ pub fn expand(input: TokenStream) -> TokenStream {
             quote! {
                 let (#f0, #f1, #f2) = match #src_var {
                     Some(comp) => (
-                        <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp),
-                        <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp),
-                        <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp),
+                        <#cfg_ty as DataTransferConfig>::from_data(comp),
+                        <#cfg_ty as DataTransferConfig>::from_data(comp),
+                        <#cfg_ty as DataTransferConfig>::from_data(comp),
                     ),
-                    None => { continue; } // required missing -> skip emit
-                };
-            }
-        })
-        .collect();
-
-    let snap_opt_assigns: Vec<_> = opt_fields
-        .iter()
-        .zip(opt_tys.iter())
-        .zip(read_vars.iter().skip(req_fields.len()))
-        .map(|((field, dto_ty), src_var)| {
-            let f0 = format_ident!("{}0", field);
-            let f1 = format_ident!("{}1", field);
-            let f2 = format_ident!("{}2", field);
-
-            quote! {
-            let #f0 = #src_var.map(|comp| <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp));
-            let #f1 = #src_var.map(|comp| <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp));
-            let #f2 = #src_var.map(|comp| <#dto_ty as DtoFrom<<#dto_ty as DTO>::Component>>::dto_from(comp));
-        }
-        })
-        .collect();
-
-    // Build Rust snapshot assigns
-    let req_rust_assigns: Vec<_> = req_fields
-        .iter()
-        .zip(req_comps.iter())
-        .zip(read_vars.iter().take(req_fields.len()))
-        .map(|((field, comp_ty), src_var)| {
-            quote! {
-                let #field = match #src_var {
-                    Some(comp) => <#comp_ty as Clone>::clone(comp),
                     None => { continue; }
                 };
             }
         })
         .collect();
 
-    let opt_rust_assigns: Vec<_> = opt_fields
+    let snap_opt_assigns: Vec<_> = optional_field_list
         .iter()
-        .zip(opt_comps.iter())
-        .zip(read_vars.iter().skip(req_fields.len()))
-        .map(|((field, _comp_ty), src_var)| quote! { let #field = #src_var.cloned(); })
+        .zip(optional_type_list.iter())
+        .zip(read_vars.iter().skip(required_field_list.len()))
+        .map(|((field, cfg_ty), src_var)| {
+            let f0 = format_ident!("{}0", field);
+            let f1 = format_ident!("{}1", field);
+            let f2 = format_ident!("{}2", field);
+
+            quote! {
+                let #f0 = #src_var.map(|comp| <#cfg_ty as DataTransferConfig>::from_data(comp));
+                let #f1 = #src_var.map(|comp| <#cfg_ty as DataTransferConfig>::from_data(comp));
+                let #f2 = #src_var.map(|comp| <#cfg_ty as DataTransferConfig>::from_data(comp));
+            }
+        })
         .collect();
 
-    // In-place wrapper update (nested DTO refs stable; updates happen by mutating existing DTOs)
-    let update_req_in_place: Vec<_> = req_fields
+    // In-place DTO updates via update_dto
+    let update_req_in_place: Vec<_> = required_field_list
         .iter()
-        .zip(req_tys.iter())
-        .zip(req_comps.iter())
-        .zip(read_vars.iter().take(req_fields.len()))
-        .map(|(((field, dto_ty), comp_ty), src_var)| {
+        .zip(required_type_list.iter())
+        .zip(read_vars.iter().take(required_field_list.len()))
+        .map(|((field, cfg_ty), src_var)| {
             quote! {
                 match #src_var {
                     Some(comp) => {
                         let ref mut dto = d.#field;
-                        <#dto_ty as DtoFrom<#comp_ty>>::update(dto, comp);
+                        <#cfg_ty as DataTransferConfig>::update_dto(dto, comp);
                     }
-                    None => { continue; } // required missing -> skip emit
+                    None => { continue; }
                 };
             }
         })
         .collect();
 
-    let update_opt_in_place: Vec<_> = opt_fields
+    let update_opt_in_place: Vec<_> = optional_field_list
         .iter()
-        .zip(opt_tys.iter())
-        .zip(opt_comps.iter())
-        .zip(read_vars.iter().skip(req_fields.len()))
-        .map(|(((field, dto_ty), comp_ty), src_var)| {
+        .zip(optional_type_list.iter())
+        .zip(read_vars.iter().skip(required_field_list.len()))
+        .map(|((field, cfg_ty), src_var)| {
             quote! {
                 match #src_var {
                     Some(comp) => {
                         if let Some(ref mut dto) = d.#field {
-                            <#dto_ty as DtoFrom<#comp_ty>>::update(dto, comp);
+                            <#cfg_ty as DataTransferConfig>::update_dto(dto, comp);
                         } else {
-                            d.#field = Some(<#dto_ty as DtoFrom<#comp_ty>>::dto_from(comp));
+                            d.#field = Some(<#cfg_ty as DataTransferConfig>::from_data(comp));
                         }
                     }
-                    None => {
-                        d.#field = None;
-                    }
+                    None => { d.#field = None; }
                 };
             }
         })
         .collect();
 
-    // Wrapper DTO fields
-    let wrapper_req_field_types: Vec<_> = req_tys
+    // Wrapper DTO field types (Gd<DtoType>)
+    let wrapper_req_field_types: Vec<_> = required_dto_type_list
         .iter()
-        .map(|dto_ty| quote! { Gd<#dto_ty> })
+        .map(|dto| quote! { Gd<#dto> })
         .collect();
-    let wrapper_opt_field_types: Vec<_> = opt_tys
+    let wrapper_opt_field_types: Vec<_> = optional_dto_type_list
         .iter()
-        .map(|dto_ty| quote! { Option<Gd<#dto_ty>> })
+        .map(|dto| quote! { Option<Gd<#dto>> })
         .collect();
 
-    let wrapper_req_fields: Vec<TokenStream2> = req_fields
+    let wrapper_req_fields: Vec<TokenStream2> = required_field_list
         .iter()
         .zip(wrapper_req_field_types.iter())
         .map(|(f, ty)| quote! { #[var] pub #f: #ty, })
         .collect();
 
-    let wrapper_opt_fields: Vec<TokenStream2> = opt_fields
+    let wrapper_opt_fields: Vec<TokenStream2> = optional_field_list
         .iter()
         .zip(wrapper_opt_field_types.iter())
         .map(|(f, ty)| quote! { #[var] pub #f: #ty, })
         .collect();
 
-    // Per-DTO update queries (idents)
-    let updated_req_idents: Vec<Ident> = (0..req_tys.len())
+    // Updated queries per component
+    let updated_req_idents: Vec<Ident> = (0..required_component_type_list.len())
         .map(|i| format_ident!("updated_req_{}", i))
         .collect();
-    let updated_opt_idents: Vec<Ident> = (0..opt_tys.len())
-        .map(|j| format_ident!("updated_opt_{}", j))
+    let updated_opt_idents: Vec<Ident> = (0..optional_component_type_list.len())
+        .map(|i| format_ident!("updated_opt_{}", i))
         .collect();
 
-    // Build updated query decls (always With<tag>)
     let mut updated_decl: Vec<TokenStream2> = Vec::new();
-    for (i, comp) in req_comps.iter().enumerate() {
+    for (i, comp) in required_component_type_list.iter().enumerate() {
         let id = &updated_req_idents[i];
         updated_decl
             .push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
     }
-    for (j, comp) in opt_comps.iter().enumerate() {
-        let id = &updated_opt_idents[j];
+    for (i, comp) in optional_component_type_list.iter().enumerate() {
+        let id = &updated_opt_idents[i];
         updated_decl
             .push(quote! { #id: Query<(Entity, &#comp), (With<#tag_ty>, Changed<#comp>)>, });
     }
 
-    // Snapshot filter
     let snapshot_filter = quote! { With<#tag_ty> };
 
-    // DTO paths (req + opt)
+    // Imports: config types + tag
     let mut import_paths: Vec<syn::Path> = Vec::new();
-    for ty in all_tys.iter() {
+    for ty in required_type_list.iter().chain(optional_type_list.iter()) {
         if let Some(p) = relative_type_path(ty) {
             import_paths.push(p);
         }
@@ -489,39 +517,26 @@ pub fn expand(input: TokenStream) -> TokenStream {
         quote! { #( #any_updated_terms )||* }
     };
 
-    // SnapshotRust field types
-    let snapshot_req_field_types: Vec<TokenStream2> =
-        req_comps.iter().map(|c| quote! { #c }).collect();
-    let snapshot_opt_field_types: Vec<TokenStream2> =
-        opt_comps.iter().map(|c| quote! { Option<#c> }).collect();
-
-    let snapshot_req_fields: Vec<TokenStream2> = req_fields
+    // Each config must implement DataTransferConfig, and its associated types must be sane.
+    // This is what makes the macro fail early at compile time with a good error.
+    let cfg_bounds_req: Vec<TokenStream2> = required_type_list
         .iter()
-        .zip(snapshot_req_field_types.iter())
-        .map(|(f, ty)| quote! { pub #f: #ty, })
-        .collect();
-
-    let snapshot_opt_fields: Vec<TokenStream2> = opt_fields
-        .iter()
-        .zip(snapshot_opt_field_types.iter())
-        .map(|(f, ty)| quote! { pub #f: #ty, })
-        .collect();
-
-    // SnapshotRust clone_from per field
-    let snapshot_clone_from_req: Vec<TokenStream2> = req_fields
-        .iter()
-        .map(|f| quote! { self.#f.clone_from(&other.#f); })
-        .collect();
-
-    let snapshot_clone_from_opt: Vec<TokenStream2> = opt_fields
-        .iter()
-        .map(|f| {
+        .map(|cfg| {
             quote! {
-                match (&mut self.#f, &other.#f) {
-                    (Some(dst), Some(src)) => { dst.clone_from(src); }
-                    (None, None) => {}
-                    _ => { self.#f = other.#f.clone(); }
-                }
+                #cfg: DataTransferConfig,
+                <#cfg as DataTransferConfig>::DataType: bevy::prelude::Component + Default + Clone + PartialEq,
+                <#cfg as DataTransferConfig>::DtoType: godot::prelude::GodotClass + godot::obj::NewGd,
+            }
+        })
+        .collect();
+
+    let cfg_bounds_opt: Vec<TokenStream2> = optional_type_list
+        .iter()
+        .map(|cfg| {
+            quote! {
+                #cfg: DataTransferConfig,
+                <#cfg as DataTransferConfig>::DataType: bevy::prelude::Component + Default + Clone + PartialEq,
+                <#cfg as DataTransferConfig>::DtoType: godot::prelude::GodotClass + godot::obj::NewGd,
             }
         })
         .collect();
@@ -542,6 +557,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use godot::builtin::{NodePath, PackedInt64Array};
             use std::marker::PhantomData;
 
+            // Snapshot (Rust) used for true-change detection
             #[derive(Clone, Debug, Default)]
             struct SnapshotRust {
                 #( #snapshot_req_fields )*
@@ -555,6 +571,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
+            // Exporter accessor cache
             #[derive(SystemParam)]
             struct #exporter_accessor_ident<'w, 's> {
                 gd: NonSendMut<'w, #exporter_accessor_impl_ident>,
@@ -592,61 +609,55 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[derive(Debug, Default)]
             struct #exporter_accessor_impl_ident(Option<Gd<#exporter_ident>>);
 
-            // -------- Per-entity typed UpdateInfo (bool flags) --------
+            // Per-entity update flags
             #[derive(GodotClass)]
             #[class(init, base=RefCounted)]
             pub struct #updates_ident {
-                #( #[var] pub #all_fields: bool, )*
+                #( #[var] pub #all_field_list: bool, )*
                 #[base] base: Base<RefCounted>,
             }
 
-            // -------- Wrapper DTO --------
+            // Wrapper DTO
             #[derive(GodotClass)]
             #[class(init, base=RefCounted)]
             pub struct #wrapper_dto_ident {
                 #( #wrapper_req_fields )*
                 #( #wrapper_opt_fields )*
-
-                #[var]
-                pub updates: Gd<#updates_ident>,
-
+                #[var] pub updates: Gd<#updates_ident>,
                 #[base] base: Base<RefCounted>,
             }
 
             impl #wrapper_dto_ident {
                 fn from_snapshot(
-                    #( #req_fields: Gd<#req_tys>, )*
-                    #( #opt_fields: Option<Gd<#opt_tys>>, )*
+                    #( #required_field_list: #wrapper_req_field_types, )*
+                    #( #optional_field_list: #wrapper_opt_field_types, )*
                     updates: Gd<#updates_ident>,
                 ) -> Gd<Self> {
                     let mut dto = Self::new_gd();
                     {
                         let mut d = dto.bind_mut();
-                        #( d.#req_fields = #req_fields; )*
-                        #( d.#opt_fields = #opt_fields; )*
+                        #( d.#required_field_list = #required_field_list; )*
+                        #( d.#optional_field_list = #optional_field_list; )*
                         d.updates = updates;
                     }
                     dto
                 }
             }
 
-            // -------- Batch payload --------
+            // Batch payload
             #[derive(GodotClass)]
             #[class(init, base=RefCounted)]
             pub struct #batch_ident {
                 #[var] pub created_ids: PackedInt64Array,
                 #[var] pub created: Array<Gd<#wrapper_dto_ident>>,
-
                 #[var] pub updated_ids: PackedInt64Array,
                 #[var] pub updated_curr: Array<Gd<#wrapper_dto_ident>>,
                 #[var] pub updated_prev: Array<Gd<#wrapper_dto_ident>>,
-
                 #[var] pub removed_ids: PackedInt64Array,
-
                 #[base] base: Base<RefCounted>,
             }
 
-            // -------- Exporter Node --------
+            // Exporter node
             #[derive(GodotClass)]
             #[class(init, base=Node)]
             pub struct #exporter_ident {
@@ -693,7 +704,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[signal] fn batch(batch: Gd<#batch_ident>);
             }
 
-            // -------- System --------
+            // Export system
             #[allow(non_snake_case)]
             fn #system_ident(
                 created: Query<Entity, #created_filter>,
@@ -705,10 +716,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 mut exporter_accessor: #exporter_accessor_ident,
             )
             where
-                #( #dtofrom_bounds_req, )*
-                #( #dtofrom_bounds_opt, )*
-                #( #comp_bounds_req, )*
-                #( #comp_bounds_opt, )*
+                #( #cfg_bounds_req )*
+                #( #cfg_bounds_opt )*
             {
                 let any_created = !created.is_empty();
                 let any_removed = !removed.is_empty();
@@ -729,7 +738,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                // ---------------- CREATED ----------------
+                // CREATED: allocate DTO rings + snapshot cache
                 if any_created {
                     for entity in created.iter() {
                         created_ids_set.insert(entity.to_bits());
@@ -739,73 +748,62 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         #( #req_rust_assigns )*
                         #( #opt_rust_assigns )*
                         let snapshot_rust = SnapshotRust {
-                            #( #req_fields: #req_fields, )*
-                            #( #opt_fields: #opt_fields, )*
+                            #( #required_field_list: #required_field_list, )*
+                            #( #optional_field_list: #optional_field_list, )*
                         };
 
                         #( #snap_req_assigns )*
                         #( #snap_opt_assigns )*
 
                         let mut updates0 = #updates_ident::new_gd();
-                        {
-                            let mut u = updates0.bind_mut();
-                            #( u.#all_fields = true; )*
-                        }
+                        { let mut u = updates0.bind_mut(); #( u.#all_field_list = true; )* }
 
                         let mut updates1 = #updates_ident::new_gd();
-                        {
-                            let mut u = updates1.bind_mut();
-                            #( u.#all_fields = true; )*
-                        }
+                        { let mut u = updates1.bind_mut(); #( u.#all_field_list = true; )* }
 
                         let mut updates2 = #updates_ident::new_gd();
-                        {
-                            let mut u = updates2.bind_mut();
-                            #( u.#all_fields = true; )*
-                        }
+                        { let mut u = updates2.bind_mut(); #( u.#all_field_list = true; )* }
 
                         let curr = #wrapper_dto_ident::from_snapshot(
-                            #( #req_fields0, )*
-                            #( #opt_fields0, )*
+                            #( #required_field_list0, )*
+                            #( #optional_field_list0, )*
                             updates0,
                         );
 
                         let prev = #wrapper_dto_ident::from_snapshot(
-                            #( #req_fields1, )*
-                            #( #opt_fields1, )*
+                            #( #required_field_list1, )*
+                            #( #optional_field_list1, )*
                             updates1,
                         );
 
                         let spare = #wrapper_dto_ident::from_snapshot(
-                            #( #req_fields2, )*
-                            #( #opt_fields2, )*
+                            #( #required_field_list2, )*
+                            #( #optional_field_list2, )*
                             updates2,
                         );
 
                         let ring = __EntityDtoRing::new(curr, prev, spare);
 
                         let eid_i64 = entity.to_bits() as i64;
-                        {
-                            exporter.state_cache.insert(eid_i64, ring);
-                            exporter.state_cache_rust.insert(eid_i64, snapshot_rust);
-                        }
+                        exporter.state_cache.insert(eid_i64, ring);
+                        exporter.state_cache_rust.insert(eid_i64, snapshot_rust);
                     }
                 }
 
-                // ---------------- UPDATED ----------------
+                // UPDATED: compute field flags based on *component* equality
                 use ::std::collections::HashSet as __HashSet;
                 let mut changed_eids: __HashSet<u64> = __HashSet::new();
 
                 #(
-                for (entity, _comp) in #updated_req_idents.iter() {
-                    changed_eids.insert(entity.to_bits());
-                }
+                    for (entity, _comp) in #updated_req_idents.iter() {
+                        changed_eids.insert(entity.to_bits());
+                    }
                 )*
 
                 #(
-                for (entity, _comp) in #updated_opt_idents.iter() {
-                    changed_eids.insert(entity.to_bits());
-                }
+                    for (entity, _comp) in #updated_opt_idents.iter() {
+                        changed_eids.insert(entity.to_bits());
+                    }
                 )*
 
                 struct __BatchAcc {
@@ -826,7 +824,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     removed_ids: PackedInt64Array::new(),
                 };
 
-                // Fill CREATED batch from cache
                 if any_created {
                     for eid_u64 in created_ids_set.iter().copied() {
                         let eid_i64 = eid_u64 as i64;
@@ -837,106 +834,86 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                // UPDATED
                 if any_updated {
                     for eid in changed_eids.into_iter() {
                         if created_ids_set.contains(&eid) { continue; }
 
                         let entity = Entity::from_bits(eid);
-                        if let Ok(#destructure) = snapshot.get(entity) {
-                            #( #req_rust_assigns )*
-                            #( #opt_rust_assigns )*
-                            let snapshot_rust = SnapshotRust {
-                                #( #req_fields: #req_fields, )*
-                                #( #opt_fields: #opt_fields, )*
+                        let Ok(#destructure) = snapshot.get(entity) else { continue; };
+
+                        #( #req_rust_assigns )*
+                        #( #opt_rust_assigns )*
+                        let snapshot_rust = SnapshotRust {
+                            #( #required_field_list: #required_field_list, )*
+                            #( #optional_field_list: #optional_field_list, )*
+                        };
+
+                        let eid_i64 = eid as i64;
+                        let mut any_changed = false;
+
+                        let prev_missing = !exporter.state_cache_rust.contains_key(&eid_i64);
+
+                        let mut updates: Gd<#updates_ident>;
+                        if prev_missing {
+                            let Some(ring) = exporter.state_cache.get_mut(&eid_i64) else { continue; };
+                            updates = ring.curr.bind().updates.clone();
+
+                            let mut u = updates.bind_mut();
+                            #( u.#all_field_list = true; )*
+                            any_changed = true;
+                        } else {
+                            let prev_rust = exporter.state_cache_rust.get(&eid_i64).unwrap();
+                            let ring = match exporter.state_cache.get(&eid_i64) {
+                                Some(r) => r,
+                                None => continue,
                             };
+                            updates = ring.curr.bind().updates.clone();
 
-                            let eid_i64 = eid as i64;
-
-                            let mut any_changed = false;
-
-                            let prev_missing = {
-                                !exporter.state_cache_rust.contains_key(&eid_i64)
-                            };
-
-                            let mut updates: Gd<#updates_ident>;
-                            if prev_missing {
-                                if let Some(ring) = exporter.state_cache.get_mut(&eid_i64) {
-                                    updates = ring.curr.bind().updates.clone();
-                                } else {
-                                    // No ring yet; skip and let it be created via CREATED path.
-                                    continue;
-                                }
-
-                                let mut u = updates.bind_mut();
-                                #( u.#all_fields = true; )*
-                                any_changed = true;
-                            } else {
-                                let prev_rust = exporter.state_cache_rust.get(&eid_i64).unwrap();
-
-                                let ring = match exporter.state_cache.get(&eid_i64) {
-                                    Some(r) => r,
-                                    None => { continue; }
-                                };
-                                updates = ring.curr.bind().updates.clone();
-
-                                let mut u = updates.bind_mut();
-                                #(
-                                let changed = prev_rust.#req_fields != snapshot_rust.#req_fields;
-                                if changed { u.#req_fields = true; any_changed = true; } else { u.#req_fields = false; }
-                                )*
-                                #(
-                                let changed = prev_rust.#opt_fields != snapshot_rust.#opt_fields;
-                                if changed { u.#opt_fields = true; any_changed = true; } else { u.#opt_fields = false; }
-                                )*
-                            }
-
-                            if !any_changed {
-                                continue;
-                            }
-
-                            let (mut curr_for_emit, prev_for_emit): (Gd<#wrapper_dto_ident>, Gd<#wrapper_dto_ident>) = {
-                                let Some(ring) = exporter.state_cache.get_mut(&eid_i64) else { continue; };
-                                ring.rotate();
-                                (ring.curr.clone(), ring.prev.clone())
-                            };
-
-                            {
-                                let mut d = curr_for_emit.bind_mut();
-                                #( #update_req_in_place )*
-                                #( #update_opt_in_place )*
-                            }
-
-                            {
-                                if let Some(prev) = exporter.state_cache_rust.get_mut(&eid_i64) {
-                                    prev.clone_from_in_place(&snapshot_rust);
-                                } else {
-                                    exporter.state_cache_rust.insert(eid_i64, snapshot_rust);
-                                }
-                            }
-
-                            acc.updated_ids.push(eid_i64);
-                            acc.updated_curr.push(&curr_for_emit);
-                            acc.updated_prev.push(&prev_for_emit);
+                            let mut u = updates.bind_mut();
+                            #(
+                                let changed = prev_rust.#required_field_list != snapshot_rust.#required_field_list;
+                                if changed { u.#required_field_list = true; any_changed = true; } else { u.#required_field_list = false; }
+                            )*
+                            #(
+                                let changed = prev_rust.#optional_field_list != snapshot_rust.#optional_field_list;
+                                if changed { u.#optional_field_list = true; any_changed = true; } else { u.#optional_field_list = false; }
+                            )*
                         }
+
+                        if !any_changed { continue; }
+
+                        let (mut curr_for_emit, prev_for_emit): (Gd<#wrapper_dto_ident>, Gd<#wrapper_dto_ident>) = {
+                            let Some(ring) = exporter.state_cache.get_mut(&eid_i64) else { continue; };
+                            ring.rotate();
+                            (ring.curr.clone(), ring.prev.clone())
+                        };
+
+                        {
+                            let mut d = curr_for_emit.bind_mut();
+                            #( #update_req_in_place )*
+                            #( #update_opt_in_place )*
+                        }
+
+                        if let Some(prev) = exporter.state_cache_rust.get_mut(&eid_i64) {
+                            prev.clone_from_in_place(&snapshot_rust);
+                        } else {
+                            exporter.state_cache_rust.insert(eid_i64, snapshot_rust);
+                        }
+
+                        acc.updated_ids.push(eid_i64);
+                        acc.updated_curr.push(&curr_for_emit);
+                        acc.updated_prev.push(&prev_for_emit);
                     }
                 }
 
-                // REMOVED
                 if any_removed && !removed_ids_vec.is_empty() {
-                    {
-                        for &id_i64 in removed_ids_vec.iter() {
-                            exporter.state_cache.remove(&id_i64);
-                            exporter.state_cache_rust.remove(&id_i64);
-                        }
-                    }
-
                     for &id_i64 in removed_ids_vec.iter() {
+                        exporter.state_cache.remove(&id_i64);
+                        exporter.state_cache_rust.remove(&id_i64);
                         acc.removed_ids.push(id_i64);
                     }
                 }
 
-                // Emit batch
                 let any =
                     acc.created_ids.len() > 0
                     || acc.updated_ids.len() > 0
@@ -953,12 +930,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         b.updated_prev = acc.updated_prev;
                         b.removed_ids = acc.removed_ids;
                     }
-
                     exporter.signals().batch().emit(&batch);
                 }
             }
 
-            // -------- Plugin --------
             pub struct #plugin_ident;
             impl Plugin for #plugin_ident {
                 fn build(&self, app: &mut App) {

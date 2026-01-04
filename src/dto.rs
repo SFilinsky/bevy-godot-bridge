@@ -1,33 +1,32 @@
 ﻿use godot::obj::NewGd;
 use godot::prelude::{Gd, GodotClass};
 
-pub trait ExportMeta {
-    type Dto: GodotClass;
-    fn to_dto(&self) -> Gd<Self::Dto>;
-}
-
-pub trait DTO {
-    type Component;
-}
-
-/// Convert/update a Godot DTO from a Bevy component.
+/// Links a Rust data type (typically Message / Intention) with its Godot DTO,
+/// and provides bidirectional conversion/update APIs.
 ///
-/// Design:
-/// - User implements only `update(...)` (write exported fields into the DTO).
-/// - `dto_from(...)` has a default impl: allocate `new_gd()`, then call `update(...)`.
-pub trait DtoFrom<C>: DTO {
-    /// Update an existing DTO in-place from the component.
-    fn update(dto: &mut Gd<Self>, c: &C)
-    where
-        Self: Sized + GodotClass + NewGd;
+/// - Store DTOs in NonSend queues (Godot-friendly, not Send)
+/// - Drain queue in Bevy and convert DTO -> Rust data
+pub trait DataTransferConfig {
+    type DataType: Default + Sized;
+    type DtoType: GodotClass + NewGd;
 
-    /// Allocate a new DTO and populate it by calling `update(...)`.
-    fn dto_from(c: &C) -> Gd<Self>
-    where
-        Self: Sized + GodotClass + NewGd,
-    {
-        let mut dto = Self::new_gd();
-        Self::update(&mut dto, c);
+    /// Update an existing DTO in-place from Rust data.
+    fn update_dto(dto: &mut Gd<Self::DtoType>, data: &Self::DataType);
+
+    /// Update an existing Rust data in-place from DTO.
+    fn update_data(dto: &Gd<Self::DtoType>, data: &mut Self::DataType);
+
+    /// Convert DTO into Rust data.
+    fn from_dto(dto: &Gd<Self::DtoType>) -> Self::DataType {
+        let mut data = Self::DataType::default();
+        Self::update_data(dto, &mut data);
+        data
+    }
+
+    /// Allocate a new DTO and populate it from Rust data.
+    fn from_data(data: &Self::DataType) -> Gd<Self::DtoType> {
+        let mut dto = Self::DtoType::new_gd();
+        Self::update_dto(&mut dto, data);
         dto
     }
 }
