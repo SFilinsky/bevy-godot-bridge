@@ -9,9 +9,10 @@ use crate::app_action_queue::ActionQueue;
 use crate::performance::init_performance_tracing;
 use crate::prelude::*;
 use bevy::DefaultPlugins;
-use bevy::prelude::{Fixed, Time, Virtual};
+use bevy::prelude::{Fixed, Time, Virtual, World};
 use bevy::time::TimeUpdateStrategy;
 use godot::obj::Singleton;
+use godot::prelude::{Gd, SceneTree};
 use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     sync::Mutex,
@@ -25,6 +26,27 @@ lazy_static::lazy_static! {
 #[derive(Default, bevy::prelude::Resource)]
 struct GodotClock {
     last_usec: Option<u64>,
+}
+
+#[derive(Debug)]
+pub enum BevyAppLookupError {
+    NoSceneTree,
+    NoRoot,
+    SingletonMissing,
+    WrongType,
+}
+
+impl std::fmt::Display for BevyAppLookupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BevyAppLookupError::NoSceneTree => write!(f, "SceneTree not available"),
+            BevyAppLookupError::NoRoot => write!(f, "Scene root not available"),
+            BevyAppLookupError::SingletonMissing => {
+                write!(f, "BevyAppSingleton not found at /root")
+            }
+            BevyAppLookupError::WrongType => write!(f, "Node 'BevyAppSingleton' is not a BevyApp"),
+        }
+    }
 }
 
 #[derive(GodotClass, Default)]
@@ -83,6 +105,59 @@ impl BevyApp {
         clock.last_usec = Some(now_us);
 
         *world.resource_mut::<TimeUpdateStrategy>() = TimeUpdateStrategy::ManualDuration(dt);
+    }
+
+    pub fn find_for(host: &Gd<Node>) -> Result<Gd<Self>, BevyAppLookupError> {
+        // 1) parent chain (your existing method)
+        if let Ok(app) = Self::find_in_parents(host) {
+            return Ok(app);
+        }
+
+        // 2) singleton at /root
+        let tree = host.get_tree().ok_or(BevyAppLookupError::NoSceneTree)?;
+        Self::find_singleton(&tree)
+    }
+
+    /// Find BevyApp by scanning `/root/BevyAppSingleton`.
+    ///
+    /// This is the recommended strategy for nodes that are not children of BevyApp.
+    fn find_singleton(tree: &Gd<SceneTree>) -> Result<Gd<Self>, BevyAppLookupError> {
+        let root = tree.get_root().ok_or(BevyAppLookupError::NoRoot)?;
+
+        let Some(node) = root.get_node_or_null("BevyAppSingleton") else {
+            return Err(BevyAppLookupError::SingletonMissing);
+        };
+
+        node.try_cast::<BevyApp>()
+            .map_err(|_| BevyAppLookupError::WrongType)
+    }
+
+    /// Find the nearest BevyApp in the parent chain starting at `start`.
+    ///
+    /// This is multi-instance safe: the "current instance" is determined by scene tree locality.
+    fn find_in_parents(start: &Gd<Node>) -> Result<Gd<BevyApp>, String> {
+        let mut cur: Option<Gd<Node>> = Some(start.clone());
+
+        while let Some(node) = cur {
+            if let Ok(app) = node.clone().try_cast::<BevyApp>() {
+                return Ok(app);
+            }
+            cur = node.get_parent();
+        }
+
+        Err("No BevyApp found in parent chain. Importer must be under a BevyApp node.".to_string())
+    }
+
+    /// Run a closure with a mutable reference to this instance's Bevy World.
+    pub fn with_world_mut<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut World),
+    {
+        let app = self
+            .get_app_mut()
+            .expect("BevyApp is not initialized: get_app_mut() returned None in with_world_mut");
+        let world = app.world_mut();
+        f(world);
     }
 }
 

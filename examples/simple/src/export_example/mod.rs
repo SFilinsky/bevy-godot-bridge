@@ -1,7 +1,8 @@
 ﻿//! Minimal demo of how to export data from Bevy to Godot.
 
 use bevy::prelude::*;
-use bevy_godot4::prelude::{export_bundle, DTO, DtoFrom};
+use bevy_godot4::DataTransferConfig;
+use bevy_godot4::prelude::export_bundle;
 use godot::prelude::*;
 
 // -----------------------------------------------------------------------------
@@ -25,25 +26,27 @@ pub struct TransformDto {
     base: Base<RefCounted>,
 }
 
-impl DTO for TransformDto {
-    type Component = Transform;
-}
-
 impl PartialEq for TransformDto {
     fn eq(&self, other: &Self) -> bool {
         self.translation == other.translation
     }
 }
 
-impl DtoFrom<Transform> for TransformDto {
-    fn dto_from(t: &Transform) -> Gd<Self> {
-        let mut dto = TransformDto::new_gd();
-        {
-            let mut d = dto.bind_mut();
-            // Bevy -> Godot conversion
-            d.translation = Vector3::new(t.translation.x, t.translation.y, t.translation.z);
-        }
-        dto
+struct TransformExportConfig;
+impl DataTransferConfig for TransformExportConfig {
+    type DataType = Transform;
+    type DtoType = TransformDto;
+
+    fn update_data(dto: &Gd<Self::DtoType>, data: &mut Self::DataType) {
+        let d = dto.bind();
+        data.translation.x = d.translation.x;
+        data.translation.y = d.translation.y;
+        data.translation.z = d.translation.z;
+    }
+
+    fn update_dto(dto: &mut Gd<Self::DtoType>, data: &Self::DataType) {
+        let mut d = dto.bind_mut();
+        d.translation = Vector3::new(data.translation.x, data.translation.y, data.translation.z);
     }
 }
 
@@ -61,17 +64,11 @@ impl DtoFrom<Transform> for TransformDto {
 // - Update: flags true ONLY if the DTO value actually changed
 // -----------------------------------------------------------------------------
 
-// Export all Transform-only entities (no tag)
-export_bundle! {
-    name: "Transform",
-    dtos: [ TransformDto ],
-}
-
 // Export only entities tagged with UnitTag (e.g., your units)
 export_bundle! {
     name: "Unit",
     tag:  UnitTag,
-    dtos: [ TransformDto ],
+    components: [ TransformExportConfig ],
 }
 
 // -----------------------------------------------------------------------------
@@ -81,14 +78,11 @@ pub struct ExportBindingsPlugin;
 
 impl Plugin for ExportBindingsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            TransformEntityExportPlugin,
-            UnitEntityExportPlugin,
-        ));
+        app.add_plugins(UnitEntityExportPlugin);
     }
 }
 
 // -----------------------------------------------------------------------------
-// 4) Attack TransformEntityExporter and UnitEntityExporter Nodes
+// 5) Attach UnitEntityExporter Nodes
 //    To BevyApp and use signals to read entity updates.
 // -----------------------------------------------------------------------------

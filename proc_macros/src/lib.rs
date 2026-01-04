@@ -1,8 +1,9 @@
 mod bevy_app_impl;
-mod export_component_impl;
-mod export_entity_impl;
-mod export_component_new_impl;
 mod export_bundle;
+mod export_component_impl;
+mod export_component_new_impl;
+mod export_entity_impl;
+mod queue;
 
 use proc_macro::TokenStream;
 
@@ -10,7 +11,6 @@ use proc_macro::TokenStream;
 pub fn bevy_app(attr: TokenStream, item: TokenStream) -> TokenStream {
     bevy_app_impl::expand(attr, item)
 }
-
 
 #[proc_macro_derive(ExportComponent, attributes(export_component, export))]
 pub fn export_component(input: TokenStream) -> TokenStream {
@@ -30,4 +30,9 @@ pub fn export_entity(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn export_bundle(input: TokenStream) -> TokenStream {
     export_bundle::expand(input)
+}
+
+#[proc_macro]
+pub fn import_queue(input: TokenStream) -> TokenStream {
+    queue::import_queue::expand(input)
 }
