@@ -15,9 +15,6 @@ mod scene_tree;
 mod tools;
 mod utils;
 
-pub use dto::DataTransferConfig;
-pub use tools::collect_children;
-
 pub mod prelude {
     pub use super::app_action_queue::AppAction;
     pub use super::debug::cuboids::resources::{CuboidConfig, DebugCuboidRequests};
@@ -30,13 +27,16 @@ pub mod prelude {
     pub use super::utils::{
         AsPhysicsSystem, AsVisualSystem, GodotPhysicsFrame, GodotVisualFrame, SystemDeltaTimer,
     };
+    pub use crate::app::BevyApp;
+    pub use crate::dto::{BuildsDto, DataTransferConfig, WithGatherer};
     pub use crate::import::{
         components::GodotEntity, importers::EntityImporter, plugins::EntityInitializationPlugin,
         position::plugins::PositionInitializationPlugin, sets::PostEntityInitSet,
     };
-    pub use crate::{DataTransferConfig, collect_children};
+    pub use crate::tools::collect_children;
     pub use bevy_godot4_proc_macros::{
-        ExportComponent, ExportComponentNew, ExportEntity, bevy_app, export_bundle, import_queue,
+        ExportComponent, ExportComponentNew, ExportEntity, bevy_app, export_bundle, import_bundle,
+        import_queue,
     };
 }
-pub use app::{APP_BUILDER_FN, BevyApp};
+pub use crate::app::APP_BUILDER_FN;
