@@ -3,6 +3,7 @@ mod export_bundle;
 mod export_component_impl;
 mod export_component_new_impl;
 mod export_entity_impl;
+mod import_bundle;
 mod queue;
 
 use proc_macro::TokenStream;
@@ -30,6 +31,11 @@ pub fn export_entity(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn export_bundle(input: TokenStream) -> TokenStream {
     export_bundle::expand(input)
+}
+
+#[proc_macro]
+pub fn import_bundle(input: TokenStream) -> TokenStream {
+    import_bundle::expand(input)
 }
 
 #[proc_macro]

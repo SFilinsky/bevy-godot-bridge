@@ -157,8 +157,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             // IMPORTANT:
             // - BevyApp is in bevy_godot4 crate root (per your fix), not necessarily in prelude.
-            use bevy_godot4::BevyApp;
-            use bevy_godot4::DataTransferConfig;
+            use bevy_godot4::prelude::BevyApp;
+            use bevy_godot4::prelude::DataTransferConfig;
 
             // -----------------------------------------
             // Types derived from config
@@ -206,7 +206,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 ///
                 /// Cache lookup result. Call once from some Node's _ready().
                 #[func]
-                pub fn bind_bevy_app(&mut self, app: Gd<bevy_godot4::BevyApp>) {
+                pub fn bind_bevy_app(&mut self, app: Gd<bevy_godot4::prelude::BevyApp>) {
                     self.bevy_app = Some(app);
                 }
 
