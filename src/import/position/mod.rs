@@ -91,11 +91,11 @@ mod systems {
 }
 
 pub mod importers {
-    use crate::BevyApp;
     use crate::import::importers::EntityImporter;
     use crate::import::position::intentions::{
         InitializePositionIntentionDto, InitializePositionIntentionQueue,
     };
+    use crate::prelude::BevyApp;
     use godot::classes::{Node, Node3D};
     use godot::global::{godot_error, godot_print};
     use godot::obj::Base;

@@ -13,6 +13,7 @@ use bevy::prelude::{Fixed, Time, Virtual, World};
 use bevy::time::TimeUpdateStrategy;
 use godot::obj::Singleton;
 use godot::prelude::{Gd, SceneTree};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     sync::Mutex,
@@ -49,12 +50,16 @@ impl std::fmt::Display for BevyAppLookupError {
     }
 }
 
-#[derive(GodotClass, Default)]
+#[derive(GodotClass)]
 #[class(base=Node)]
 pub struct BevyApp {
     app: Option<App>,
 
     pub action_queue: ActionQueue,
+
+    next_entity_id: AtomicU64,
+
+    base: Base<Node>,
 }
 
 impl BevyApp {
@@ -67,6 +72,7 @@ impl BevyApp {
     }
 }
 
+#[godot_api]
 impl BevyApp {
     fn apply_pending_actions(&mut self) {
         if let Some(app) = self.app.as_mut() {
@@ -159,14 +165,22 @@ impl BevyApp {
         let world = app.world_mut();
         f(world);
     }
+
+    pub fn alloc_entity_id(&mut self) -> u64 {
+        self.next_entity_id.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 #[godot_api]
 impl INode for BevyApp {
-    fn init(_base: Base<Node>) -> Self {
-        Default::default()
+    fn init(base: Base<Self::Base>) -> Self {
+        Self {
+            app: None,
+            action_queue: ActionQueue::default(),
+            next_entity_id: AtomicU64::new(1),
+            base,
+        }
     }
-
     fn ready(&mut self) {
         if godot::classes::Engine::singleton().is_editor_hint() {
             return;

@@ -88,17 +88,11 @@ pub mod sets {
 
 pub mod importers {
     use crate::import::intentions::{InitializeEntityIntentionDto, InitializeEntityIntentionQueue};
-    use bevy_godot4::BevyApp;
+    use bevy_godot4::prelude::BevyApp;
     use godot::classes::Node;
     use godot::global::godot_print;
     use godot::obj::Base;
     use godot::prelude::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_ENTITY_ID: AtomicU64 = AtomicU64::new(1);
-    fn alloc_entity_id() -> u64 {
-        NEXT_ENTITY_ID.fetch_add(1, Ordering::Relaxed)
-    }
 
     #[derive(GodotClass)]
     #[class(base=Node)]
@@ -117,9 +111,9 @@ pub mod importers {
 
     #[godot_api]
     impl EntityImporter {
-        fn generate_entity_id(&mut self) {
+        fn generate_entity_id(&mut self, app: &mut Gd<BevyApp>) {
             if self.entity_id <= 0 {
-                self.entity_id = alloc_entity_id() as i64;
+                self.entity_id = app.bind_mut().alloc_entity_id() as i64;
             }
         }
 
@@ -163,11 +157,15 @@ pub mod importers {
         fn enter_tree(&mut self) {
             {
                 let node = &self.base().clone().upcast();
-                let mut queue = self.queue.bind_mut();
-                queue.bind_bevy_app(BevyApp::find_for(node).expect("BevyApp not found"));
-            }
+                let mut app = BevyApp::find_for(node).expect("BevyApp not found");
 
-            self.generate_entity_id();
+                {
+                    let mut queue = self.queue.bind_mut();
+                    queue.bind_bevy_app(app.clone());
+                }
+
+                self.generate_entity_id(&mut app);
+            }
         }
 
         fn ready(&mut self) {
