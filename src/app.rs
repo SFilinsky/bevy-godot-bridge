@@ -13,6 +13,7 @@ use bevy::prelude::{Fixed, Time, Virtual, World};
 use bevy::time::TimeUpdateStrategy;
 use godot::obj::Singleton;
 use godot::prelude::{Gd, SceneTree};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     sync::Mutex,
@@ -55,6 +56,8 @@ pub struct BevyApp {
     app: Option<App>,
 
     pub action_queue: ActionQueue,
+
+    next_entity_id: AtomicU64,
 }
 
 impl BevyApp {
@@ -158,6 +161,10 @@ impl BevyApp {
             .expect("BevyApp is not initialized: get_app_mut() returned None in with_world_mut");
         let world = app.world_mut();
         f(world);
+    }
+
+    pub fn alloc_entity_id(&mut self) -> u64 {
+        self.next_entity_id.fetch_add(1, Ordering::Relaxed)
     }
 }
 

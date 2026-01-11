@@ -1,5 +1,5 @@
 ﻿use godot::obj::NewGd;
-use godot::prelude::{Gd, GodotClass};
+use godot::prelude::{Gd, GodotClass, Node, RefCounted};
 
 /// Links a Rust data type (typically Message / Intention) with its Godot DTO,
 /// and provides bidirectional conversion/update APIs.
@@ -29,4 +29,15 @@ pub trait DataTransferConfig {
         Self::update_dto(&mut dto, data);
         dto
     }
+}
+
+pub trait BuildsDto<Dto>
+where
+    Dto: GodotClass,
+{
+    fn build_dto(&self) -> Gd<Dto>;
+}
+
+pub trait WithGatherer: GodotClass<Base = RefCounted> {
+    type Gatherer: GodotClass<Base = Node> + BuildsDto<Self>;
 }

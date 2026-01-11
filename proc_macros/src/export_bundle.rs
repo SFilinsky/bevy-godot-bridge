@@ -16,7 +16,7 @@ use syn::{
 /// }
 ///
 /// Each `*ExportConfig` implements:
-/// - bevy_godot4::DataTransferConfig
+/// - bevy_godot4::prelude::DataTransferConfig
 ///   - type DataType = <bevy component>
 ///   - type DtoType = <GodotClass DTO>
 ///   - update_dto / update_data
