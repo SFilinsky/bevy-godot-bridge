@@ -189,11 +189,12 @@ impl INode for BevyApp {
         init_performance_tracing();
 
         let mut app = App::new();
-        (APP_BUILDER_FN.lock().unwrap().as_mut().unwrap())(&mut app);
-
         app.add_plugins(DefaultPlugins)
             .add_plugins(crate::scene::PackedScenePlugin)
             .init_non_send_resource::<crate::scene_tree::SceneTreeRefImpl>();
+
+        (APP_BUILDER_FN.lock().unwrap().as_mut().unwrap())(&mut app);
+
         // .add_plugins(GodotSignalsPlugin)
         // .add_plugins(GodotInputEventPlugin);
 
