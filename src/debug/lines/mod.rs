@@ -1,16 +1,13 @@
-﻿// src/debug/lines/mod.rs
-pub mod resources {
+﻿pub mod resources {
     use bevy::platform::collections::HashMap;
-    use bevy::prelude::Resource;
+    use bevy::prelude::{Resource, Timer, TimerMode};
     use godot::builtin::{Color, Vector3};
-    use godot::classes::{MeshInstance3D, Node};
+    use godot::classes::{ArrayMesh, MeshInstance3D, Node, StandardMaterial3D};
     use godot::obj::Gd;
 
     #[derive(Clone, Copy)]
     pub struct LineConfig {
-        /// If true, disable depth test so the line is always visible.
         pub always_on_top: bool,
-        /// Optional world transform origin for the mesh (simple translation).
         pub world_origin: Option<Vector3>,
     }
     impl Default for LineConfig {
@@ -30,14 +27,12 @@ pub mod resources {
         pub config: LineConfig,
     }
 
-    /// Keyed requests (each key draws/updates a single line).
     #[derive(Resource, Default)]
     pub struct DebugLineRequests {
         pub pending: HashMap<String, LineRequest>,
     }
 
     impl DebugLineRequests {
-        /// Set/replace a line under a stable key.
         pub fn set_line(
             &mut self,
             key: impl Into<String>,
@@ -57,29 +52,47 @@ pub mod resources {
             );
         }
 
-        /// Remove a specific line next frame (by key).
         pub fn clear_line(&mut self, key: &str) {
             self.pending.remove(key);
         }
 
-        /// Clear all lines next frame.
         pub fn clear_all(&mut self) {
             self.pending.clear();
         }
     }
 
-    /// NonSend: owns Godot handles, touched only on main thread.
+    pub struct LineNode {
+        pub mesh_instance: Gd<MeshInstance3D>,
+        pub mesh: Gd<ArrayMesh>,
+        pub material: Gd<StandardMaterial3D>,
+    }
+
+    #[derive(Resource)]
+    pub struct DebugLineApplyTimer {
+        pub timer: Timer,
+    }
+
+    impl Default for DebugLineApplyTimer {
+        fn default() -> Self {
+            Self {
+                timer: Timer::from_seconds(1.0, TimerMode::Repeating),
+            }
+        }
+    }
+
     #[derive(Default)]
     pub struct LineDriver {
         pub(super) parent: Option<Gd<Node>>,
-        pub(super) nodes: HashMap<String, Gd<MeshInstance3D>>,
+        pub(super) nodes: HashMap<String, LineNode>,
     }
 }
 
 pub mod systems {
     use crate::debug::debug_manager::DebugMode;
-    use crate::debug::lines::resources::{DebugLineRequests, LineDriver};
-    use bevy::prelude::{NonSendMut, Res, ResMut};
+    use crate::debug::lines::resources::{
+        DebugLineApplyTimer, DebugLineRequests, LineDriver, LineNode,
+    };
+    use bevy::prelude::{NonSendMut, Res, ResMut, Time};
     use godot::builtin::{NodePath, PackedColorArray, PackedVector3Array, VarArray, Variant};
     use godot::classes::base_material_3d::{Flags, ShadingMode};
     use godot::classes::mesh::{ArrayType, PrimitiveType};
@@ -114,9 +127,16 @@ pub mod systems {
 
     pub(super) fn apply_lines(
         debug_res: Res<DebugMode>,
+        time: Res<Time>,
+        mut timer: ResMut<DebugLineApplyTimer>,
         mut reqs: ResMut<DebugLineRequests>,
         mut driver: NonSendMut<LineDriver>,
     ) {
+        timer.timer.tick(time.delta());
+        if !timer.timer.just_finished() {
+            return;
+        }
+
         if reqs.pending.is_empty() {
             return;
         }
@@ -125,20 +145,43 @@ pub mod systems {
             return;
         };
 
-        // Take requests for this frame.
         let pending = std::mem::take(&mut reqs.pending);
 
         for (key, req) in pending {
-            // Get/create node for this key.
-            let mut mi = if let Some(n) = driver.nodes.get(&key) {
-                n.clone()
+            let entry = if let Some(entry) = driver.nodes.get(&key) {
+                LineNode {
+                    mesh_instance: entry.mesh_instance.clone(),
+                    mesh: entry.mesh.clone(),
+                    material: entry.material.clone(),
+                }
             } else {
-                let mut n = MeshInstance3D::new_alloc();
-                n.set_name(&key);
-                parent.add_child(&n);
-                driver.nodes.insert(key.clone(), n.clone());
-                n
+                let mut mi = MeshInstance3D::new_alloc();
+                mi.set_name(&key);
+                parent.add_child(&mi);
+
+                let mut mesh = ArrayMesh::new_gd();
+                mi.set_mesh(&mesh);
+
+                let mut mat = StandardMaterial3D::new_gd();
+                mat.set_shading_mode(ShadingMode::UNSHADED);
+                mat.set_flag(Flags::ALBEDO_FROM_VERTEX_COLOR, true);
+                mi.set_material_override(&mat);
+
+                let node = LineNode {
+                    mesh_instance: mi.clone(),
+                    mesh: mesh.clone(),
+                    material: mat.clone(),
+                };
+                driver.nodes.insert(key.clone(), node);
+
+                LineNode {
+                    mesh_instance: mi,
+                    mesh,
+                    material: mat,
+                }
             };
+
+            let mut mi = entry.mesh_instance;
 
             if !debug_res.on {
                 mi.set_visible(false);
@@ -146,7 +189,6 @@ pub mod systems {
             }
             mi.set_visible(true);
 
-            // Build mesh: 2 verts + per-vertex color.
             let mut verts = PackedVector3Array::new();
             verts.push(req.a);
             verts.push(req.b);
@@ -160,21 +202,14 @@ pub mod systems {
             arrays.set(ArrayType::VERTEX.ord() as usize, &verts.to_variant());
             arrays.set(ArrayType::COLOR.ord() as usize, &cols.to_variant());
 
-            let mut arr_mesh = ArrayMesh::new_gd();
-            // Newer bindings take the typed enum directly:
-            arr_mesh.add_surface_from_arrays(PrimitiveType::LINES, &arrays);
-            mi.set_mesh(&arr_mesh);
+            let mut mesh = entry.mesh;
+            mesh.clear_surfaces();
+            mesh.add_surface_from_arrays(PrimitiveType::LINES, &arrays);
 
-            // Material: unshaded, vertex color as albedo, optional no depth.
-            let mut mat = StandardMaterial3D::new_gd();
-            mat.set_shading_mode(ShadingMode::UNSHADED);
-            mat.set_flag(Flags::ALBEDO_FROM_VERTEX_COLOR, true);
-            if req.config.always_on_top {
-                mat.set_flag(Flags::DISABLE_DEPTH_TEST, true);
-            }
-            mi.set_surface_override_material(0, &mat);
+            let mut mat = entry.material;
+            mat.set_flag(Flags::DISABLE_DEPTH_TEST, req.config.always_on_top);
+            mi.set_material_override(&mat);
 
-            // Optional translation for the whole batch.
             if let Some(origin) = req.config.world_origin {
                 let mut t = mi.get_transform();
                 t.origin = origin;
@@ -185,7 +220,7 @@ pub mod systems {
 }
 
 pub mod plugin {
-    use crate::debug::lines::resources::{DebugLineRequests, LineDriver};
+    use crate::debug::lines::resources::{DebugLineApplyTimer, DebugLineRequests, LineDriver};
     use crate::debug::lines::systems::{apply_lines, ensure_parent};
     use bevy::app::{App, FixedPreUpdate, FixedUpdate, Plugin};
 
@@ -193,6 +228,7 @@ pub mod plugin {
     impl Plugin for DebugLineVisualizationPlugin {
         fn build(&self, app: &mut App) {
             app.init_resource::<DebugLineRequests>()
+                .init_resource::<DebugLineApplyTimer>()
                 .insert_non_send_resource(LineDriver::default())
                 .add_systems(FixedPreUpdate, ensure_parent)
                 .add_systems(FixedUpdate, apply_lines);
