@@ -40,7 +40,7 @@
 
 pub mod resources {
     use bevy::platform::collections::HashMap;
-    use bevy::prelude::{Resource, Timer, TimerMode};
+    use bevy::prelude::Resource;
     use godot::builtin::Color;
     use godot::classes::{ImageTexture, MeshInstance3D, Node, StandardMaterial3D};
     use godot::obj::Gd;
@@ -96,19 +96,6 @@ pub mod resources {
         pub texture: Gd<ImageTexture>,
     }
 
-    #[derive(Resource)]
-    pub struct DebugHeatmapApplyTimer {
-        pub timer: Timer,
-    }
-
-    impl Default for DebugHeatmapApplyTimer {
-        fn default() -> Self {
-            Self {
-                timer: Timer::from_seconds(1.0, TimerMode::Repeating),
-            }
-        }
-    }
-
     #[derive(Default)]
     pub struct DebugHeatmapDriver {
         pub(super) parent: Option<Gd<Node>>,
@@ -156,7 +143,7 @@ pub mod resources {
 }
 
 pub mod systems {
-    use bevy::prelude::{NonSendMut, Res, ResMut, Time};
+    use bevy::prelude::{NonSendMut, ResMut};
     use godot::builtin::{NodePath, PackedByteArray, Vector2, Vector3};
     use godot::classes::base_material_3d::{
         ShadingMode, TextureFilter, TextureParam, Transparency,
@@ -167,10 +154,9 @@ pub mod systems {
     };
     use godot::obj::{Gd, NewAlloc, NewGd, Singleton};
 
-    use bevy_godot4::debug::debug_manager::DebugMode;
-
+    use crate::debug::debug_manager::DebugRenderGate;
     use crate::debug::heatmap::resources::{
-        DebugHeatmapApplyTimer, DebugHeatmapDriver, DebugHeatmapRequests, HeatmapNode, Normalize,
+        DebugHeatmapDriver, DebugHeatmapRequests, HeatmapNode, Normalize,
     };
 
     pub(super) fn ensure_driver_parent(mut driver: NonSendMut<DebugHeatmapDriver>) {
@@ -201,14 +187,13 @@ pub mod systems {
     }
 
     pub(super) fn apply_heatmaps(
-        debug_res: Res<DebugMode>,
-        time: Res<Time>,
-        mut timer: ResMut<DebugHeatmapApplyTimer>,
+        mut gate: DebugRenderGate,
         mut reqs: ResMut<DebugHeatmapRequests>,
         mut driver: NonSendMut<DebugHeatmapDriver>,
     ) {
-        timer.timer.tick(time.delta());
-        if !timer.timer.just_finished() {
+        let status = gate.get_status(1.0);
+
+        if !status.should_rerender {
             return;
         }
 
@@ -267,7 +252,7 @@ pub mod systems {
 
             let mut mesh_instance = entry.mesh;
 
-            if !debug_res.on {
+            if !status.is_visible {
                 mesh_instance.set_visible(false);
                 continue;
             }
@@ -352,9 +337,7 @@ pub mod plugin {
     use bevy::app::{App, FixedPreUpdate, FixedUpdate, Plugin};
     use bevy_godot4::debug::heatmap::systems::ensure_driver_parent;
 
-    use crate::debug::heatmap::resources::{
-        DebugHeatmapApplyTimer, DebugHeatmapDriver, DebugHeatmapRequests,
-    };
+    use crate::debug::heatmap::resources::{DebugHeatmapDriver, DebugHeatmapRequests};
     use crate::debug::heatmap::systems::apply_heatmaps;
 
     pub struct DebugHeatmapVisualizationPlugin;
@@ -362,7 +345,6 @@ pub mod plugin {
     impl Plugin for DebugHeatmapVisualizationPlugin {
         fn build(&self, app: &mut App) {
             app.init_resource::<DebugHeatmapRequests>()
-                .init_resource::<DebugHeatmapApplyTimer>()
                 .insert_non_send_resource(DebugHeatmapDriver::default())
                 .add_systems(FixedPreUpdate, ensure_driver_parent)
                 .add_systems(FixedUpdate, apply_heatmaps);
