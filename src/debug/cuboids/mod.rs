@@ -1,7 +1,7 @@
 ﻿pub mod resources {
     use bevy::math::Vec3;
     use bevy::platform::collections::HashMap;
-    use bevy::prelude::{Resource, Timer, TimerMode, Transform};
+    use bevy::prelude::{Resource, Transform};
     use godot::builtin::Color;
     use godot::classes::{BoxMesh, MeshInstance3D, Node, StandardMaterial3D};
     use godot::obj::Gd;
@@ -74,19 +74,6 @@
         pub material: Gd<StandardMaterial3D>,
     }
 
-    #[derive(Resource)]
-    pub struct DebugCuboidApplyTimer {
-        pub timer: Timer,
-    }
-
-    impl Default for DebugCuboidApplyTimer {
-        fn default() -> Self {
-            Self {
-                timer: Timer::from_seconds(1.0, TimerMode::Repeating),
-            }
-        }
-    }
-
     #[derive(Default)]
     pub struct CuboidDriver {
         pub(super) parent: Option<Gd<Node>>,
@@ -95,15 +82,14 @@
 }
 
 pub mod systems {
-    use bevy::prelude::{NonSendMut, Res, ResMut, Time, Transform};
+    use bevy::prelude::{NonSendMut, ResMut, Transform};
     use godot::builtin::{Basis, NodePath, Quaternion, Transform3D, Vector3};
     use godot::classes::base_material_3d::{CullMode, Flags, ShadingMode, Transparency};
     use godot::classes::{BoxMesh, Engine, MeshInstance3D, SceneTree, StandardMaterial3D};
     use godot::obj::{Gd, NewAlloc, NewGd, Singleton};
 
-    use bevy_godot4::debug::debug_manager::DebugMode;
-
-    use super::resources::{CuboidDriver, CuboidNode, DebugCuboidApplyTimer, DebugCuboidRequests};
+    use super::resources::{CuboidDriver, CuboidNode, DebugCuboidRequests};
+    use crate::debug::debug_manager::DebugRenderGate;
 
     pub fn bevy_to_godot_transform(t: &Transform) -> Transform3D {
         let rot = Quaternion::new(t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w);
@@ -139,14 +125,13 @@ pub mod systems {
     }
 
     pub(super) fn apply_cuboids(
-        debug_res: Res<DebugMode>,
-        time: Res<Time>,
-        mut timer: ResMut<DebugCuboidApplyTimer>,
+        mut gate: DebugRenderGate,
         mut reqs: ResMut<DebugCuboidRequests>,
         mut driver: NonSendMut<CuboidDriver>,
     ) {
-        timer.timer.tick(time.delta());
-        if !timer.timer.just_finished() {
+        let status = gate.get_status(1.0);
+
+        if !status.should_rerender {
             return;
         }
 
@@ -185,7 +170,7 @@ pub mod systems {
                 mi.set_name(&key);
                 parent.add_child(&mi);
 
-                let mut mesh = BoxMesh::new_gd();
+                let mesh = BoxMesh::new_gd();
                 mi.set_mesh(&mesh);
 
                 let mat = StandardMaterial3D::new_gd();
@@ -207,7 +192,7 @@ pub mod systems {
 
             let mut mi = entry.mesh_instance;
 
-            if !debug_res.on {
+            if !status.is_visible {
                 mi.set_visible(false);
                 continue;
             }
@@ -251,16 +236,13 @@ pub mod systems {
 pub mod plugin {
     use bevy::app::{App, FixedPreUpdate, FixedUpdate, Plugin};
 
-    use crate::debug::cuboids::resources::{
-        CuboidDriver, DebugCuboidApplyTimer, DebugCuboidRequests,
-    };
+    use crate::debug::cuboids::resources::{CuboidDriver, DebugCuboidRequests};
     use crate::debug::cuboids::systems::{apply_cuboids, ensure_parent};
 
     pub struct DebugCuboidVisualizationPlugin;
     impl Plugin for DebugCuboidVisualizationPlugin {
         fn build(&self, app: &mut App) {
             app.init_resource::<DebugCuboidRequests>()
-                .init_resource::<DebugCuboidApplyTimer>()
                 .insert_non_send_resource(CuboidDriver::default())
                 .add_systems(FixedPreUpdate, ensure_parent)
                 .add_systems(FixedUpdate, apply_cuboids);

@@ -1,15 +1,68 @@
 ﻿use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
+
 use bevy::app::{App, FixedUpdate, Plugin};
-use bevy::prelude::{ResMut, Resource};
+use bevy::ecs::system::SystemParam;
+use bevy::prelude::{Local, Res, ResMut, Resource, Time, Timer, TimerMode};
 use godot::classes::Node;
-use godot::obj::{Base};
+use godot::obj::Base;
 use godot::prelude::*;
+
+#[derive(Default, Clone, Copy)]
+pub struct DebugRenderGateStatus {
+    pub is_visible: bool,
+    pub should_rerender: bool,
+}
+
+#[derive(Default)]
+pub struct DebugRenderGateState {
+    pub timer: Timer,
+    pub last_debug_on: bool,
+    pub initialized: bool,
+}
+
+#[derive(SystemParam)]
+pub struct DebugRenderGate<'w, 's> {
+    debug: Res<'w, DebugMode>,
+    time: Res<'w, Time>,
+    state: Local<'s, DebugRenderGateState>,
+}
+
+impl<'w, 's> DebugRenderGate<'w, 's> {
+    pub fn get_status(&mut self, interval_seconds: f32) -> DebugRenderGateStatus {
+        if !self.state.initialized {
+            self.state.timer = Timer::from_seconds(interval_seconds, TimerMode::Repeating);
+            self.state.last_debug_on = self.debug.on;
+            self.state.initialized = true;
+            return DebugRenderGateStatus {
+                is_visible: self.debug.on,
+                should_rerender: true,
+            };
+        }
+
+        let debug_changed = self.state.last_debug_on != self.debug.on;
+        self.state.last_debug_on = self.debug.on;
+
+        if debug_changed {
+            self.state.timer = Timer::from_seconds(interval_seconds, TimerMode::Repeating);
+            return DebugRenderGateStatus {
+                is_visible: self.debug.on,
+                should_rerender: true,
+            };
+        }
+
+        self.state.timer.tick(self.time.delta());
+
+        DebugRenderGateStatus {
+            is_visible: self.debug.on,
+            should_rerender: self.state.timer.just_finished(),
+        }
+    }
+}
 
 /// Process-wide flag readable from Bevy.
 static DEBUG_FLAG: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
 
-/// Read current debug flag (for Bevy bevy_godot4).
 pub fn get_debug_flag() -> bool {
     DEBUG_FLAG.load(Ordering::Relaxed)
 }
@@ -30,7 +83,6 @@ pub struct DebugManager {
 
 #[godot_api]
 impl DebugManager {
-    /// Switch debug mode. Emits `on_debug_change(is_on: bool)` if it changes.
     #[func]
     pub fn set_debug(&mut self, on: bool) {
         godot_print!("DebugManager.set_debug({})", on);
@@ -43,13 +95,11 @@ impl DebugManager {
         set_debug_flag(on);
     }
 
-    /// Query current state for GDScript convenience.
     #[func]
     pub fn is_on(&self) -> bool {
         self.is_debug_on
     }
 
-    /// Godot-side signal so scenes can bind show/hide logic, etc.
     #[signal]
     fn on_debug_change(is_on: bool);
 }
@@ -61,7 +111,6 @@ impl INode for DebugManager {
 
         set_debug_flag(is_debug_on);
 
-        // Initialize the global flag and emit initial value.
         self.signals().on_debug_change().emit(is_debug_on);
     }
 }
@@ -78,7 +127,6 @@ impl Default for DebugMode {
 }
 
 fn sync_debug_mode_from_godot(mut res: ResMut<DebugMode>) {
-    // Read from the atomic flag set by the Godot DebugManager.
     res.on = get_debug_flag();
 }
 
@@ -86,7 +134,6 @@ pub struct DebugModeBridgePlugin;
 impl Plugin for DebugModeBridgePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DebugMode>()
-            // Run in FixedUpdate so gameplay/physics see a stable value each tick.
             .add_systems(FixedUpdate, sync_debug_mode_from_godot);
     }
 }

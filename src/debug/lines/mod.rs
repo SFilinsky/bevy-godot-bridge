@@ -1,6 +1,6 @@
 ﻿pub mod resources {
     use bevy::platform::collections::HashMap;
-    use bevy::prelude::{Resource, Timer, TimerMode};
+    use bevy::prelude::Resource;
     use godot::builtin::{Color, Vector3};
     use godot::classes::{ArrayMesh, MeshInstance3D, Node, StandardMaterial3D};
     use godot::obj::Gd;
@@ -67,19 +67,6 @@
         pub material: Gd<StandardMaterial3D>,
     }
 
-    #[derive(Resource)]
-    pub struct DebugLineApplyTimer {
-        pub timer: Timer,
-    }
-
-    impl Default for DebugLineApplyTimer {
-        fn default() -> Self {
-            Self {
-                timer: Timer::from_seconds(1.0, TimerMode::Repeating),
-            }
-        }
-    }
-
     #[derive(Default)]
     pub struct LineDriver {
         pub(super) parent: Option<Gd<Node>>,
@@ -88,11 +75,9 @@
 }
 
 pub mod systems {
-    use crate::debug::debug_manager::DebugMode;
-    use crate::debug::lines::resources::{
-        DebugLineApplyTimer, DebugLineRequests, LineDriver, LineNode,
-    };
-    use bevy::prelude::{NonSendMut, Res, ResMut, Time};
+    use crate::debug::debug_manager::DebugRenderGate;
+    use crate::debug::lines::resources::{DebugLineRequests, LineDriver, LineNode};
+    use bevy::prelude::{NonSendMut, ResMut};
     use godot::builtin::{NodePath, PackedColorArray, PackedVector3Array, VarArray, Variant};
     use godot::classes::base_material_3d::{Flags, ShadingMode};
     use godot::classes::mesh::{ArrayType, PrimitiveType};
@@ -126,14 +111,13 @@ pub mod systems {
     }
 
     pub(super) fn apply_lines(
-        debug_res: Res<DebugMode>,
-        time: Res<Time>,
-        mut timer: ResMut<DebugLineApplyTimer>,
+        mut gate: DebugRenderGate,
         mut reqs: ResMut<DebugLineRequests>,
         mut driver: NonSendMut<LineDriver>,
     ) {
-        timer.timer.tick(time.delta());
-        if !timer.timer.just_finished() {
+        let status = gate.get_status(1.0);
+
+        if !status.should_rerender {
             return;
         }
 
@@ -159,7 +143,7 @@ pub mod systems {
                 mi.set_name(&key);
                 parent.add_child(&mi);
 
-                let mut mesh = ArrayMesh::new_gd();
+                let mesh = ArrayMesh::new_gd();
                 mi.set_mesh(&mesh);
 
                 let mut mat = StandardMaterial3D::new_gd();
@@ -183,7 +167,7 @@ pub mod systems {
 
             let mut mi = entry.mesh_instance;
 
-            if !debug_res.on {
+            if !status.is_visible {
                 mi.set_visible(false);
                 continue;
             }
@@ -220,7 +204,7 @@ pub mod systems {
 }
 
 pub mod plugin {
-    use crate::debug::lines::resources::{DebugLineApplyTimer, DebugLineRequests, LineDriver};
+    use crate::debug::lines::resources::{DebugLineRequests, LineDriver};
     use crate::debug::lines::systems::{apply_lines, ensure_parent};
     use bevy::app::{App, FixedPreUpdate, FixedUpdate, Plugin};
 
@@ -228,7 +212,6 @@ pub mod plugin {
     impl Plugin for DebugLineVisualizationPlugin {
         fn build(&self, app: &mut App) {
             app.init_resource::<DebugLineRequests>()
-                .init_resource::<DebugLineApplyTimer>()
                 .insert_non_send_resource(LineDriver::default())
                 .add_systems(FixedPreUpdate, ensure_parent)
                 .add_systems(FixedUpdate, apply_lines);
