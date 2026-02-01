@@ -1,14 +1,14 @@
-﻿pub(crate) mod heatmap;
-pub(crate) mod lines;
-pub(crate) mod cuboids;
+﻿pub(crate) mod cuboids;
 mod debug_manager;
+pub(crate) mod heatmap;
+pub(crate) mod paths;
 
 pub mod plugins {
-    use bevy::prelude::*;
-    use super::debug_manager::DebugModeBridgePlugin;
     use super::cuboids::plugin::DebugCuboidVisualizationPlugin;
+    use super::debug_manager::DebugModeBridgePlugin;
     use super::heatmap::plugin::DebugHeatmapVisualizationPlugin;
-    use super::lines::plugin::DebugLineVisualizationPlugin;
+    use super::paths::plugin::DebugPathVisualizationPlugin;
+    use bevy::prelude::*;
 
     pub struct DebugVisualizationPlugin;
     impl Plugin for DebugVisualizationPlugin {
@@ -16,8 +16,8 @@ pub mod plugins {
             app.add_plugins((
                 DebugCuboidVisualizationPlugin,
                 DebugHeatmapVisualizationPlugin,
-                DebugLineVisualizationPlugin,
-                DebugModeBridgePlugin
+                DebugPathVisualizationPlugin,
+                DebugModeBridgePlugin,
             ));
         }
     }
