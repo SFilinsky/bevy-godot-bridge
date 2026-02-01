@@ -19,7 +19,7 @@ pub mod prelude {
     pub use super::app_action_queue::AppAction;
     pub use super::debug::cuboids::resources::{CuboidConfig, DebugCuboidRequests};
     pub use super::debug::heatmap::resources::{DebugHeatmapRequests, HeatmapConfig};
-    pub use super::debug::lines::resources::{DebugLineRequests, LineConfig};
+    pub use super::debug::paths::resources::{DebugPathRequests, PathConfig};
     pub use super::debug::plugins::DebugVisualizationPlugin;
     pub use super::erased_gd::{ErasedGd, ErasedGdResource};
     pub use super::scene::GodotScene;
