@@ -1,5 +1,5 @@
 ﻿pub(crate) mod cuboids;
-mod debug_manager;
+pub mod debug_manager;
 pub(crate) mod heatmap;
 pub(crate) mod paths;
 

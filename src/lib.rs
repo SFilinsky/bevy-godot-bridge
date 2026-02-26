@@ -18,6 +18,7 @@ mod utils;
 pub mod prelude {
     pub use super::app_action_queue::AppAction;
     pub use super::debug::cuboids::resources::{CuboidConfig, DebugCuboidRequests};
+    pub use super::debug::debug_manager::{DebugRenderGate, EDebugState};
     pub use super::debug::heatmap::resources::{DebugHeatmapRequests, HeatmapConfig};
     pub use super::debug::paths::resources::{DebugPathRequests, PathConfig};
     pub use super::debug::plugins::DebugVisualizationPlugin;

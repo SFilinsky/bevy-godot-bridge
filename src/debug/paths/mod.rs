@@ -90,7 +90,9 @@
 pub mod systems {
     use crate::debug::debug_manager::DebugRenderGate;
     use crate::debug::paths::resources::{DebugPathRequests, PathDriver, PathNode};
+    use bevy::platform::collections::HashSet;
     use bevy::prelude::{NonSendMut, ResMut};
+    use bevy_godot4::debug::debug_manager::EDebugState;
     use godot::builtin::{
         NodePath, PackedColorArray, PackedVector3Array, VarArray, Variant, Vector3,
     };
@@ -132,12 +134,8 @@ pub mod systems {
         mut reqs: ResMut<DebugPathRequests>,
         mut driver: NonSendMut<PathDriver>,
     ) {
-        let status = gate.get_status(1.0);
+        let status = gate.get_status(EDebugState::Navmesh, 0.5);
         if !status.should_rerender {
-            return;
-        }
-
-        if reqs.pending.is_empty() {
             return;
         }
 
@@ -146,6 +144,21 @@ pub mod systems {
         };
 
         let pending = std::mem::take(&mut reqs.pending);
+        let pending_keys: HashSet<String> = pending.keys().cloned().collect();
+
+        let stale_keys: Vec<String> = driver
+            .nodes
+            .keys()
+            .filter(|k| !pending_keys.contains(*k))
+            .cloned()
+            .collect();
+
+        for key in stale_keys {
+            if let Some(node) = driver.nodes.remove(&key) {
+                let mut mesh_instance = node.mesh_instance;
+                mesh_instance.queue_free();
+            }
+        }
 
         for (key, req) in pending {
             let entry = if let Some(entry) = driver.nodes.get(&key) {
