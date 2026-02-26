@@ -82,14 +82,14 @@
 }
 
 pub mod systems {
+    use super::resources::{CuboidDriver, CuboidNode, DebugCuboidRequests};
+    use crate::debug::debug_manager::DebugRenderGate;
     use bevy::prelude::{NonSendMut, ResMut, Transform};
+    use bevy_godot4::prelude::EDebugState;
     use godot::builtin::{Basis, NodePath, Quaternion, Transform3D, Vector3};
     use godot::classes::base_material_3d::{CullMode, Flags, ShadingMode, Transparency};
     use godot::classes::{BoxMesh, Engine, MeshInstance3D, SceneTree, StandardMaterial3D};
     use godot::obj::{Gd, NewAlloc, NewGd, Singleton};
-
-    use super::resources::{CuboidDriver, CuboidNode, DebugCuboidRequests};
-    use crate::debug::debug_manager::DebugRenderGate;
 
     pub fn bevy_to_godot_transform(t: &Transform) -> Transform3D {
         let rot = Quaternion::new(t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w);
@@ -129,7 +129,7 @@ pub mod systems {
         mut reqs: ResMut<DebugCuboidRequests>,
         mut driver: NonSendMut<CuboidDriver>,
     ) {
-        let status = gate.get_status(1.0);
+        let status = gate.get_status(EDebugState::Colliders, 0.5);
 
         if !status.should_rerender {
             return;
