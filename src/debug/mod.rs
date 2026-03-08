@@ -1,7 +1,8 @@
-﻿pub(crate) mod cuboids;
+pub(crate) mod cuboids;
 pub mod debug_manager;
 pub(crate) mod heatmap;
 pub(crate) mod paths;
+pub(crate) mod visibility;
 
 pub mod plugins {
     use super::cuboids::plugin::DebugCuboidVisualizationPlugin;
