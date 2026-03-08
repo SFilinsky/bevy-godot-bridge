@@ -1,4 +1,4 @@
-﻿pub mod nodes {
+pub mod nodes {
     use godot::classes::base_material_3d::{ShadingMode, TextureFilter, Transparency};
     use godot::classes::{IMeshInstance3D, MeshInstance3D, PlaneMesh, StandardMaterial3D};
     use godot::prelude::*;
@@ -138,6 +138,42 @@ pub mod resources {
             cfg: HeatmapConfig,
         ) {
             self.set_heatmap_owned(key, cols, rows, data.to_vec(), cfg);
+        }
+    }
+}
+
+pub mod subsystem {
+    use super::resources::DebugHeatmapRequests;
+    pub use super::resources::HeatmapConfig;
+    use bevy::ecs::system::SystemParam;
+    use bevy::prelude::ResMut;
+
+    #[derive(SystemParam)]
+    pub struct DebugHeatmapSubsystem<'w> {
+        requests: ResMut<'w, DebugHeatmapRequests>,
+    }
+
+    impl<'w> DebugHeatmapSubsystem<'w> {
+        pub fn set_heatmap_owned(
+            &mut self,
+            key: impl Into<String>,
+            cols: i32,
+            rows: i32,
+            data: Vec<f32>,
+            cfg: HeatmapConfig,
+        ) {
+            self.requests.set_heatmap_owned(key, cols, rows, data, cfg);
+        }
+
+        pub fn set_heatmap(
+            &mut self,
+            key: impl Into<String>,
+            cols: i32,
+            rows: i32,
+            data: &[f32],
+            cfg: HeatmapConfig,
+        ) {
+            self.requests.set_heatmap(key, cols, rows, data, cfg);
         }
     }
 }

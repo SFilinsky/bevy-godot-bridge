@@ -17,10 +17,10 @@ mod utils;
 
 pub mod prelude {
     pub use super::app_action_queue::AppAction;
-    pub use super::debug::cuboids::resources::{CuboidConfig, DebugCuboidRequests};
+    pub use super::debug::cuboids::subsystem::{CuboidConfig, DebugCuboidSubsystem};
     pub use super::debug::debug_manager::{DebugRenderGate, EDebugState};
-    pub use super::debug::heatmap::resources::{DebugHeatmapRequests, HeatmapConfig};
-    pub use super::debug::paths::resources::{DebugPathRequests, PathConfig};
+    pub use super::debug::heatmap::subsystem::{DebugHeatmapSubsystem, HeatmapConfig};
+    pub use super::debug::paths::subsystem::{DebugPathSubsystem, PathConfig};
     pub use super::debug::plugins::DebugVisualizationPlugin;
     pub use super::erased_gd::{ErasedGd, ErasedGdResource};
     pub use super::scene::GodotScene;
