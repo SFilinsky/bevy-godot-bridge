@@ -141,13 +141,15 @@ pub mod systems {
 
         if reqs.clear_all {
             for (_, n) in driver.nodes.drain() {
-                parent.remove_child(&n.mesh_instance);
+                let mut mesh_instance = n.mesh_instance;
+                mesh_instance.queue_free();
             }
             reqs.clear_all = false;
         } else {
             for key in reqs.to_clear.drain(..) {
                 if let Some(n) = driver.nodes.remove(&key) {
-                    parent.remove_child(&n.mesh_instance);
+                    let mut mesh_instance = n.mesh_instance;
+                    mesh_instance.queue_free();
                 }
             }
         }
@@ -159,6 +161,14 @@ pub mod systems {
         let pending = std::mem::take(&mut reqs.pending);
 
         for (key, req) in pending {
+            if !status.is_visible {
+                if let Some(entry) = driver.nodes.get(&key) {
+                    let mut mesh_instance = entry.mesh_instance.clone();
+                    mesh_instance.set_visible(false);
+                }
+                continue;
+            }
+
             let entry = if let Some(entry) = driver.nodes.get(&key) {
                 CuboidNode {
                     mesh_instance: entry.mesh_instance.clone(),
@@ -191,11 +201,6 @@ pub mod systems {
             };
 
             let mut mi = entry.mesh_instance;
-
-            if !status.is_visible {
-                mi.set_visible(false);
-                continue;
-            }
             mi.set_visible(true);
 
             let size = Vector3::new(
