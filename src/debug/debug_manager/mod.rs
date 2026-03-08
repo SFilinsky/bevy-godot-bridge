@@ -24,13 +24,13 @@ pub struct DebugRenderGateState {
 }
 
 #[derive(SystemParam)]
-pub struct DebugRenderGate<'w, 's> {
+pub struct DebugRenderGateSubsystem<'w, 's> {
     debug: Res<'w, DebugMode>,
     time: Res<'w, Time>,
     state: Local<'s, DebugRenderGateState>,
 }
 
-impl<'w, 's> DebugRenderGate<'w, 's> {
+impl<'w, 's> DebugRenderGateSubsystem<'w, 's> {
     pub fn get_status(
         &mut self,
         state: EDebugState,

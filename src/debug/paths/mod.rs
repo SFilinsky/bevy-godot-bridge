@@ -132,7 +132,7 @@ pub mod subsystem {
 }
 
 pub mod systems {
-    use crate::debug::debug_manager::DebugRenderGate;
+    use crate::debug::debug_manager::DebugRenderGateSubsystem;
     use crate::debug::paths::resources::{DebugPathRequests, PathDriver, PathNode};
     use bevy::platform::collections::HashSet;
     use bevy::prelude::{NonSendMut, ResMut};
@@ -174,7 +174,7 @@ pub mod systems {
     }
 
     pub(super) fn apply_paths(
-        mut gate: DebugRenderGate,
+        mut gate: DebugRenderGateSubsystem,
         mut reqs: ResMut<DebugPathRequests>,
         mut driver: NonSendMut<PathDriver>,
     ) {
