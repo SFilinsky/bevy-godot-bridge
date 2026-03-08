@@ -193,7 +193,7 @@ pub mod systems {
         mut reqs: ResMut<DebugHeatmapRequests>,
         mut driver: NonSendMut<DebugHeatmapDriver>,
     ) {
-        let status = gate.get_status(EDebugState::Colliders, 0.5);
+        let status = gate.get_status(EDebugState::Colliders, 1.0 / 32.0);
 
         if !status.should_rerender {
             return;

@@ -134,7 +134,7 @@ pub mod systems {
         mut reqs: ResMut<DebugPathRequests>,
         mut driver: NonSendMut<PathDriver>,
     ) {
-        let status = gate.get_status(EDebugState::Navmesh, 0.5);
+        let status = gate.get_status(EDebugState::Navmesh, 1.0 / 32.0);
         if !status.should_rerender {
             return;
         }

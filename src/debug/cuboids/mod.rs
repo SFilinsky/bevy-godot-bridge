@@ -136,7 +136,7 @@ pub mod systems {
         mut driver: NonSendMut<CuboidDriver>,
         mut was_visible: bevy::prelude::Local<bool>,
     ) {
-        let status = gate.get_status(EDebugState::Colliders, 0.5);
+        let status = gate.get_status(EDebugState::Colliders, 1.0 / 32.0);
 
         if !status.should_rerender {
             return;
