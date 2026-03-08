@@ -3,16 +3,18 @@ mod export_example;
 use bevy::{
     app::{App, Update},
     ecs::{schedule::IntoScheduleConfigs, system::Res},
-    prelude::{AppExtStates, Commands, OnEnter, Query, Resource, States, in_state},
+    prelude::{in_state, AppExtStates, Commands, OnEnter, Query, Resource, States},
     state::app::StatesPlugin,
 };
-use bevy_godot4::prelude::{AsPhysicsSystem, ErasedGd, ErasedGdResource, GodotScene, SystemDeltaTimer, bevy_app};
+use bevy_godot4::prelude::{
+    bevy_app, AsPhysicsSystem, ErasedGd, ErasedGdResource, GodotScene, SystemDeltaTimerSubsystem,
+};
+use godot::obj::Singleton;
 use godot::{
     builtin::Vector2,
-    classes::{ResourceLoader, Sprite2D}
+    classes::{ResourceLoader, Sprite2D},
 };
 use godot::{init::ExtensionLibrary, prelude::gdextension};
-use godot::obj::{Singleton};
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash, States)]
 enum GameState {
@@ -55,7 +57,7 @@ fn spawn_sprite(mut commands: Commands, assets: Res<MyAssets>) {
     );
 }
 
-fn move_sprite(mut sprite: Query<&mut ErasedGd>, mut delta: SystemDeltaTimer) {
+fn move_sprite(mut sprite: Query<&mut ErasedGd>, mut delta: SystemDeltaTimerSubsystem) {
     if let Ok(mut sprite) = sprite.single_mut() {
         let mut sprite = sprite.get::<Sprite2D>();
         let delta = delta.delta_seconds() * 20.0;

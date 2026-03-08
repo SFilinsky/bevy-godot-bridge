@@ -18,15 +18,17 @@ mod utils;
 pub mod prelude {
     pub use super::app_action_queue::AppAction;
     pub use super::debug::cuboids::subsystem::{CuboidConfig, DebugCuboidSubsystem};
-    pub use super::debug::debug_manager::{DebugRenderGate, EDebugState};
+    pub use super::debug::debug_manager::{DebugRenderGateSubsystem, EDebugState};
     pub use super::debug::heatmap::subsystem::{DebugHeatmapSubsystem, HeatmapConfig};
     pub use super::debug::paths::subsystem::{DebugPathSubsystem, PathConfig};
     pub use super::debug::plugins::DebugVisualizationPlugin;
     pub use super::erased_gd::{ErasedGd, ErasedGdResource};
     pub use super::scene::GodotScene;
     pub use super::scene_tree::SceneTreeRef;
+    pub use super::scene_tree::SceneTreeRef as SceneTreeSubsystem;
     pub use super::utils::{
-        AsPhysicsSystem, AsVisualSystem, GodotPhysicsFrame, GodotVisualFrame, SystemDeltaTimer,
+        AsPhysicsSystem, AsVisualSystem, GodotPhysicsFrame, GodotVisualFrame,
+        SystemDeltaTimerSubsystem,
     };
     pub use crate::app::BevyApp;
     pub use crate::dto::{BuildsDto, DataTransferConfig, WithGatherer};

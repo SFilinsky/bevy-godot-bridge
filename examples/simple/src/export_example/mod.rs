@@ -1,8 +1,8 @@
-﻿//! Minimal demo of how to export data from Bevy to Godot.
+//! Minimal demo of how to export data from Bevy to Godot.
 
 use bevy::prelude::*;
-use bevy_godot4::prelude::DataTransferConfig;
 use bevy_godot4::prelude::export_bundle;
+use bevy_godot4::prelude::DataTransferConfig;
 use godot::prelude::*;
 
 // -----------------------------------------------------------------------------

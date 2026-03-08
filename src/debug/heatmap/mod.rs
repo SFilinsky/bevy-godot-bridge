@@ -191,7 +191,7 @@ pub mod systems {
     };
     use godot::obj::{Gd, NewAlloc, NewGd, Singleton};
 
-    use crate::debug::debug_manager::DebugRenderGate;
+    use crate::debug::debug_manager::DebugRenderGateSubsystem;
     use crate::debug::heatmap::resources::{
         DebugHeatmapDriver, DebugHeatmapRequests, HeatmapNode, Normalize,
     };
@@ -225,7 +225,7 @@ pub mod systems {
     }
 
     pub(super) fn apply_heatmaps(
-        mut gate: DebugRenderGate,
+        mut gate: DebugRenderGateSubsystem,
         mut reqs: ResMut<DebugHeatmapRequests>,
         mut driver: NonSendMut<DebugHeatmapDriver>,
     ) {

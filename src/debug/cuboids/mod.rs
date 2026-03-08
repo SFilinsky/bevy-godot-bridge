@@ -125,7 +125,7 @@ pub mod subsystem {
 
 pub mod systems {
     use super::resources::{CuboidDriver, CuboidNode, DebugCuboidRequests};
-    use crate::debug::debug_manager::DebugRenderGate;
+    use crate::debug::debug_manager::DebugRenderGateSubsystem;
     use bevy::prelude::{NonSendMut, ResMut, Transform};
     use bevy_godot4::prelude::EDebugState;
     use godot::builtin::{Basis, NodePath, Quaternion, Transform3D, Vector3};
@@ -167,7 +167,7 @@ pub mod systems {
     }
 
     pub(super) fn apply_cuboids(
-        mut gate: DebugRenderGate,
+        mut gate: DebugRenderGateSubsystem,
         mut reqs: ResMut<DebugCuboidRequests>,
         mut driver: NonSendMut<CuboidDriver>,
         mut was_visible: bevy::prelude::Local<bool>,
