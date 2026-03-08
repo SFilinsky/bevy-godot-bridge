@@ -1,4 +1,4 @@
-﻿pub mod resources {
+pub mod resources {
     use bevy::platform::collections::HashMap;
     use bevy::prelude::Resource;
     use godot::builtin::{Color, Vector3};
@@ -84,6 +84,50 @@
     pub struct PathDriver {
         pub(super) parent: Option<Gd<Node>>,
         pub(super) nodes: HashMap<String, PathNode>,
+    }
+}
+
+pub mod subsystem {
+    use super::resources::DebugPathRequests;
+    pub use super::resources::PathConfig;
+    use bevy::ecs::system::SystemParam;
+    use bevy::prelude::ResMut;
+    use godot::builtin::{Color, Vector3};
+
+    #[derive(SystemParam)]
+    pub struct DebugPathSubsystem<'w> {
+        requests: ResMut<'w, DebugPathRequests>,
+    }
+
+    impl<'w> DebugPathSubsystem<'w> {
+        pub fn set_path(
+            &mut self,
+            key: impl Into<String>,
+            point_list: Vec<Vector3>,
+            color: Color,
+            config: PathConfig,
+        ) {
+            self.requests.set_path(key, point_list, color, config);
+        }
+
+        pub fn set_line(
+            &mut self,
+            key: impl Into<String>,
+            a: Vector3,
+            b: Vector3,
+            color: Color,
+            config: PathConfig,
+        ) {
+            self.requests.set_line(key, a, b, color, config);
+        }
+
+        pub fn clear(&mut self, key: &str) {
+            self.requests.clear(key);
+        }
+
+        pub fn clear_all(&mut self) {
+            self.requests.clear_all();
+        }
     }
 }
 

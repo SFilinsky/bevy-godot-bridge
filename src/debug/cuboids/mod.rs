@@ -1,4 +1,4 @@
-﻿pub mod resources {
+pub mod resources {
     use bevy::math::Vec3;
     use bevy::platform::collections::HashMap;
     use bevy::prelude::{Resource, Transform};
@@ -84,6 +84,42 @@
     pub struct CuboidDriver {
         pub(super) parent: Option<Gd<Node>>,
         pub(super) nodes: HashMap<String, CuboidNode>,
+    }
+}
+
+pub mod subsystem {
+    pub use super::resources::CuboidConfig;
+    use super::resources::DebugCuboidRequests;
+    use bevy::ecs::system::SystemParam;
+    use bevy::math::Vec3;
+    use bevy::prelude::{ResMut, Transform};
+    use godot::builtin::Color;
+
+    #[derive(SystemParam)]
+    pub struct DebugCuboidSubsystem<'w> {
+        requests: ResMut<'w, DebugCuboidRequests>,
+    }
+
+    impl<'w> DebugCuboidSubsystem<'w> {
+        pub fn set_cuboid(
+            &mut self,
+            key: impl Into<String>,
+            transform: Transform,
+            half_extents: Vec3,
+            color: Color,
+            config: CuboidConfig,
+        ) {
+            self.requests
+                .set_cuboid(key, transform, half_extents, color, config);
+        }
+
+        pub fn clear_cuboid(&mut self, key: impl Into<String>) {
+            self.requests.clear_cuboid(key);
+        }
+
+        pub fn clear_all(&mut self) {
+            self.requests.clear_all();
+        }
     }
 }
 
