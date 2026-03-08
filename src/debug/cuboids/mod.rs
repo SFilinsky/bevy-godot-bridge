@@ -35,6 +35,7 @@
     #[derive(Resource, Default)]
     pub struct DebugCuboidRequests {
         pub pending: HashMap<String, CuboidRequest>,
+        pub desired_cuboid_map: HashMap<String, CuboidRequest>,
         pub to_clear: Vec<String>,
         pub clear_all: bool,
     }
@@ -48,22 +49,27 @@
             color: Color,
             config: CuboidConfig,
         ) {
-            self.pending.insert(
-                key.into(),
-                CuboidRequest {
-                    transform,
-                    half_extents,
-                    color,
-                    config,
-                },
-            );
+            let key = key.into();
+            let request = CuboidRequest {
+                transform,
+                half_extents,
+                color,
+                config,
+            };
+            self.desired_cuboid_map.insert(key.clone(), request);
+            self.pending.insert(key, request);
         }
 
         pub fn clear_cuboid(&mut self, key: impl Into<String>) {
-            self.to_clear.push(key.into());
+            let key = key.into();
+            self.desired_cuboid_map.remove(&key);
+            self.pending.remove(&key);
+            self.to_clear.push(key);
         }
 
         pub fn clear_all(&mut self) {
+            self.desired_cuboid_map.clear();
+            self.pending.clear();
             self.clear_all = true;
         }
     }
@@ -128,6 +134,7 @@ pub mod systems {
         mut gate: DebugRenderGate,
         mut reqs: ResMut<DebugCuboidRequests>,
         mut driver: NonSendMut<CuboidDriver>,
+        mut was_visible: bevy::prelude::Local<bool>,
     ) {
         let status = gate.get_status(EDebugState::Colliders, 0.5);
 
@@ -153,6 +160,25 @@ pub mod systems {
                 }
             }
         }
+
+        let became_visible = status.is_visible && !*was_visible;
+        let became_hidden = !status.is_visible && *was_visible;
+
+        if became_visible {
+            let desired_cuboid_map = reqs.desired_cuboid_map.clone();
+            for (key, request) in desired_cuboid_map.into_iter() {
+                reqs.pending.insert(key, request);
+            }
+        }
+
+        if became_hidden {
+            for entry in driver.nodes.values() {
+                let mut mesh_instance = entry.mesh_instance.clone();
+                mesh_instance.set_visible(false);
+            }
+        }
+
+        *was_visible = status.is_visible;
 
         if reqs.pending.is_empty() {
             return;
