@@ -161,6 +161,14 @@ pub mod systems {
         }
 
         for (key, req) in pending {
+            if !status.is_visible {
+                if let Some(entry) = driver.nodes.get(&key) {
+                    let mut mesh_instance = entry.mesh_instance.clone();
+                    mesh_instance.set_visible(false);
+                }
+                continue;
+            }
+
             let entry = if let Some(entry) = driver.nodes.get(&key) {
                 PathNode {
                     mesh_instance: entry.mesh_instance.clone(),
@@ -195,11 +203,6 @@ pub mod systems {
             };
 
             let mut mi = entry.mesh_instance;
-
-            if !status.is_visible {
-                mi.set_visible(false);
-                continue;
-            }
             mi.set_visible(true);
 
             // Build line segments from polyline points.

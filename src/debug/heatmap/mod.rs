@@ -143,6 +143,7 @@ pub mod resources {
 }
 
 pub mod systems {
+    use bevy::platform::collections::HashSet;
     use bevy::prelude::{NonSendMut, ResMut};
     use godot::builtin::{NodePath, PackedByteArray, Vector2, Vector3};
     use godot::classes::base_material_3d::{
@@ -198,16 +199,36 @@ pub mod systems {
             return;
         }
 
-        if reqs.pending.is_empty() {
-            return;
-        }
         let Some(mut parent) = driver.parent.as_ref().cloned() else {
             return;
         };
 
         let pending = std::mem::take(&mut reqs.pending);
+        let pending_keys: HashSet<String> = pending.keys().cloned().collect();
+
+        let stale_keys: Vec<String> = driver
+            .nodes
+            .keys()
+            .filter(|k| !pending_keys.contains(*k))
+            .cloned()
+            .collect();
+
+        for key in stale_keys {
+            if let Some(node) = driver.nodes.remove(&key) {
+                let mut mesh = node.mesh;
+                mesh.queue_free();
+            }
+        }
 
         for (key, request) in pending {
+            if !status.is_visible {
+                if let Some(entry) = driver.nodes.get(&key) {
+                    let mut mesh = entry.mesh.clone();
+                    mesh.set_visible(false);
+                }
+                continue;
+            }
+
             let entry = if let Some(entry) = driver.nodes.get(&key) {
                 HeatmapNode {
                     mesh: entry.mesh.clone(),
@@ -252,11 +273,6 @@ pub mod systems {
             };
 
             let mut mesh_instance = entry.mesh;
-
-            if !status.is_visible {
-                mesh_instance.set_visible(false);
-                continue;
-            }
             mesh_instance.set_visible(true);
 
             {
