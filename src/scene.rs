@@ -6,11 +6,11 @@ use bevy::{
     log::tracing,
     prelude::{Commands, Component, Entity, Query, Without},
 };
+use godot::obj::Singleton;
 use godot::{
     builtin::{GString, Transform2D, Transform3D, Vector2, Vector3},
-    classes::{Node2D, Node3D, PackedScene, ResourceLoader}
+    classes::{Node2D, Node3D, PackedScene, ResourceLoader},
 };
-use godot::obj::Singleton;
 
 pub(crate) struct PackedScenePlugin;
 impl Plugin for PackedScenePlugin {
@@ -106,7 +106,7 @@ fn spawn_scene(
     mut commands: Commands,
     mut new_scenes: Query<(&mut GodotScene, Entity), Without<GodotSceneSpawned>>,
     #[cfg(feature = "assets")] mut assets: ResMut<Assets<ErasedGdResource>>,
-    mut scene_tree: SceneTreeRef,
+    mut scene_tree: SceneTreeSubsystem,
 ) {
     for (mut scene, ent) in new_scenes.iter_mut() {
         let packed_scene = match &mut scene.resource {
