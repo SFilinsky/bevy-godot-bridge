@@ -1,4 +1,4 @@
-﻿pub mod intentions {
+pub mod intentions {
     use crate::dto::DataTransferConfig;
     use bevy::prelude::{Message, Vec3};
     use bevy_godot4_proc_macros::import_queue;
@@ -56,17 +56,17 @@
 mod systems {
     use super::intentions::InitializePositionIntention;
     use bevy::prelude::*;
-    use bevy_godot4::prelude::GodotEntity;
+    use bevy_godot4::prelude::IdentitySubsystem;
     use godot::global::godot_error;
 
     pub(super) fn handle_initialize_position(
         mut ev: MessageReader<InitializePositionIntention>,
-        q: Query<(Entity, &GodotEntity, Option<&Transform>)>,
+        mut identity: IdentitySubsystem,
+        transforms: Query<Option<&Transform>>,
         mut cmd: Commands,
     ) {
         for InitializePositionIntention { godot_id, position } in ev.read().copied() {
-            let Some((entity, _, maybe_t)) = q.iter().find(|(_, ge, _)| ge.godot_id == godot_id)
-            else {
+            let Some(entity) = identity.resolve_entity(godot_id) else {
                 godot_error!(
                     "Trying to set position for godot_id={} but no matching Bevy entity found. \
                      Make sure EntityImporter initialized it before PositionImporter runs.",
@@ -75,7 +75,7 @@ mod systems {
                 continue;
             };
 
-            match maybe_t {
+            match transforms.get(entity).ok().flatten() {
                 Some(t) => {
                     let mut t2 = *t;
                     t2.translation = position;
@@ -203,6 +203,7 @@ pub mod plugins {
     use super::systems::handle_initialize_position;
     use bevy::prelude::*;
     use bevy_godot4::import::sets::EntityInitSet;
+    use bevy_godot4::import::subsystems::IdentityRegistry;
     use bevy_godot4::prelude::PostEntityInitSet;
 
     pub struct PositionInitializationPlugin;
@@ -210,6 +211,7 @@ pub mod plugins {
     impl Plugin for PositionInitializationPlugin {
         fn build(&self, app: &mut App) {
             app.add_plugins(super::intentions::InitializePositionIntentionImportPlugin)
+                .init_resource::<IdentityRegistry>()
                 .configure_sets(
                     FixedUpdate,
                     (PositionInitSet
