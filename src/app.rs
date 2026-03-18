@@ -2,25 +2,25 @@ use bevy::app::App;
 use godot::{
     classes::{INode, Node},
     obj::Base,
-    prelude::{GodotClass, godot_api},
+    prelude::{godot_api, GodotClass},
 };
 
 use crate::app_action_queue::ActionQueue;
 use crate::performance::init_performance_tracing;
 use crate::prelude::*;
-use bevy::DefaultPlugins;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::{Fixed, NonSendMut, Time, Virtual, World};
 use bevy::time::TimeUpdateStrategy;
+use bevy::DefaultPlugins;
 use bevy_godot4::scene::PackedScenePlugin;
 use bevy_godot4::scene_tree::SceneTreeRef;
 use godot::obj::Singleton;
 use godot::obj::WithBaseField;
 use godot::prelude::{Gd, SceneTree};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::{
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    panic::{catch_unwind, resume_unwind, AssertUnwindSafe},
     sync::Mutex,
 };
 
@@ -42,7 +42,7 @@ pub struct BevyAppSubsystem<'w, 's> {
 
 impl BevyAppSubsystem<'_, '_> {
     pub fn alloc_entity_id(&mut self) -> i64 {
-        self.app.0.bind_mut().alloc_entity_id() as i64
+        self.app.0.bind_mut().alloc_entity_id()
     }
 }
 
@@ -84,7 +84,7 @@ pub struct BevyApp {
 
     pub action_queue: ActionQueue,
 
-    next_entity_id: AtomicU64,
+    next_entity_id: AtomicI64,
 
     base: Base<Node>,
 }
@@ -193,7 +193,7 @@ impl BevyApp {
         f(world);
     }
 
-    pub fn alloc_entity_id(&mut self) -> u64 {
+    pub fn alloc_entity_id(&mut self) -> i64 {
         self.next_entity_id.fetch_add(1, Ordering::Relaxed)
     }
 }
@@ -204,7 +204,7 @@ impl INode for BevyApp {
         Self {
             app: None,
             action_queue: ActionQueue::default(),
-            next_entity_id: AtomicU64::new(1),
+            next_entity_id: AtomicI64::new(1),
             base,
         }
     }

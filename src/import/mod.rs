@@ -1,10 +1,95 @@
-﻿pub mod position;
+pub mod position;
 pub mod components {
     use bevy::prelude::Component;
 
     #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub struct GodotEntity {
+    pub(crate) struct GodotIdentity {
         pub godot_id: i64,
+    }
+}
+
+pub mod subsystems {
+    use super::components::GodotIdentity;
+    use crate::app::BevyAppSubsystem;
+    use bevy::ecs::entity::Entities;
+    use bevy::ecs::system::SystemParam;
+    use bevy::prelude::{Commands, Entity, Query, ResMut, Resource};
+    use std::collections::HashMap;
+
+    #[derive(Resource, Default, Debug)]
+    pub(crate) struct IdentityRegistry {
+        by_entity: HashMap<Entity, i64>,
+        by_id: HashMap<i64, Entity>,
+    }
+
+    #[derive(SystemParam)]
+    pub struct IdentitySubsystem<'w, 's> {
+        identities: Query<'w, 's, (Entity, &'static GodotIdentity)>,
+        registry: ResMut<'w, IdentityRegistry>,
+        entities: &'w Entities,
+        app: BevyAppSubsystem<'w, 's>,
+        commands: Commands<'w, 's>,
+    }
+
+    impl<'w, 's> IdentitySubsystem<'w, 's> {
+        pub fn bind_identity(&mut self, entity: Entity, godot_id: i64) {
+            if let Some(old_id) = self.registry.by_entity.insert(entity, godot_id) {
+                self.registry.by_id.remove(&old_id);
+            }
+
+            if let Some(previous_entity) = self.registry.by_id.insert(godot_id, entity) {
+                self.registry.by_entity.remove(&previous_entity);
+
+                if previous_entity != entity {
+                    self.commands
+                        .entity(previous_entity)
+                        .remove::<GodotIdentity>();
+                }
+            }
+
+            self.commands
+                .entity(entity)
+                .insert(GodotIdentity { godot_id });
+        }
+
+        pub fn get_identity(&mut self, entity: Entity) -> i64 {
+            if let Some(id) = self.registry.by_entity.get(&entity).copied() {
+                return id;
+            }
+
+            if let Ok((_, identity)) = self.identities.get(entity) {
+                let id = identity.godot_id;
+                self.registry.by_entity.insert(entity, id);
+                self.registry.by_id.insert(id, entity);
+                return id;
+            }
+
+            let id = self.app.alloc_entity_id();
+            self.bind_identity(entity, id);
+            id
+        }
+
+        pub fn resolve_entity(&mut self, godot_id: i64) -> Option<Entity> {
+            if let Some(entity) = self.registry.by_id.get(&godot_id).copied() {
+                if self.entities.contains(entity) {
+                    return Some(entity);
+                }
+
+                self.registry.by_id.remove(&godot_id);
+                self.registry.by_entity.remove(&entity);
+            }
+
+            if let Some(entity) = self
+                .identities
+                .iter()
+                .find_map(|(entity, identity)| (identity.godot_id == godot_id).then_some(entity))
+            {
+                self.bind_identity(entity, godot_id);
+                return Some(entity);
+            }
+
+            None
+        }
     }
 }
 
@@ -59,19 +144,20 @@ pub mod intentions {
 }
 
 mod systems {
-    use super::components::GodotEntity;
     use super::intentions::InitializeEntityIntention;
+    use super::subsystems::IdentitySubsystem;
     use bevy::prelude::*;
 
     pub(super) fn handle_initialize_entity(
         mut ev: MessageReader<InitializeEntityIntention>,
         mut cmd: Commands,
+        mut identity: IdentitySubsystem,
     ) {
         for InitializeEntityIntention { godot_id, name } in ev.read().cloned() {
-            cmd.spawn((
-                Name::new(format!("GodotLevelEntity:{name}")),
-                GodotEntity { godot_id },
-            ));
+            let entity = cmd
+                .spawn(Name::new(format!("GodotLevelEntity:{name}")))
+                .id();
+            identity.bind_identity(entity, godot_id);
         }
     }
 }
@@ -113,7 +199,7 @@ pub mod importers {
     impl EntityImporter {
         fn generate_entity_id(&mut self, app: &mut Gd<BevyApp>) {
             if self.entity_id <= 0 {
-                self.entity_id = app.bind_mut().alloc_entity_id() as i64;
+                self.entity_id = app.bind_mut().alloc_entity_id();
             }
         }
 
@@ -176,6 +262,7 @@ pub mod importers {
 
 pub mod plugins {
     use super::sets::{EntityInitSet, PostEntityInitSet};
+    use super::subsystems::IdentityRegistry;
     use super::systems::handle_initialize_entity;
     use bevy::prelude::*;
 
@@ -184,6 +271,7 @@ pub mod plugins {
     impl Plugin for EntityInitializationPlugin {
         fn build(&self, app: &mut App) {
             app.add_plugins(super::intentions::InitializeEntityIntentionImportPlugin)
+                .init_resource::<IdentityRegistry>()
                 .configure_sets(FixedUpdate, (EntityInitSet.before(PostEntityInitSet),))
                 .add_systems(FixedUpdate, handle_initialize_entity.in_set(EntityInitSet));
         }
