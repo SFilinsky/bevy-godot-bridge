@@ -9,10 +9,15 @@ use crate::app_action_queue::ActionQueue;
 use crate::performance::init_performance_tracing;
 use crate::prelude::*;
 use bevy::DefaultPlugins;
-use bevy::prelude::{Fixed, Time, Virtual, World};
+use bevy::ecs::system::SystemParam;
+use bevy::prelude::{Fixed, NonSendMut, Time, Virtual, World};
 use bevy::time::TimeUpdateStrategy;
+use bevy_godot4::scene::PackedScenePlugin;
+use bevy_godot4::scene_tree::SceneTreeRef;
 use godot::obj::Singleton;
+use godot::obj::WithBaseField;
 use godot::prelude::{Gd, SceneTree};
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
@@ -27,6 +32,28 @@ lazy_static::lazy_static! {
 #[derive(Default, bevy::prelude::Resource)]
 struct GodotClock {
     last_usec: Option<u64>,
+}
+
+#[derive(SystemParam)]
+pub struct BevyAppSubsystem<'w, 's> {
+    app: NonSendMut<'w, BevyAppRef>,
+    phantom: PhantomData<&'s ()>,
+}
+
+impl BevyAppSubsystem<'_, '_> {
+    pub fn alloc_entity_id(&mut self) -> i64 {
+        self.app.0.bind_mut().alloc_entity_id() as i64
+    }
+}
+
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct BevyAppRef(pub(crate) Gd<BevyApp>);
+
+impl BevyAppRef {
+    pub(crate) fn new(app: Gd<BevyApp>) -> Self {
+        Self(app)
+    }
 }
 
 #[derive(Debug)]
@@ -189,9 +216,17 @@ impl INode for BevyApp {
         init_performance_tracing();
 
         let mut app = App::new();
+        let app_node = self
+            .base()
+            .clone()
+            .upcast::<Node>()
+            .try_cast::<BevyApp>()
+            .expect("failed to cast self node to BevyApp");
+
         app.add_plugins(DefaultPlugins)
-            .add_plugins(crate::scene::PackedScenePlugin)
-            .init_non_send_resource::<crate::scene_tree::SceneTreeRefImpl>();
+            .add_plugins(PackedScenePlugin)
+            .init_non_send_resource::<SceneTreeRef>()
+            .insert_non_send_resource(BevyAppRef::new(app_node));
 
         (APP_BUILDER_FN.lock().unwrap().as_mut().unwrap())(&mut app);
 
