@@ -1,6 +1,6 @@
-﻿use proc_macro::TokenStream;
+use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{quote, quote_spanned, format_ident};
+use quote::{format_ident, quote, quote_spanned};
 use syn::{parse_macro_input, spanned::Spanned, ItemStruct, Type};
 
 pub fn expand(input: TokenStream) -> TokenStream {
@@ -13,7 +13,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let mut optional: Vec<(Type, Span)> = vec![];
 
     for attr in &item.attrs {
-        if !attr.path().is_ident("export_entity") { continue; }
+        if !attr.path().is_ident("export_entity") {
+            continue;
+        }
 
         match &attr.meta {
             syn::Meta::Path(_) => {
@@ -21,28 +23,39 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
             syn::Meta::List(list) => {
                 // #[export_entity(required(A, B), optional(C, D))]
-                let res = list.parse_args_with(syn::meta::parser(|meta: syn::meta::ParseNestedMeta| {
-                    let name = meta.path.get_ident().map(|i| i.to_string());
-                    match name.as_deref() {
-                        Some("required") => meta.parse_nested_meta(|inner| {
-                            let p = inner.path.clone();
-                            let ty = Type::Path(syn::TypePath{ qself: None, path: p.clone() });
-                            required.push((ty, p.span()));
-                            Ok(())
-                        }),
-                        Some("optional") => meta.parse_nested_meta(|inner| {
-                            let p = inner.path.clone();
-                            let ty = Type::Path(syn::TypePath{ qself: None, path: p.clone() });
-                            optional.push((ty, p.span()));
-                            Ok(())
-                        }),
-                        _ => Err(meta.error("expected required(...) or optional(...)")),
-                    }
-                }));
-                if let Err(e) = res { return e.to_compile_error().into(); }
+                let res =
+                    list.parse_args_with(syn::meta::parser(|meta: syn::meta::ParseNestedMeta| {
+                        let name = meta.path.get_ident().map(|i| i.to_string());
+                        match name.as_deref() {
+                            Some("required") => meta.parse_nested_meta(|inner| {
+                                let p = inner.path.clone();
+                                let ty = Type::Path(syn::TypePath {
+                                    qself: None,
+                                    path: p.clone(),
+                                });
+                                required.push((ty, p.span()));
+                                Ok(())
+                            }),
+                            Some("optional") => meta.parse_nested_meta(|inner| {
+                                let p = inner.path.clone();
+                                let ty = Type::Path(syn::TypePath {
+                                    qself: None,
+                                    path: p.clone(),
+                                });
+                                optional.push((ty, p.span()));
+                                Ok(())
+                            }),
+                            _ => Err(meta.error("expected required(...) or optional(...)")),
+                        }
+                    }));
+                if let Err(e) = res {
+                    return e.to_compile_error().into();
+                }
             }
             syn::Meta::NameValue(nv) => {
-                return syn::Error::new_spanned(nv, "unsupported: #[export_entity = ...]").to_compile_error().into();
+                return syn::Error::new_spanned(nv, "unsupported: #[export_entity = ...]")
+                    .to_compile_error()
+                    .into();
             }
         }
     }
@@ -54,12 +67,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
         format_ident!("{}", heck::ToSnakeCase::to_snake_case(last))
     }
 
-    let dto_ident           = format_ident!("{}Dto", tag_ident);
-    let exporter_ident      = format_ident!("{}Exporter", tag_ident);
-    let system_ident        = format_ident!("export_{}_changes", tag_snake);
+    let dto_ident = format_ident!("{}Dto", tag_ident);
+    let exporter_ident = format_ident!("{}Exporter", tag_ident);
+    let system_ident = format_ident!("export_{}_changes", tag_snake);
     let export_plugin_ident = format_ident!("{}EntityExportPlugin", tag_ident);
     let entity_spawn_handler_ident = format_ident!("{}EntitySpawnHandler", tag_ident);
-    let entity_node_ident          = format_ident!("{}Entity", tag_ident);
+    let entity_node_ident = format_ident!("{}Entity", tag_ident);
 
     // required & optional lists split into (ty, span) + field idents
     let (req_tys, req_spans): (Vec<_>, Vec<_>) = required.iter().cloned().unzip();
@@ -68,26 +81,37 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let opt_fields: Vec<_> = opt_tys.iter().map(field_ident_from_ty).collect();
 
     // updated filter: With<Tag> + OR of Changed<T> for all tracked comps
-    let changed_terms: Vec<TokenStream2> = req_tys.iter().zip(req_spans.iter())
+    let changed_terms: Vec<TokenStream2> = req_tys
+        .iter()
+        .zip(req_spans.iter())
         .map(|(ty, sp)| quote_spanned!(*sp=> Changed<#ty>))
-        .chain(opt_tys.iter().zip(opt_spans.iter())
-            .map(|(ty, sp)| quote_spanned!(*sp=> Changed<#ty>)))
+        .chain(
+            opt_tys
+                .iter()
+                .zip(opt_spans.iter())
+                .map(|(ty, sp)| quote_spanned!(*sp=> Changed<#ty>)),
+        )
         .collect();
 
     // tuple type for reading components: Option<&T> for both required and optional
-    let req_read_types: Vec<_> = req_tys.iter().zip(req_spans.iter())
+    let req_read_types: Vec<_> = req_tys
+        .iter()
+        .zip(req_spans.iter())
         .map(|(ty, sp)| quote_spanned!(*sp=> Option<& #ty>))
         .collect();
-    let opt_read_types: Vec<_> = opt_tys.iter().zip(opt_spans.iter())
+    let opt_read_types: Vec<_> = opt_tys
+        .iter()
+        .zip(opt_spans.iter())
         .map(|(ty, sp)| quote_spanned!(*sp=> Option<& #ty>))
         .collect();
 
-    let tuple_read_types: TokenStream2 = match (req_read_types.is_empty(), opt_read_types.is_empty()) {
-        (true, true)   => quote! { () },
-        (false, true)  => quote! { ( #(#req_read_types),* ) },
-        (true, false)  => quote! { ( #(#opt_read_types),* ) },
-        (false, false) => quote! { ( #(#req_read_types),* , #(#opt_read_types),* ) },
-    };
+    let tuple_read_types: TokenStream2 =
+        match (req_read_types.is_empty(), opt_read_types.is_empty()) {
+            (true, true) => quote! { () },
+            (false, true) => quote! { ( #(#req_read_types),* ) },
+            (true, false) => quote! { ( #(#opt_read_types),* ) },
+            (false, false) => quote! { ( #(#req_read_types),* , #(#opt_read_types),* ) },
+        };
 
     // destructuring vars (same names as fields)
     let req_vars = &req_fields;
@@ -103,18 +127,27 @@ pub fn expand(input: TokenStream) -> TokenStream {
         }).collect();
 
     // DTO field types using ExportMeta::Dto (spans preserved at type sites)
-    let req_field_types: Vec<_> = req_tys.iter().zip(req_spans.iter())
+    let req_field_types: Vec<_> = req_tys
+        .iter()
+        .zip(req_spans.iter())
         .map(|(ty, sp)| quote_spanned!(*sp=> Gd<<#ty as ExportMeta>::Dto>))
         .collect();
-    let opt_field_types: Vec<_> = opt_tys.iter().zip(opt_spans.iter())
+    let opt_field_types: Vec<_> = opt_tys
+        .iter()
+        .zip(opt_spans.iter())
         .map(|(ty, sp)| quote_spanned!(*sp=> Option<Gd<<#ty as ExportMeta>::Dto>>))
         .collect();
 
     // DTO constructor body (uses method form for nice clippy + type inference)
-    let req_assigns: Vec<_> = req_vars.iter().zip(req_fields.iter())
+    let req_assigns: Vec<_> = req_vars
+        .iter()
+        .zip(req_fields.iter())
         .map(|(var, field)| quote! { d.#field = (#var).to_dto(); })
         .collect();
-    let opt_assigns: Vec<_> = opt_vars.iter().zip(opt_fields.iter()).zip(opt_spans.iter())
+    let opt_assigns: Vec<_> = opt_vars
+        .iter()
+        .zip(opt_fields.iter())
+        .zip(opt_spans.iter())
         .map(|((var, field), sp)| quote_spanned!(*sp=> d.#field = #var.map(|c| c.to_dto()); ))
         .collect();
 
@@ -140,14 +173,18 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
     // args for `#dto_ident::from_components(<args>)`
     let from_args = match (required.is_empty(), optional.is_empty()) {
-        (true,  true)  => quote! {},
-        (false, true)  => quote! { #( #req_vars ),* },
-        (true,  false) => quote! { #( #opt_vars ),* },
+        (true, true) => quote! {},
+        (false, true) => quote! { #( #req_vars ),* },
+        (true, false) => quote! { #( #opt_vars ),* },
         (false, false) => quote! { #( #req_vars ),* , #( #opt_vars ),* },
     };
 
     // unwraps block (empty when no required)
-    let req_unwraps_ts = if has_components { quote! { #(#req_unwraps)* } } else { quote! {} };
+    let req_unwraps_ts = if has_components {
+        quote! { #(#req_unwraps)* }
+    } else {
+        quote! {}
+    };
 
     // updated filter (fallback to Changed<Tag> when nothing to track)
     let updated_filter = if has_components {
@@ -164,27 +201,27 @@ pub fn expand(input: TokenStream) -> TokenStream {
     // DTO impl (empty vs populated)
     let dto_impl = if has_components {
         quote! {
-        impl #dto_ident {
-            pub fn from_components( #( #req_vars: & #req_tys ),* , #( #opt_vars: Option<& #opt_tys> ),* ) -> Gd<Self> {
-                #(#req_asserts)* #(#opt_asserts)*
-                let mut dto = Self::new_gd();
-                { let mut d = dto.bind_mut(); #(#req_assigns)* #(#opt_assigns)* }
-                dto
+            impl #dto_ident {
+                pub fn from_components( #( #req_vars: & #req_tys ),* , #( #opt_vars: Option<& #opt_tys> ),* ) -> Gd<Self> {
+                    #(#req_asserts)* #(#opt_asserts)*
+                    let mut dto = Self::new_gd();
+                    { let mut d = dto.bind_mut(); #(#req_assigns)* #(#opt_assigns)* }
+                    dto
+                }
             }
         }
-    }
     } else {
         quote! {
-        impl #dto_ident {
-            pub fn from_components() -> Gd<Self> { Self::new_gd() }
+            impl #dto_ident {
+                pub fn from_components() -> Gd<Self> { Self::new_gd() }
+            }
         }
-    }
     };
 
     // --- expansion -----------------------------------------------------------
     let expanded = quote! {
         use bevy::prelude::{Added, App, Changed, Entity, Plugin, PostUpdate, Query, RemovedComponents, With, Or};
-        use bevy_godot4::prelude::{SceneTreeRef, ExportMeta};
+        use bevy_godot4::prelude::{ExportMeta, SceneTreeSubsystem};
         use godot::prelude::*;
         use std::collections::HashMap;
 
@@ -218,7 +255,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             updated: Query<Entity, #updated_filter>,
             mut removed: RemovedComponents<#tag_ident>,
             list:   Query<#tuple_read_types, With<#tag_ident>>,
-            mut scene_tree: SceneTreeRef,
+            mut scene_tree: SceneTreeSubsystem,
         ) {
             let Some(app) = scene_tree.get().get_root().unwrap().get_node_or_null("BevyAppSingleton") else { return; };
             let Some(exporter) = app.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident)) else { return; };

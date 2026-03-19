@@ -1,7 +1,7 @@
-﻿// src/export_for_derive.rs
+// src/export_for_derive.rs
 
-use proc_macro::TokenStream;
 use heck::ToSnakeCase;
+use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{parse_macro_input, Data, DeriveInput};
 
@@ -31,7 +31,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
     // -------------------- TRANSFORM --------------------
     let dto_name = dto_ident.to_string();
-    let base_name = dto_name.strip_suffix("Dto").unwrap_or(&dto_name).to_string();
+    let base_name = dto_name
+        .strip_suffix("Dto")
+        .unwrap_or(&dto_name)
+        .to_string();
 
     let exporter_ident = format_ident!("{base_name}Exporter");
     let plugin_ident = format_ident!("{base_name}ExportPlugin");
@@ -88,7 +91,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 Changed<<#dto_ident as DTO>::Component>
             >,
             mut removed: RemovedComponents<<#dto_ident as DTO>::Component>,
-            mut scene_tree: SceneTreeRef,
+            mut scene_tree: SceneTreeSubsystem,
         )
         where
             #dto_ident: DTO + DtoFrom<<#dto_ident as DTO>::Component>,

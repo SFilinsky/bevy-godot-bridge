@@ -1,39 +1,37 @@
-﻿use proc_macro::TokenStream;
 use heck::ToSnakeCase;
+use proc_macro::TokenStream;
 use syn::spanned::Spanned;
 
 pub fn expand(input: TokenStream) -> TokenStream {
-    use quote::{format_ident};
-    use syn::{Type, TypePath, PathArguments, GenericArgument};
+    use quote::format_ident;
+    use syn::{GenericArgument, PathArguments, Type, TypePath};
 
     let item: ::syn::ItemStruct = ::syn::parse_macro_input!(input);
 
-
-    let comp_ident = &item.ident;                     // e.g. Health
+    let comp_ident = &item.ident; // e.g. Health
     let comp_snake = comp_ident.to_string().to_snake_case(); // "health"
 
-    let dto_ident     = format_ident!("{}Dto", comp_ident);          // HealthDto
-    let exporter_ident= format_ident!("{}Exporter", comp_ident);     // HealthExporter
-    let system_ident  = format_ident!("export_{}_changes", comp_snake); // export_health_changes
-    let plugin_ident  = format_ident!("{}ExportPlugin", comp_ident); // HealthExportPlugin (if you emit one)
+    let dto_ident = format_ident!("{}Dto", comp_ident); // HealthDto
+    let exporter_ident = format_ident!("{}Exporter", comp_ident); // HealthExporter
+    let system_ident = format_ident!("export_{}_changes", comp_snake); // export_health_changes
+    let plugin_ident = format_ident!("{}ExportPlugin", comp_ident); // HealthExportPlugin (if you emit one)
 
-
-    let fields_iter: &::syn::punctuated::Punctuated<::syn::Field, ::syn::token::Comma> = match &item.fields {
-        ::syn::Fields::Named(named) => &named.named,
-        _ => {
-            return ::syn::Error::new(
-                ::syn::spanned::Spanned::span(&item),
-                "export only supports structs with named fields",
-            )
+    let fields_iter: &::syn::punctuated::Punctuated<::syn::Field, ::syn::token::Comma> =
+        match &item.fields {
+            ::syn::Fields::Named(named) => &named.named,
+            _ => {
+                return ::syn::Error::new(
+                    ::syn::spanned::Spanned::span(&item),
+                    "export only supports structs with named fields",
+                )
                 .to_compile_error()
                 .into();
-        }
-    };
-
+            }
+        };
 
     let mut dto_field_idents: Vec<syn::Ident> = Vec::new();
-    let mut dto_field_types:  Vec<syn::Type>  = Vec::new();
-    let mut dto_assigns:      Vec<proc_macro2::TokenStream> = Vec::new();
+    let mut dto_field_types: Vec<syn::Type> = Vec::new();
+    let mut dto_assigns: Vec<proc_macro2::TokenStream> = Vec::new();
 
     fn option_inner(ty: &syn::Type) -> Option<syn::Type> {
         let Type::Path(TypePath { qself: None, path }) = ty else {
@@ -56,11 +54,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
     }
 
     for f in fields_iter {
-        let mut include   = false;
-        let mut into_ty   : Option<syn::Type> = None;
+        let mut include = false;
+        let mut into_ty: Option<syn::Type> = None;
 
         for attr in &f.attrs {
-            if !attr.path().is_ident("export") { continue; }
+            if !attr.path().is_ident("export") {
+                continue;
+            }
             include = true;
 
             if let syn::Meta::List(list) = &attr.meta {
@@ -92,25 +92,33 @@ pub fn expand(input: TokenStream) -> TokenStream {
         if include {
             let ident = f.ident.clone().expect("named field");
             let src_ty = f.ty.clone();
-            let span   = src_ty.span();
+            let span = src_ty.span();
 
             dto_field_idents.push(ident.clone());
 
             if let Some(target_ty) = into_ty.clone() {
-                let src_is_opt  = option_inner(&src_ty);          // Option<S>?
-                let dst_is_opt  = option_inner(&target_ty);       // Option<T>?
+                let src_is_opt = option_inner(&src_ty); // Option<S>?
+                let dst_is_opt = option_inner(&target_ty); // Option<T>?
 
                 match (src_is_opt, dst_is_opt) {
                     // Option<S> -> Option<T>
                     (Some(src_inner), Some(dst_inner)) => {
                         // Disallow Option<GString> (and guide the user)
                         if let syn::Type::Path(tp) = &dst_inner {
-                            if tp.path.segments.last().map(|s| s.ident == "GString").unwrap_or(false) {
+                            if tp
+                                .path
+                                .segments
+                                .last()
+                                .map(|s| s.ident == "GString")
+                                .unwrap_or(false)
+                            {
                                 return syn::Error::new(
                                     span,
                                     "Option<GString> is not supported by godot-rust. \
-                     Use #[export(into(GString))] instead; None will map to empty string."
-                                ).to_compile_error().into();
+                     Use #[export(into(GString))] instead; None will map to empty string.",
+                                )
+                                .to_compile_error()
+                                .into();
                             }
                         }
 
@@ -145,11 +153,19 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     (None, Some(dst_inner)) => {
                         // Same guard for Option<GString>
                         if let syn::Type::Path(tp) = &dst_inner {
-                            if tp.path.segments.last().map(|s| s.ident == "GString").unwrap_or(false) {
+                            if tp
+                                .path
+                                .segments
+                                .last()
+                                .map(|s| s.ident == "GString")
+                                .unwrap_or(false)
+                            {
                                 return syn::Error::new(
                                     span,
-                                    "Option<GString> is not supported by godot-rust."
-                                ).to_compile_error().into();
+                                    "Option<GString> is not supported by godot-rust.",
+                                )
+                                .to_compile_error()
+                                .into();
                             }
                         }
 
@@ -189,7 +205,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         use bevy::prelude::{App, Added, Changed, Entity, Query, RemovedComponents, PostUpdate, Plugin};
         use std::collections::HashSet;
         use bevy_godot4::{collect_children, ExportMeta};
-        use bevy_godot4::prelude::{SceneTreeRef, AsVisualSystem};
+        use bevy_godot4::prelude::{AsVisualSystem, SceneTreeSubsystem};
 
         impl ExportMeta for #comp_ident {
             type Dto = #dto_ident;
@@ -236,7 +252,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             created: Query<(Entity, &#comp_ident), Added<#comp_ident>>,
             updated: Query<(Entity, &#comp_ident), Changed<#comp_ident>>,
             mut removed: RemovedComponents<#comp_ident>,
-            mut scene_tree: SceneTreeRef,
+            mut scene_tree: SceneTreeSubsystem,
         ) {
             // Scope to the current BevyAppSingleton host
             let Some(mut host) = scene_tree
