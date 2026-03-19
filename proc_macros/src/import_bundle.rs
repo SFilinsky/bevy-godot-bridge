@@ -1,11 +1,11 @@
-﻿use heck::{ToSnakeCase, ToUpperCamelCase};
+use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{
-    Ident, LitStr, Path, Result, Token, bracketed,
+    bracketed,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, Ident, LitStr, Path, Result, Token,
 };
 
 /// Usage:
@@ -264,6 +264,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 <#transfer_config_path as DataTransferConfig>::update_data(
                     &dto_wrapper_bind.#message_field_ident,
                     &mut message_instance.#message_field_ident,
+                    identity,
                 );
             }
         })
@@ -278,6 +279,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 <#transfer_config_path as DataTransferConfig>::update_dto(
                     &mut dto_wrapper_bind.#message_field_ident,
                     &message_instance.#message_field_ident,
+                    identity,
                 );
             }
         })
@@ -329,14 +331,22 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 type DataType = #message_type_path;
                 type DtoType = #message_dto_ident;
 
-                fn update_dto(dto: &mut Gd<Self::DtoType>, data: &Self::DataType) {
+                fn update_dto(
+                    dto: &mut Gd<Self::DtoType>,
+                    data: &Self::DataType,
+                    identity: &mut IdentitySubsystem,
+                ) {
                     let mut dto_wrapper_bind = dto.bind_mut();
                     let message_instance: &Self::DataType = data;
 
                     #( #transfer_update_dto_fields )*
                 }
 
-                fn update_data(dto: &Gd<Self::DtoType>, data: &mut Self::DataType) {
+                fn update_data(
+                    dto: &Gd<Self::DtoType>,
+                    data: &mut Self::DataType,
+                    identity: &mut IdentitySubsystem,
+                ) {
                     let dto_wrapper_bind = dto.bind();
                     let message_instance: &mut Self::DataType = data;
 

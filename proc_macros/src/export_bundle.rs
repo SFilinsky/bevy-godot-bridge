@@ -3,9 +3,9 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
-    Ident, LitStr, Path, Result, Token, Type, bracketed,
+    bracketed,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, Ident, LitStr, Path, Result, Token, Type,
 };
 
 /// Usage:
@@ -290,44 +290,79 @@ pub fn expand(input: TokenStream) -> TokenStream {
         quote! { ( #( #read_vars, )* ) }
     };
 
-    // SnapshotRust fields
-    let snapshot_req_field_types: Vec<TokenStream2> = required_component_type_list
+    // Composite per-component stores (bridge-internal), keyed by Godot identity id.
+    let component_store_req_fields: Vec<TokenStream2> = required_field_list
         .iter()
-        .map(|c| quote! { #c })
-        .collect();
-    let snapshot_opt_field_types: Vec<TokenStream2> = optional_component_type_list
-        .iter()
-        .map(|c| quote! { Option<#c> })
+        .zip(required_component_type_list.iter())
+        .map(|(f, ty)| quote! { pub #f: HashMap<i64, #ty>, })
         .collect();
 
-    let snapshot_req_fields: Vec<TokenStream2> = required_field_list
+    let component_store_opt_fields: Vec<TokenStream2> = optional_field_list
         .iter()
-        .zip(snapshot_req_field_types.iter())
-        .map(|(f, ty)| quote! { pub #f: #ty, })
+        .zip(optional_component_type_list.iter())
+        .map(|(f, ty)| quote! { pub #f: HashMap<i64, Option<#ty>>, })
         .collect();
 
-    let snapshot_opt_fields: Vec<TokenStream2> = optional_field_list
+    let component_store_insert_created_req: Vec<TokenStream2> = required_field_list
         .iter()
-        .zip(snapshot_opt_field_types.iter())
-        .map(|(f, ty)| quote! { pub #f: #ty, })
+        .map(|f| quote! { exporter.state_cache_components.#f.insert(eid_i64, #f.clone()); })
         .collect();
 
-    let snapshot_clone_from_req: Vec<TokenStream2> = required_field_list
+    let component_store_insert_created_opt: Vec<TokenStream2> = optional_field_list
         .iter()
-        .map(|f| quote! { self.#f.clone_from(&other.#f); })
+        .map(|f| quote! { exporter.state_cache_components.#f.insert(eid_i64, #f.clone()); })
         .collect();
 
-    let snapshot_clone_from_opt: Vec<TokenStream2> = optional_field_list
+    let component_store_contains_checks: Vec<TokenStream2> = all_field_list
+        .iter()
+        .map(|f| quote! { exporter.state_cache_components.#f.contains_key(&eid_i64) })
+        .collect();
+
+    let component_store_prev_missing_expr = if component_store_contains_checks.is_empty() {
+        quote! { false }
+    } else {
+        quote! { !(#(#component_store_contains_checks)&&*) }
+    };
+
+    let component_changed_required: Vec<TokenStream2> = required_field_list
         .iter()
         .map(|f| {
             quote! {
-                match (&mut self.#f, &other.#f) {
-                    (Some(dst), Some(src)) => { dst.clone_from(src); }
-                    (None, None) => {}
-                    _ => { self.#f = other.#f.clone(); }
-                }
+                let changed = match exporter.state_cache_components.#f.get(&eid_i64) {
+                    Some(prev) => prev != &#f,
+                    None => true,
+                };
+                if changed { u.#f = true; any_changed = true; } else { u.#f = false; }
             }
         })
+        .collect();
+
+    let component_changed_optional: Vec<TokenStream2> = optional_field_list
+        .iter()
+        .map(|f| {
+            quote! {
+                let changed = match exporter.state_cache_components.#f.get(&eid_i64) {
+                    Some(prev) => prev != &#f,
+                    None => true,
+                };
+                if changed { u.#f = true; any_changed = true; } else { u.#f = false; }
+            }
+        })
+        .collect();
+
+    let component_store_insert_updated_req: Vec<TokenStream2> = required_field_list
+        .iter()
+        .map(|f| quote! { exporter.state_cache_components.#f.insert(eid_i64, #f.clone()); })
+        .collect();
+
+    let component_store_insert_updated_opt: Vec<TokenStream2> = optional_field_list
+        .iter()
+        .map(|f| quote! { exporter.state_cache_components.#f.insert(eid_i64, #f.clone()); })
+        .collect();
+
+    let component_store_remove_fields: Vec<TokenStream2> = all_field_list
+        .iter()
+        .map(|f| quote! { exporter.state_cache_components.#f.remove(&id_i64); })
         .collect();
 
     // Build snapshot assigns
@@ -362,11 +397,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             quote! {
                 let (#f0, #f1, #f2) = match #src_var {
-                    Some(comp) => (
-                        <#cfg_ty as DataTransferConfig>::from_data(comp),
-                        <#cfg_ty as DataTransferConfig>::from_data(comp),
-                        <#cfg_ty as DataTransferConfig>::from_data(comp),
-                    ),
+                    Some(comp) => {
+                        let a = <#cfg_ty as DataTransferConfig>::from_data(comp, &mut identity);
+                        let b = <#cfg_ty as DataTransferConfig>::from_data(comp, &mut identity);
+                        let c = <#cfg_ty as DataTransferConfig>::from_data(comp, &mut identity);
+                        (a, b, c)
+                    }
                     None => { continue; }
                 };
             }
@@ -383,9 +419,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
             let f2 = format_ident!("{}2", field);
 
             quote! {
-                let #f0 = #src_var.map(|comp| <#cfg_ty as DataTransferConfig>::from_data(comp));
-                let #f1 = #src_var.map(|comp| <#cfg_ty as DataTransferConfig>::from_data(comp));
-                let #f2 = #src_var.map(|comp| <#cfg_ty as DataTransferConfig>::from_data(comp));
+                let #f0 = #src_var.map(|comp| <#cfg_ty as DataTransferConfig>::from_data(comp, &mut identity));
+                let #f1 = #src_var.map(|comp| <#cfg_ty as DataTransferConfig>::from_data(comp, &mut identity));
+                let #f2 = #src_var.map(|comp| <#cfg_ty as DataTransferConfig>::from_data(comp, &mut identity));
             }
         })
         .collect();
@@ -400,7 +436,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 match #src_var {
                     Some(comp) => {
                         let ref mut dto = d.#field;
-                        <#cfg_ty as DataTransferConfig>::update_dto(dto, comp);
+                        <#cfg_ty as DataTransferConfig>::update_dto(dto, comp, &mut identity);
                     }
                     None => { continue; }
                 };
@@ -417,9 +453,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 match #src_var {
                     Some(comp) => {
                         if let Some(ref mut dto) = d.#field {
-                            <#cfg_ty as DataTransferConfig>::update_dto(dto, comp);
+                            <#cfg_ty as DataTransferConfig>::update_dto(dto, comp, &mut identity);
                         } else {
-                            d.#field = Some(<#cfg_ty as DataTransferConfig>::from_data(comp));
+                            d.#field = Some(<#cfg_ty as DataTransferConfig>::from_data(comp, &mut identity));
                         }
                     }
                     None => { d.#field = None; }
@@ -557,18 +593,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use godot::builtin::{NodePath, PackedInt64Array};
             use std::marker::PhantomData;
 
-            // Snapshot (Rust) used for true-change detection
-            #[derive(Clone, Debug, Default)]
-            struct SnapshotRust {
-                #( #snapshot_req_fields )*
-                #( #snapshot_opt_fields )*
-            }
-
-            impl SnapshotRust {
-                fn clone_from_in_place(&mut self, other: &Self) {
-                    #( #snapshot_clone_from_req )*
-                    #( #snapshot_clone_from_opt )*
-                }
+            // Composite per-component snapshot storage for true-change detection.
+            #[derive(Debug, Default)]
+            struct StateCacheComponents {
+                #( #component_store_req_fields )*
+                #( #component_store_opt_fields )*
             }
 
             // Exporter accessor cache
@@ -662,7 +691,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[class(init, base=Node)]
             pub struct #exporter_ident {
                 state_cache: HashMap<i64, __EntityDtoRing>,
-                state_cache_rust: HashMap<i64, SnapshotRust>,
+                state_cache_components: StateCacheComponents,
                 #[base] base: Base<Node>,
             }
 
@@ -712,6 +741,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #removed_decl
                 snapshot: Query<#read_tuple, #snapshot_filter>,
                 #( #updated_decl )*
+                mut identity: IdentitySubsystem,
                 mut scene_tree: SceneTreeRef,
                 mut exporter_accessor: #exporter_accessor_ident,
             )
@@ -729,28 +759,27 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 let Some(mut exporter) = exporter_accessor.get(&mut scene_tree) else { return; };
                 let mut exporter = exporter.bind_mut();
 
-                let mut created_ids_set: HashSet<u64> = HashSet::new();
+                let mut created_ids_set: HashSet<i64> = HashSet::new();
 
                 let mut removed_ids_vec: Vec<i64> = Vec::new();
                 if any_removed {
                     for entity in removed.read() {
-                        removed_ids_vec.push(entity.to_bits() as i64);
+                        if let Some(entity_id) = identity.try_get_identity(entity) {
+                            removed_ids_vec.push(entity_id);
+                        }
                     }
                 }
 
                 // CREATED: allocate DTO rings + snapshot cache
                 if any_created {
                     for entity in created.iter() {
-                        created_ids_set.insert(entity.to_bits());
+                        let eid_i64 = identity.get_identity(entity);
+                        created_ids_set.insert(eid_i64);
 
                         let Ok(#destructure) = snapshot.get(entity) else { continue; };
 
                         #( #req_rust_assigns )*
                         #( #opt_rust_assigns )*
-                        let snapshot_rust = SnapshotRust {
-                            #( #required_field_list: #required_field_list, )*
-                            #( #optional_field_list: #optional_field_list, )*
-                        };
 
                         #( #snap_req_assigns )*
                         #( #snap_opt_assigns )*
@@ -784,25 +813,25 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                         let ring = __EntityDtoRing::new(curr, prev, spare);
 
-                        let eid_i64 = entity.to_bits() as i64;
                         exporter.state_cache.insert(eid_i64, ring);
-                        exporter.state_cache_rust.insert(eid_i64, snapshot_rust);
+                        #( #component_store_insert_created_req )*
+                        #( #component_store_insert_created_opt )*
                     }
                 }
 
                 // UPDATED: compute field flags based on *component* equality
                 use ::std::collections::HashSet as __HashSet;
-                let mut changed_eids: __HashSet<u64> = __HashSet::new();
+                let mut changed_entities: __HashSet<Entity> = __HashSet::new();
 
                 #(
                     for (entity, _comp) in #updated_req_idents.iter() {
-                        changed_eids.insert(entity.to_bits());
+                        changed_entities.insert(entity);
                     }
                 )*
 
                 #(
                     for (entity, _comp) in #updated_opt_idents.iter() {
-                        changed_eids.insert(entity.to_bits());
+                        changed_entities.insert(entity);
                     }
                 )*
 
@@ -825,8 +854,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 };
 
                 if any_created {
-                    for eid_u64 in created_ids_set.iter().copied() {
-                        let eid_i64 = eid_u64 as i64;
+                    for eid_i64 in created_ids_set.iter().copied() {
                         if let Some(ring) = exporter.state_cache.get(&eid_i64) {
                             acc.created_ids.push(eid_i64);
                             acc.created.push(&ring.curr);
@@ -835,23 +863,17 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 if any_updated {
-                    for eid in changed_eids.into_iter() {
-                        if created_ids_set.contains(&eid) { continue; }
+                    for entity in changed_entities.into_iter() {
+                        let eid_i64 = identity.get_identity(entity);
+                        if created_ids_set.contains(&eid_i64) { continue; }
 
-                        let entity = Entity::from_bits(eid);
                         let Ok(#destructure) = snapshot.get(entity) else { continue; };
 
                         #( #req_rust_assigns )*
                         #( #opt_rust_assigns )*
-                        let snapshot_rust = SnapshotRust {
-                            #( #required_field_list: #required_field_list, )*
-                            #( #optional_field_list: #optional_field_list, )*
-                        };
-
-                        let eid_i64 = eid as i64;
                         let mut any_changed = false;
 
-                        let prev_missing = !exporter.state_cache_rust.contains_key(&eid_i64);
+                        let prev_missing = #component_store_prev_missing_expr;
 
                         let mut updates: Gd<#updates_ident>;
                         if prev_missing {
@@ -862,7 +884,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             #( u.#all_field_list = true; )*
                             any_changed = true;
                         } else {
-                            let prev_rust = exporter.state_cache_rust.get(&eid_i64).unwrap();
                             let ring = match exporter.state_cache.get(&eid_i64) {
                                 Some(r) => r,
                                 None => continue,
@@ -870,14 +891,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             updates = ring.curr.bind().updates.clone();
 
                             let mut u = updates.bind_mut();
-                            #(
-                                let changed = prev_rust.#required_field_list != snapshot_rust.#required_field_list;
-                                if changed { u.#required_field_list = true; any_changed = true; } else { u.#required_field_list = false; }
-                            )*
-                            #(
-                                let changed = prev_rust.#optional_field_list != snapshot_rust.#optional_field_list;
-                                if changed { u.#optional_field_list = true; any_changed = true; } else { u.#optional_field_list = false; }
-                            )*
+                            #( #component_changed_required )*
+                            #( #component_changed_optional )*
                         }
 
                         if !any_changed { continue; }
@@ -894,11 +909,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             #( #update_opt_in_place )*
                         }
 
-                        if let Some(prev) = exporter.state_cache_rust.get_mut(&eid_i64) {
-                            prev.clone_from_in_place(&snapshot_rust);
-                        } else {
-                            exporter.state_cache_rust.insert(eid_i64, snapshot_rust);
-                        }
+                        #( #component_store_insert_updated_req )*
+                        #( #component_store_insert_updated_opt )*
 
                         acc.updated_ids.push(eid_i64);
                         acc.updated_curr.push(&curr_for_emit);
@@ -909,7 +921,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 if any_removed && !removed_ids_vec.is_empty() {
                     for &id_i64 in removed_ids_vec.iter() {
                         exporter.state_cache.remove(&id_i64);
-                        exporter.state_cache_rust.remove(&id_i64);
+                        #( #component_store_remove_fields )*
                         acc.removed_ids.push(id_i64);
                     }
                 }
@@ -937,6 +949,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             pub struct #plugin_ident;
             impl Plugin for #plugin_ident {
                 fn build(&self, app: &mut App) {
+                    app.init_resource::<IdentityRegistry>();
                     app.init_non_send_resource::<#exporter_accessor_impl_ident>();
                     app.add_systems(PostUpdate, #system_ident);
                 }

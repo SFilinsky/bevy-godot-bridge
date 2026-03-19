@@ -1,4 +1,4 @@
-﻿//! proc-macro: import_queue!{ config: SomeTransferConfig, ... }
+//! proc-macro: import_queue!{ config: SomeTransferConfig, ... }
 //!
 //! This replaces the old `#[derive(ImportQueue)]` approach.
 //!
@@ -15,9 +15,8 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{
-    Ident, Path, Result, Token,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, Ident, Path, Result, Token,
 };
 
 const CFG_SUFFIX: &str = "TransferConfig";
@@ -159,6 +158,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             // - BevyApp is in bevy_godot4 crate root (per your fix), not necessarily in prelude.
             use bevy_godot4::prelude::BevyApp;
             use bevy_godot4::prelude::DataTransferConfig;
+            use bevy_godot4::prelude::IdentitySubsystem;
 
             // -----------------------------------------
             // Types derived from config
@@ -180,10 +180,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     self.q.push_back(dto);
                 }
 
-                fn drain_into(&mut self, out: &mut MessageWriter<__Msg>) {
+                fn drain_into(
+                    &mut self,
+                    out: &mut MessageWriter<__Msg>,
+                    identity: &mut IdentitySubsystem,
+                ) {
                     while let Some(dto) = self.q.pop_front() {
                         // DTO -> Message conversion happens here
-                        let msg: __Msg = <__Cfg as DataTransferConfig>::from_dto(&dto);
+                        let msg: __Msg = <__Cfg as DataTransferConfig>::from_dto(&dto, identity);
                         out.write(msg);
                     }
                 }
@@ -206,7 +210,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 ///
                 /// Cache lookup result. Call once from some Node's _ready().
                 #[func]
-                pub fn bind_bevy_app(&mut self, app: Gd<bevy_godot4::prelude::BevyApp>) {
+                pub fn bind_bevy_app(&mut self, app: Gd<BevyApp>) {
                     self.bevy_app = Some(app);
                 }
 
@@ -243,13 +247,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
             fn #drain_fn_ident(
                 mut out: MessageWriter<__Msg>,
                 mut q: NonSendMut<#queue_storage_ident>,
+                mut identity: IdentitySubsystem,
             )
             where
                 __Cfg: DataTransferConfig,
                 __Msg: Message + Default + Sized,
                 __Dto: GodotClass + godot::obj::NewGd,
             {
-                q.drain_into(&mut out);
+                q.drain_into(&mut out, &mut identity);
             }
 
             // -----------------------------------------
