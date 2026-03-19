@@ -6,19 +6,20 @@ use godot::{
 };
 
 use crate::app_action_queue::ActionQueue;
+use crate::import::subsystems::IdentityRegistry;
 use crate::performance::init_performance_tracing;
 use crate::prelude::*;
 use bevy::ecs::system::SystemParam;
-use bevy::prelude::{Fixed, NonSendMut, Time, Virtual, World};
+use bevy::prelude::{Fixed, NonSend, Time, Virtual, World};
 use bevy::time::TimeUpdateStrategy;
 use bevy::DefaultPlugins;
 use bevy_godot4::scene::PackedScenePlugin;
 use bevy_godot4::scene_tree::SceneTreeRef;
 use godot::obj::Singleton;
-use godot::obj::WithBaseField;
 use godot::prelude::{Gd, SceneTree};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 use std::{
     panic::{catch_unwind, resume_unwind, AssertUnwindSafe},
     sync::Mutex,
@@ -36,23 +37,23 @@ struct GodotClock {
 
 #[derive(SystemParam)]
 pub struct BevyAppSubsystem<'w, 's> {
-    app: NonSendMut<'w, BevyAppRef>,
+    allocator: NonSend<'w, BevyAppIdAllocatorRef>,
     phantom: PhantomData<&'s ()>,
 }
 
 impl BevyAppSubsystem<'_, '_> {
     pub fn alloc_entity_id(&mut self) -> i64 {
-        self.app.0.bind_mut().alloc_entity_id()
+        self.allocator.0.fetch_add(1, Ordering::Relaxed)
     }
 }
 
 #[doc(hidden)]
 #[derive(Debug)]
-pub struct BevyAppRef(pub(crate) Gd<BevyApp>);
+pub struct BevyAppIdAllocatorRef(pub(crate) Arc<AtomicI64>);
 
-impl BevyAppRef {
-    pub(crate) fn new(app: Gd<BevyApp>) -> Self {
-        Self(app)
+impl BevyAppIdAllocatorRef {
+    pub(crate) fn new(id_counter: Arc<AtomicI64>) -> Self {
+        Self(id_counter)
     }
 }
 
@@ -84,7 +85,7 @@ pub struct BevyApp {
 
     pub action_queue: ActionQueue,
 
-    next_entity_id: AtomicI64,
+    next_entity_id: Arc<AtomicI64>,
 
     base: Base<Node>,
 }
@@ -204,7 +205,7 @@ impl INode for BevyApp {
         Self {
             app: None,
             action_queue: ActionQueue::default(),
-            next_entity_id: AtomicI64::new(1),
+            next_entity_id: Arc::new(AtomicI64::new(1)),
             base,
         }
     }
@@ -216,17 +217,12 @@ impl INode for BevyApp {
         init_performance_tracing();
 
         let mut app = App::new();
-        let app_node = self
-            .base()
-            .clone()
-            .upcast::<Node>()
-            .try_cast::<BevyApp>()
-            .expect("failed to cast self node to BevyApp");
 
         app.add_plugins(DefaultPlugins)
             .add_plugins(PackedScenePlugin)
             .init_non_send_resource::<SceneTreeRef>()
-            .insert_non_send_resource(BevyAppRef::new(app_node));
+            .insert_non_send_resource(BevyAppIdAllocatorRef::new(self.next_entity_id.clone()))
+            .init_resource::<IdentityRegistry>();
 
         (APP_BUILDER_FN.lock().unwrap().as_mut().unwrap())(&mut app);
 

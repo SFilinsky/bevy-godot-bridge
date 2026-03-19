@@ -17,7 +17,7 @@ pub mod subsystems {
     use std::collections::HashMap;
 
     #[derive(Resource, Default, Debug)]
-    pub(crate) struct IdentityRegistry {
+    pub struct IdentityRegistry {
         by_entity: HashMap<Entity, i64>,
         by_id: HashMap<i64, Entity>,
     }
@@ -69,6 +69,21 @@ pub mod subsystems {
             id
         }
 
+        pub fn try_get_identity(&mut self, entity: Entity) -> Option<i64> {
+            if let Some(id) = self.registry.by_entity.get(&entity).copied() {
+                return Some(id);
+            }
+
+            if let Ok((_, identity)) = self.identities.get(entity) {
+                let id = identity.godot_id;
+                self.registry.by_entity.insert(entity, id);
+                self.registry.by_id.insert(id, entity);
+                return Some(id);
+            }
+
+            None
+        }
+
         pub fn resolve_entity(&mut self, godot_id: i64) -> Option<Entity> {
             if let Some(entity) = self.registry.by_id.get(&godot_id).copied() {
                 if self.entities.contains(entity) {
@@ -94,6 +109,7 @@ pub mod subsystems {
 }
 
 pub mod intentions {
+    use crate::import::subsystems::IdentitySubsystem;
     use bevy::prelude::Message;
     use bevy_godot4::dto::DataTransferConfig;
     use bevy_godot4_proc_macros::import_queue;
@@ -125,13 +141,21 @@ pub mod intentions {
         type DataType = InitializeEntityIntention;
         type DtoType = InitializeEntityIntentionDto;
 
-        fn update_dto(dto: &mut Gd<Self::DtoType>, data: &Self::DataType) {
+        fn update_dto(
+            dto: &mut Gd<Self::DtoType>,
+            data: &Self::DataType,
+            _identity: &mut IdentitySubsystem,
+        ) {
             let mut d = dto.bind_mut();
             d.godot_id = data.godot_id;
             d.name = GString::from(data.name.as_str());
         }
 
-        fn update_data(dto: &Gd<Self::DtoType>, data: &mut Self::DataType) {
+        fn update_data(
+            dto: &Gd<Self::DtoType>,
+            data: &mut Self::DataType,
+            _identity: &mut IdentitySubsystem,
+        ) {
             let d = dto.bind();
             data.godot_id = d.godot_id;
             data.name = d.name.to_string();

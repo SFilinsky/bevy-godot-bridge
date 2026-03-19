@@ -1,5 +1,6 @@
 pub mod intentions {
     use crate::dto::DataTransferConfig;
+    use crate::import::subsystems::IdentitySubsystem;
     use bevy::prelude::{Message, Vec3};
     use bevy_godot4_proc_macros::import_queue;
     use godot::obj::Base;
@@ -31,13 +32,21 @@ pub mod intentions {
         type DataType = InitializePositionIntention;
         type DtoType = InitializePositionIntentionDto;
 
-        fn update_dto(dto: &mut Gd<Self::DtoType>, data: &Self::DataType) {
+        fn update_dto(
+            dto: &mut Gd<Self::DtoType>,
+            data: &Self::DataType,
+            _identity: &mut IdentitySubsystem,
+        ) {
             let mut d = dto.bind_mut();
             d.godot_id = data.godot_id;
             d.position = Vector3::new(data.position.x, data.position.y, data.position.z);
         }
 
-        fn update_data(dto: &Gd<Self::DtoType>, data: &mut Self::DataType) {
+        fn update_data(
+            dto: &Gd<Self::DtoType>,
+            data: &mut Self::DataType,
+            _identity: &mut IdentitySubsystem,
+        ) {
             let d = dto.bind();
             data.godot_id = d.godot_id;
             data.position = Vec3::new(

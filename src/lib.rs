@@ -24,6 +24,7 @@ pub mod prelude {
     pub use super::debug::plugins::DebugVisualizationPlugin;
     pub use super::erased_gd::{ErasedGd, ErasedGdResource};
     pub use super::scene::GodotScene;
+    pub use super::scene_tree::SceneTreeSubsystem as SceneTreeRef;
     pub use super::scene_tree::SceneTreeSubsystem;
     pub use super::utils::{
         AsPhysicsSystem, AsVisualSystem, GodotPhysicsFrame, GodotVisualFrame,
@@ -32,9 +33,11 @@ pub mod prelude {
     pub use crate::app::{BevyApp, BevyAppSubsystem};
     pub use crate::dto::{BuildsDto, DataTransferConfig, WithGatherer};
     pub use crate::import::{
-        importers::EntityImporter, plugins::EntityInitializationPlugin,
-        position::plugins::PositionInitializationPlugin, sets::PostEntityInitSet,
-        subsystems::IdentitySubsystem,
+        importers::EntityImporter,
+        plugins::EntityInitializationPlugin,
+        position::plugins::PositionInitializationPlugin,
+        sets::PostEntityInitSet,
+        subsystems::{IdentityRegistry, IdentitySubsystem},
     };
     pub use crate::tools::collect_children;
     pub use bevy_godot4_proc_macros::{

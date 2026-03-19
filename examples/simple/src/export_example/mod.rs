@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_godot4::prelude::export_bundle;
-use bevy_godot4::prelude::DataTransferConfig;
+use bevy_godot4::prelude::{DataTransferConfig, IdentitySubsystem};
 use godot::prelude::*;
 
 // -----------------------------------------------------------------------------
@@ -37,14 +37,22 @@ impl DataTransferConfig for TransformExportConfig {
     type DataType = Transform;
     type DtoType = TransformDto;
 
-    fn update_data(dto: &Gd<Self::DtoType>, data: &mut Self::DataType) {
+    fn update_data(
+        dto: &Gd<Self::DtoType>,
+        data: &mut Self::DataType,
+        _identity: &mut IdentitySubsystem,
+    ) {
         let d = dto.bind();
         data.translation.x = d.translation.x;
         data.translation.y = d.translation.y;
         data.translation.z = d.translation.z;
     }
 
-    fn update_dto(dto: &mut Gd<Self::DtoType>, data: &Self::DataType) {
+    fn update_dto(
+        dto: &mut Gd<Self::DtoType>,
+        data: &Self::DataType,
+        _identity: &mut IdentitySubsystem,
+    ) {
         let mut d = dto.bind_mut();
         d.translation = Vector3::new(data.translation.x, data.translation.y, data.translation.z);
     }
