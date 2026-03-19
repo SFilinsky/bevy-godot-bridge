@@ -17,7 +17,7 @@ pub mod subsystems {
     use std::collections::HashMap;
 
     #[derive(Resource, Default, Debug)]
-    pub struct IdentityRegistry {
+    pub(crate) struct IdentityRegistry {
         by_entity: HashMap<Entity, i64>,
         by_id: HashMap<i64, Entity>,
     }
@@ -290,12 +290,19 @@ pub mod plugins {
     use super::systems::handle_initialize_entity;
     use bevy::prelude::*;
 
+    pub struct IdentitySubsystemPlugin;
+
+    impl Plugin for IdentitySubsystemPlugin {
+        fn build(&self, app: &mut App) {
+            app.init_resource::<IdentityRegistry>();
+        }
+    }
+
     pub struct EntityInitializationPlugin;
 
     impl Plugin for EntityInitializationPlugin {
         fn build(&self, app: &mut App) {
             app.add_plugins(super::intentions::InitializeEntityIntentionImportPlugin)
-                .init_resource::<IdentityRegistry>()
                 .configure_sets(FixedUpdate, (EntityInitSet.before(PostEntityInitSet),))
                 .add_systems(FixedUpdate, handle_initialize_entity.in_set(EntityInitSet));
         }

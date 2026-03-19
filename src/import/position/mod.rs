@@ -212,7 +212,6 @@ pub mod plugins {
     use super::systems::handle_initialize_position;
     use bevy::prelude::*;
     use bevy_godot4::import::sets::EntityInitSet;
-    use bevy_godot4::import::subsystems::IdentityRegistry;
     use bevy_godot4::prelude::PostEntityInitSet;
 
     pub struct PositionInitializationPlugin;
@@ -220,7 +219,6 @@ pub mod plugins {
     impl Plugin for PositionInitializationPlugin {
         fn build(&self, app: &mut App) {
             app.add_plugins(super::intentions::InitializePositionIntentionImportPlugin)
-                .init_resource::<IdentityRegistry>()
                 .configure_sets(
                     FixedUpdate,
                     (PositionInitSet

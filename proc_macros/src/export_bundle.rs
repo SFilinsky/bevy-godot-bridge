@@ -608,7 +608,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             impl #exporter_accessor_ident<'_, '_> {
-                fn get(&mut self, scene_tree: &mut SceneTreeRef) -> Option<Gd<#exporter_ident>> {
+                fn get(&mut self, scene_tree: &mut SceneTreeSubsystem) -> Option<Gd<#exporter_ident>> {
                     if let Some(cached) = self.gd.0.as_ref() {
                         if cached.is_instance_valid() {
                             return Some(cached.clone());
@@ -742,7 +742,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 snapshot: Query<#read_tuple, #snapshot_filter>,
                 #( #updated_decl )*
                 mut identity: IdentitySubsystem,
-                mut scene_tree: SceneTreeRef,
+                mut scene_tree: SceneTreeSubsystem,
                 mut exporter_accessor: #exporter_accessor_ident,
             )
             where
@@ -949,7 +949,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
             pub struct #plugin_ident;
             impl Plugin for #plugin_ident {
                 fn build(&self, app: &mut App) {
-                    app.init_resource::<IdentityRegistry>();
                     app.init_non_send_resource::<#exporter_accessor_impl_ident>();
                     app.add_systems(PostUpdate, #system_ident);
                 }

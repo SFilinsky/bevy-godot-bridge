@@ -6,15 +6,15 @@ use godot::{
 };
 
 use crate::app_action_queue::ActionQueue;
-use crate::import::subsystems::IdentityRegistry;
+use crate::import::plugins::IdentitySubsystemPlugin;
 use crate::performance::init_performance_tracing;
 use crate::prelude::*;
+use crate::scene_tree::plugins::SceneTreeSubsystemPlugin;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::{Fixed, NonSend, Time, Virtual, World};
 use bevy::time::TimeUpdateStrategy;
 use bevy::DefaultPlugins;
 use bevy_godot4::scene::PackedScenePlugin;
-use bevy_godot4::scene_tree::SceneTreeRef;
 use godot::obj::Singleton;
 use godot::prelude::{Gd, SceneTree};
 use std::marker::PhantomData;
@@ -220,9 +220,9 @@ impl INode for BevyApp {
 
         app.add_plugins(DefaultPlugins)
             .add_plugins(PackedScenePlugin)
-            .init_non_send_resource::<SceneTreeRef>()
-            .insert_non_send_resource(BevyAppIdAllocatorRef::new(self.next_entity_id.clone()))
-            .init_resource::<IdentityRegistry>();
+            .add_plugins(SceneTreeSubsystemPlugin)
+            .add_plugins(IdentitySubsystemPlugin)
+            .insert_non_send_resource(BevyAppIdAllocatorRef::new(self.next_entity_id.clone()));
 
         (APP_BUILDER_FN.lock().unwrap().as_mut().unwrap())(&mut app);
 
