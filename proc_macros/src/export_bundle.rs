@@ -3,9 +3,9 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
-    bracketed,
+    Ident, LitStr, Path, Result, Token, Type, bracketed,
     parse::{Parse, ParseStream},
-    parse_macro_input, Ident, LitStr, Path, Result, Token, Type,
+    parse_macro_input,
 };
 
 /// Usage:
@@ -765,7 +765,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 if any_removed {
                     for entity in removed.read() {
                         if let Some(entity_id) = identity.try_get_identity(entity) {
-                            removed_ids_vec.push(entity_id);
+                             if exporter.state_cache.contains_key(&entity_id) {
+                                 removed_ids_vec.push(entity_id);
+                             }
                         }
                     }
                 }
