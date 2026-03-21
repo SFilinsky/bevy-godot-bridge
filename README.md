@@ -95,13 +95,40 @@ app.add_system(set_positions.as_physics_system())
 ```
 
 ### Ensure Bevy systems are run on the main thread
-`SceneTreeRef` is a `NonSend` system param that ensures your Bevy system will be scheduled on the main thread.
+`SceneTreeSubsystem` is a `NonSend` system param that ensures your Bevy system will be scheduled on the main thread.
 ```rust
 fn my_main_thread_system(
     ...,
-    _scene_tree: SceneTreeRef,
+    _scene_tree: SceneTreeSubsystem,
 ) {
     // non-threadsafe code, e.g. move_and_slide()
+}
+```
+
+### Stable entity identity across import and export
+The bridge now routes entity id mapping through `IdentitySubsystem` so exported `created_ids`, `updated_ids`, and `removed_ids` are stable Godot-facing identity ids (not Bevy entity bits).
+
+If you implement `DataTransferConfig` manually, include `&mut IdentitySubsystem` in conversion methods:
+```rust
+impl DataTransferConfig for MyTransferConfig {
+    type DataType = MyData;
+    type DtoType = MyDto;
+
+    fn update_dto(
+        dto: &mut Gd<Self::DtoType>,
+        data: &Self::DataType,
+        identity: &mut IdentitySubsystem,
+    ) {
+        // map ids through identity as needed
+    }
+
+    fn update_data(
+        dto: &Gd<Self::DtoType>,
+        data: &mut Self::DataType,
+        identity: &mut IdentitySubsystem,
+    ) {
+        // map ids through identity as needed
+    }
 }
 ```
 
