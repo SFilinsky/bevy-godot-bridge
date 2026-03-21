@@ -290,7 +290,7 @@ pub mod plugins {
     use super::systems::handle_initialize_entity;
     use bevy::prelude::*;
 
-    pub struct IdentitySubsystemPlugin;
+    pub(crate) struct IdentitySubsystemPlugin;
 
     impl Plugin for IdentitySubsystemPlugin {
         fn build(&self, app: &mut App) {

@@ -49,7 +49,7 @@ impl BevyAppSubsystem<'_, '_> {
 
 #[doc(hidden)]
 #[derive(Debug)]
-pub struct BevyAppIdAllocatorRef(pub(crate) Arc<AtomicI64>);
+pub(crate) struct BevyAppIdAllocatorRef(pub(crate) Arc<AtomicI64>);
 
 impl BevyAppIdAllocatorRef {
     pub(crate) fn new(id_counter: Arc<AtomicI64>) -> Self {
