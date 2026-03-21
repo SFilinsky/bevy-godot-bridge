@@ -37,11 +37,11 @@ impl Default for SceneTreeRef {
     }
 }
 
-pub mod plugins {
+pub(crate) mod plugins {
     use super::SceneTreeRef;
     use bevy::prelude::{App, Plugin};
 
-    pub struct SceneTreeSubsystemPlugin;
+    pub(crate) struct SceneTreeSubsystemPlugin;
 
     impl Plugin for SceneTreeSubsystemPlugin {
         fn build(&self, app: &mut App) {
