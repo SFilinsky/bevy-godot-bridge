@@ -1,8 +1,9 @@
 //! Minimal demo of how to export data from Bevy to Godot.
 
 use bevy::prelude::*;
-use bevy_godot4::prelude::export_bundle;
-use bevy_godot4::prelude::{DataTransferConfig, IdentitySubsystem};
+use bevy_godot4::prelude::{
+    export_bundle, export_composed, with_state_node, DataTransferConfig, IdentitySubsystem,
+};
 use godot::prelude::*;
 
 // -----------------------------------------------------------------------------
@@ -10,6 +11,9 @@ use godot::prelude::*;
 // -----------------------------------------------------------------------------
 #[derive(Component, Debug)]
 pub struct UnitTag;
+
+#[derive(Component, Debug)]
+pub struct UnitComposedTag;
 
 // -----------------------------------------------------------------------------
 // 2) DTO for Transform (what Godot receives)
@@ -79,6 +83,17 @@ export_bundle! {
     components: [ TransformExportConfig ],
 }
 
+with_state_node! {
+    dto: TransformDto,
+    state: TransformStateNode,
+}
+
+export_composed! {
+    name: "UnitComposed",
+    tag: UnitComposedTag,
+    components: [ TransformExportConfig ],
+}
+
 // -----------------------------------------------------------------------------
 // 4) Plugin that enables both exporters
 // -----------------------------------------------------------------------------
@@ -86,7 +101,7 @@ pub struct ExportBindingsPlugin;
 
 impl Plugin for ExportBindingsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(UnitEntityExportPlugin);
+        app.add_plugins((UnitEntityExportPlugin, UnitComposedEntityExportPlugin));
     }
 }
 

@@ -3,9 +3,9 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
-    Ident, LitStr, Path, Result, Token, Type, bracketed,
+    bracketed,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, Ident, LitStr, Path, Result, Token, Type,
 };
 
 /// Usage:

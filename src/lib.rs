@@ -30,7 +30,7 @@ pub mod prelude {
         SystemDeltaTimerSubsystem,
     };
     pub use crate::app::{BevyApp, BevyAppSubsystem};
-    pub use crate::dto::{BuildsDto, DataTransferConfig, WithGatherer};
+    pub use crate::dto::{BuildsDto, DataTransferConfig, WithGatherer, WithStateNode};
     pub use crate::import::{
         importers::EntityImporter,
         plugins::EntityInitializationPlugin,
@@ -39,8 +39,8 @@ pub mod prelude {
     };
     pub use crate::tools::collect_children;
     pub use bevy_godot4_proc_macros::{
-        ExportComponent, ExportComponentNew, ExportEntity, bevy_app, export_bundle, import_bundle,
-        import_queue,
+        ExportComponent, ExportComponentNew, ExportEntity, bevy_app, export_bundle,
+        export_composed, import_bundle, import_queue, with_state_node,
     };
 }
 pub use crate::app::APP_BUILDER_FN;

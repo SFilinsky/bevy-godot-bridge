@@ -2,9 +2,11 @@ mod bevy_app_impl;
 mod export_bundle;
 mod export_component_impl;
 mod export_component_new_impl;
+mod export_composed;
 mod export_entity_impl;
 mod import_bundle;
 mod queue;
+mod with_state_node;
 
 use proc_macro::TokenStream;
 
@@ -34,6 +36,11 @@ pub fn export_bundle(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro]
+pub fn export_composed(input: TokenStream) -> TokenStream {
+    export_composed::expand(input)
+}
+
+#[proc_macro]
 pub fn import_bundle(input: TokenStream) -> TokenStream {
     import_bundle::expand(input)
 }
@@ -41,4 +48,9 @@ pub fn import_bundle(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn import_queue(input: TokenStream) -> TokenStream {
     queue::import_queue::expand(input)
+}
+
+#[proc_macro]
+pub fn with_state_node(input: TokenStream) -> TokenStream {
+    with_state_node::expand(input)
 }
