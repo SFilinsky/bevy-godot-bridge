@@ -15,9 +15,8 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{
-    Ident, Path, Result, Token,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, Ident, Path, Result, Token,
 };
 
 const CFG_SUFFIX: &str = "TransferConfig";

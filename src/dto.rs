@@ -50,3 +50,7 @@ where
 pub trait WithGatherer: GodotClass<Base = RefCounted> {
     type Gatherer: GodotClass<Base = Node> + BuildsDto<Self>;
 }
+
+pub trait WithStateNode: GodotClass {
+    type StateNode: GodotClass<Base = Node>;
+}
