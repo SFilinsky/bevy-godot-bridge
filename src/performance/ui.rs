@@ -15,7 +15,7 @@ use godot::prelude::*;
 ///
 /// Display logic:
 /// - Schedules are displayed first in hardcoded order. If missing, prints 0 values.
-/// - Systems are displayed below, sorted by avg_5s_ms descending.
+/// - Systems are displayed below, sorted by avg_30s_ms descending.
 #[derive(GodotClass)]
 #[class(base = Node)]
 pub struct PerformanceHud {
@@ -195,8 +195,8 @@ impl PerformanceHud {
             }
         }
 
-        // Systems sorted by avg_5s descending (stable + responsive)
-        systems.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        // Systems sorted by avg_30s descending (stable + long-window signal)
+        systems.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut lines: Vec<String> = Vec::new();
 
@@ -204,12 +204,12 @@ impl PerformanceHud {
         for sched in SCHEDULE_ORDER {
             if let Some((a1, a5, a30, calls)) = schedules.get(*sched) {
                 lines.push(format!(
-                    "{:<22} a1 {:>7.3}  a5 {:>7.3}  a30 {:>7.3} ms   calls {}",
-                    *sched, *a1, *a5, *a30, *calls
+                    "{:<22} a30 {:>7.3}  a5 {:>7.3}  a1 {:>7.3} ms   calls {}",
+                    *sched, *a30, *a5, *a1, *calls
                 ));
             } else {
                 lines.push(format!(
-                    "{:<22} a1 {:>7.3}  a5 {:>7.3}  a30 {:>7.3} ms   calls {}",
+                    "{:<22} a30 {:>7.3}  a5 {:>7.3}  a1 {:>7.3} ms   calls {}",
                     *sched, 0.0, 0.0, 0.0, 0
                 ));
             }
@@ -223,8 +223,8 @@ impl PerformanceHud {
                 continue;
             }
             lines.push(format!(
-                "{:<22} a1 {:>7.3}  a5 {:>7.3}  a30 {:>7.3} ms   calls {}",
-                name, *a1, *a5, *a30, *calls
+                "{:<22} a30 {:>7.3}  a5 {:>7.3}  a1 {:>7.3} ms   calls {}",
+                name, *a30, *a5, *a1, *calls
             ));
         }
 
