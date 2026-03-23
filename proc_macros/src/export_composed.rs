@@ -13,8 +13,6 @@ use syn::{
 struct ComponentSpec {
     cfg_ty: Type,
     binding_ident: Ident,
-    changed_query_ident: Ident,
-    changed_set_ident: Ident,
     state_alias_ident: Ident,
     state_cache_ident: Ident,
     state_resolve_fn_ident: Ident,
@@ -120,8 +118,6 @@ impl Parse for Spec {
             }
 
             let binding_ident = format_ident!("{}_data", field_ident);
-            let changed_query_ident = format_ident!("{}_changed_query", field_ident);
-            let changed_set_ident = format_ident!("{}_changed_set", field_ident);
             let state_alias_ident =
                 format_ident!("{}{}StateNode", name_camel, field_key.to_upper_camel_case());
             let state_cache_ident = format_ident!("{}_state_cache", field_ident);
@@ -130,8 +126,6 @@ impl Parse for Spec {
             let component = ComponentSpec {
                 cfg_ty,
                 binding_ident,
-                changed_query_ident,
-                changed_set_ident,
                 state_alias_ident,
                 state_cache_ident,
                 state_resolve_fn_ident,
@@ -238,17 +232,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .map(|c| c.binding_ident.clone())
         .collect();
 
-    let changed_query_idents: Vec<Ident> = spec
-        .all
-        .iter()
-        .map(|c| c.changed_query_ident.clone())
-        .collect();
-    let changed_set_idents: Vec<Ident> = spec
-        .all
-        .iter()
-        .map(|c| c.changed_set_ident.clone())
-        .collect();
-
     let state_alias_idents: Vec<Ident> = spec
         .all
         .iter()
@@ -276,17 +259,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
     let snapshot_types: Vec<TokenStream2> = req_data_types
         .iter()
-        .map(|ty| quote! { &#ty })
-        .chain(opt_data_types.iter().map(|ty| quote! { Option<&#ty> }))
-        .collect();
-
-    let changed_query_types: Vec<TokenStream2> = spec
-        .all
-        .iter()
-        .map(|component| {
-            let cfg = &component.cfg_ty;
-            quote! { Query<Entity, (With<#tag_ty>, Changed<<#cfg as DataTransferConfig>::DataType>)> }
-        })
+        .map(|ty| quote! { Ref<#ty> })
+        .chain(opt_data_types.iter().map(|ty| quote! { Option<Ref<#ty>> }))
         .collect();
 
     let changed_terms: Vec<TokenStream2> = spec
@@ -311,15 +285,17 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .map(|component| {
             let cfg_ty = &component.cfg_ty;
             let binding = &component.binding_ident;
-            let changed_set = &component.changed_set_ident;
             let resolve_fn = &component.state_resolve_fn_ident;
 
             quote! {
-                if is_created || #changed_set.contains(&eid_u64) {
-                    changed_candidate = true;
-                    let dto = <#cfg_ty as DataTransferConfig>::from_data(#binding, &mut identity);
+                if is_created || #binding.is_changed() {
                     if let Some(mut state_node) = exporter.#resolve_fn(eid_i64) {
-                        state_node.bind_mut().apply_revision(dto, next_revision);
+                        let did_change = state_node
+                            .bind_mut()
+                            .update_from_data::<#cfg_ty>(&*#binding, &mut identity, next_revision);
+                        if did_change {
+                            changed_candidate = true;
+                        }
                     }
                 }
             }
@@ -332,16 +308,24 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .map(|component| {
             let cfg_ty = &component.cfg_ty;
             let binding = &component.binding_ident;
-            let changed_set = &component.changed_set_ident;
             let resolve_fn = &component.state_resolve_fn_ident;
+            let changed_flag = format_ident!("{}_changed", binding);
 
             quote! {
-                if is_created || #changed_set.contains(&eid_u64) {
-                    if let Some(value) = #binding {
-                        changed_candidate = true;
-                        let dto = <#cfg_ty as DataTransferConfig>::from_data(value, &mut identity);
+                let #changed_flag = #binding
+                    .as_ref()
+                    .map(|value| value.is_changed())
+                    .unwrap_or(false);
+
+                if is_created || #changed_flag {
+                    if let Some(value) = #binding.as_ref() {
                         if let Some(mut state_node) = exporter.#resolve_fn(eid_i64) {
-                            state_node.bind_mut().apply_revision(dto, next_revision);
+                            let did_change = state_node
+                                .bind_mut()
+                                .update_from_data::<#cfg_ty>(&*value, &mut identity, next_revision);
+                            if did_change {
+                                changed_candidate = true;
+                            }
                         }
                     }
                 }
@@ -562,6 +546,23 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
+                #[func]
+                fn get_entity_or_null(&mut self, entity_id: i64) -> Option<Gd<Node>> {
+                    let Some(root) = self.spawned_roots.get(&entity_id).cloned() else {
+                        return None;
+                    };
+
+                    if root.is_instance_valid() {
+                        Some(root)
+                    } else {
+                        self.spawned_roots.remove(&entity_id);
+                        self.entity_meta_cache.remove(&entity_id);
+                        self.revision_cache.remove(&entity_id);
+                        #( self.#state_cache_idents.remove(&entity_id); )*
+                        None
+                    }
+                }
+
                 #(
                     fn #state_resolve_fn_idents(&mut self, entity_id: i64) -> Option<Gd<#state_alias_idents>> {
                         if let Some(cached) = self.#state_cache_idents.get(&entity_id) {
@@ -577,6 +578,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                         let parent = meta.clone().upcast::<Node>();
                         let mut found = collect_children::<#state_alias_idents>(parent, true);
+
+                        if found.len() > 1 {
+                            panic!(
+                                "Multiple {} nodes found for entity {}. Exported entities must have exactly one state node per capability type.",
+                                stringify!(#state_alias_idents),
+                                entity_id
+                            );
+                        }
+
                         let Some(state) = found.pop() else {
                             self.#state_cache_idents.remove(&entity_id);
                             return None;
@@ -646,7 +656,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 updated: Query<Entity, #updated_filter>,
                 mut removed: RemovedComponents<#tag_ty>,
                 snapshot: Query<( #( #snapshot_types, )* ), With<#tag_ty>>,
-                #( #changed_query_idents: #changed_query_types, )*
                 mut identity: IdentitySubsystem,
                 mut scene_tree: SceneTreeSubsystem,
                 mut exporter_accessor: #exporter_accessor_ident,
@@ -663,13 +672,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     return;
                 };
                 let mut exporter = exporter.bind_mut();
-
-                #( let mut #changed_set_idents: HashSet<u64> = HashSet::new(); )*
-                #(
-                    for entity in #changed_query_idents.iter() {
-                        #changed_set_idents.insert(entity.to_bits());
-                    }
-                )*
 
                 let mut created_bits: HashSet<u64> = HashSet::new();
 

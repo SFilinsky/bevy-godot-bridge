@@ -57,15 +57,61 @@ pub fn expand(input: TokenStream) -> TokenStream {
         pub struct #state {
             curr: Option<Gd<#dto>>,
             prev: Option<Gd<#dto>>,
+            spare: Option<Gd<#dto>>,
             #[var] pub updated_revision: i64,
             #[base] base: Base<Node>,
         }
 
         impl #state {
-            pub fn apply_revision(&mut self, curr: Gd<#dto>, revision: i64) {
-                self.prev = self.curr.take();
-                self.curr = Some(curr);
+            pub fn update_from_data<C>(
+                &mut self,
+                data: &C::DataType,
+                identity: &mut bevy_godot4::prelude::IdentitySubsystem,
+                revision: i64,
+            ) -> bool
+            where
+                C: bevy_godot4::prelude::DataTransferConfig<DtoType = #dto>,
+                #dto: PartialEq,
+            {
+                if self.curr.is_none() {
+                    self.curr = Some(#dto::new_gd());
+                }
+                if self.prev.is_none() {
+                    self.prev = Some(#dto::new_gd());
+                }
+                if self.spare.is_none() {
+                    self.spare = Some(#dto::new_gd());
+                }
+
+                if self.updated_revision < 0 {
+                    if let Some(curr) = self.curr.as_mut() {
+                        C::update_dto(curr, data, identity);
+                    }
+
+                    self.updated_revision = revision;
+                    return true;
+                }
+
+                if let Some(spare) = self.spare.as_mut() {
+                    C::update_dto(spare, data, identity);
+                }
+
+                let same_value = if let (Some(curr), Some(spare)) = (self.curr.as_ref(), self.spare.as_ref()) {
+                    let curr_bound = curr.bind();
+                    let spare_bound = spare.bind();
+                    *curr_bound == *spare_bound
+                } else {
+                    false
+                };
+
+                if same_value {
+                    return false;
+                }
+
+                std::mem::swap(&mut self.prev, &mut self.curr);
+                std::mem::swap(&mut self.curr, &mut self.spare);
                 self.updated_revision = revision;
+                true
             }
 
             pub fn curr(&self) -> Option<Gd<#dto>> {
@@ -96,6 +142,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 Self {
                     curr: None,
                     prev: None,
+                    spare: None,
                     updated_revision: -1,
                     base,
                 }
