@@ -26,7 +26,6 @@ struct Spec {
     system_ident: Ident,
     exporter_accessor_ident: Ident,
     exporter_accessor_impl_ident: Ident,
-    entity_meta_ident: Ident,
     required: Vec<ComponentSpec>,
     optional: Vec<ComponentSpec>,
     all: Vec<ComponentSpec>,
@@ -97,7 +96,6 @@ impl Parse for Spec {
         let system_ident = format_ident!("export_{}_entity_changes", name_snake);
         let exporter_accessor_ident = format_ident!("{}ExporterAccessor", name_camel);
         let exporter_accessor_impl_ident = format_ident!("{}ExporterAccessorImpl", name_camel);
-        let entity_meta_ident = format_ident!("{}EntityMeta", name_camel);
 
         let mut required: Vec<ComponentSpec> = Vec::new();
         let mut optional: Vec<ComponentSpec> = Vec::new();
@@ -148,7 +146,6 @@ impl Parse for Spec {
             system_ident,
             exporter_accessor_ident,
             exporter_accessor_impl_ident,
-            entity_meta_ident,
             required,
             optional,
             all,
@@ -215,7 +212,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let system_ident = &spec.system_ident;
     let exporter_accessor_ident = &spec.exporter_accessor_ident;
     let exporter_accessor_impl_ident = &spec.exporter_accessor_impl_ident;
-    let entity_meta_ident = &spec.entity_meta_ident;
 
     let req_cfg_tys: Vec<Type> = spec.required.iter().map(|c| c.cfg_ty.clone()).collect();
     let opt_cfg_tys: Vec<Type> = spec.optional.iter().map(|c| c.cfg_ty.clone()).collect();
@@ -356,42 +352,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             #( pub type #state_alias_idents = <<#all_cfg_tys as DataTransferConfig>::DtoType as WithStateNode>::StateNode; )*
-
-            #[derive(GodotClass)]
-            #[class(base=Node)]
-            pub struct #entity_meta_ident {
-                #[var] pub entity_id: i64,
-                #[var] pub revision: i64,
-                #[var] custom_cleanup_enabled: bool,
-                #[base] base: Base<Node>,
-            }
-
-            #[godot_api]
-            impl #entity_meta_ident {
-                #[signal]
-                fn on_change(revision: i64);
-
-                #[func]
-                fn set_custom_cleanup(&mut self, enabled: bool) {
-                    self.custom_cleanup_enabled = enabled;
-                }
-
-                #[func(virtual)]
-                fn on_removed(&mut self) {}
-            }
-
-            #[godot_api]
-            impl INode for #entity_meta_ident {
-                fn init(base: Base<Node>) -> Self {
-                    Self {
-                        entity_id: -1,
-                        revision: -1,
-                        custom_cleanup_enabled: false,
-                        base,
-                    }
-                }
-            }
-
             #[derive(GodotClass)]
             #[class(base=Node)]
             pub struct #exporter_ident {
@@ -402,7 +362,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[var]
                 parent_path: NodePath,
                 spawned_roots: HashMap<i64, Gd<Node>>,
-                entity_meta_cache: HashMap<i64, Gd<#entity_meta_ident>>,
+                entity_meta_cache: HashMap<i64, Gd<EntityMeta>>,
                 revision_cache: HashMap<i64, i64>,
                 #( #state_cache_idents: HashMap<i64, Gd<#state_alias_idents>>, )*
                 #[base] base: Base<Node>,
@@ -418,7 +378,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                fn resolve_entity_meta_from_root(&mut self, entity_id: i64) -> Option<Gd<#entity_meta_ident>> {
+                fn resolve_entity_meta_from_root(&mut self, entity_id: i64) -> Option<Gd<EntityMeta>> {
                     let Some(root) = self.spawned_roots.get(&entity_id).cloned() else {
                         self.entity_meta_cache.remove(&entity_id);
                         return None;
@@ -436,17 +396,17 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     Some(meta)
                 }
 
-                fn resolve_entity_meta_from_instance(&mut self, instance: Gd<Node>, entity_id: i64) -> Gd<#entity_meta_ident> {
-                    let root_meta = instance.clone().try_cast::<#entity_meta_ident>().ok();
+                fn resolve_entity_meta_from_instance(&mut self, instance: Gd<Node>, entity_id: i64) -> Gd<EntityMeta> {
+                    let root_meta = instance.clone().try_cast::<EntityMeta>().ok();
 
-                    let mut direct_children_meta: Vec<Gd<#entity_meta_ident>> = Vec::new();
+                    let mut direct_children_meta: Vec<Gd<EntityMeta>> = Vec::new();
                     let child_count = instance.get_child_count();
                     for idx in 0..child_count {
                         let Some(child) = instance.get_child(idx) else {
                             continue;
                         };
 
-                        if let Ok(meta) = child.try_cast::<#entity_meta_ident>() {
+                        if let Ok(meta) = child.try_cast::<EntityMeta>() {
                             direct_children_meta.push(meta);
                         }
                     }
@@ -454,7 +414,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     if root_meta.is_some() && !direct_children_meta.is_empty() {
                         godot_warn!(
                             "Multiple {} nodes found for entity {}; using root-attached one",
-                            stringify!(#entity_meta_ident),
+                            "EntityMeta",
                             entity_id
                         );
                     }
@@ -462,7 +422,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     if direct_children_meta.len() > 1 {
                         godot_warn!(
                             "Multiple direct-child {} nodes found for entity {}; using the first one",
-                            stringify!(#entity_meta_ident),
+                            "EntityMeta",
                             entity_id
                         );
                     }
@@ -475,24 +435,24 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         return meta;
                     }
 
-                    let nested_meta = collect_children::<#entity_meta_ident>(instance.clone(), true);
+                    let nested_meta = collect_children::<EntityMeta>(instance.clone(), true);
 
                     if !nested_meta.is_empty() {
                         panic!(
                             "{} must be attached to scene root or as a direct child of the root for entity {}; deeper nested placement is invalid",
-                            stringify!(#entity_meta_ident),
+                            "EntityMeta",
                             entity_id
                         );
                     }
 
                     panic!(
                         "Spawned scene is missing {} for entity {}; attach it to root or root direct child",
-                        stringify!(#entity_meta_ident),
+                        "EntityMeta",
                         entity_id
                     );
                 }
 
-                fn ensure_spawned_entity_meta(&mut self, entity_id: i64) -> Option<Gd<#entity_meta_ident>> {
+                fn ensure_spawned_entity_meta(&mut self, entity_id: i64) -> Option<Gd<EntityMeta>> {
                     if let Some(cached) = self.entity_meta_cache.get(&entity_id) {
                         if cached.is_instance_valid() {
                             return Some(cached.clone());
@@ -538,7 +498,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     if let Some(mut meta) = self.entity_meta_cache.remove(&entity_id) {
                         if meta.is_instance_valid() {
-                            custom_cleanup = meta.bind().custom_cleanup_enabled;
+                            custom_cleanup = meta.bind().is_custom_cleanup_enabled();
                             if custom_cleanup {
                                 meta.bind_mut().on_removed();
                             }
@@ -573,8 +533,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 #[func]
-                fn get_entity_meta_list(&mut self) -> Array<Gd<#entity_meta_ident>> {
-                    let mut out: Array<Gd<#entity_meta_ident>> = Array::new();
+                fn get_entity_meta_list(&mut self) -> Array<Gd<EntityMeta>> {
+                    let mut out: Array<Gd<EntityMeta>> = Array::new();
                     let mut stale_ids: Vec<i64> = Vec::new();
 
                     for (entity_id, meta) in self.entity_meta_cache.iter() {
@@ -777,7 +737,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
         }
 
         pub use #module_ident::{
-            #entity_meta_ident,
             #exporter_ident,
             #plugin_ident,
             #( #state_alias_idents, )*
