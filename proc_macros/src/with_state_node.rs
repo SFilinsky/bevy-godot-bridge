@@ -126,6 +126,30 @@ pub fn expand(input: TokenStream) -> TokenStream {
         #[godot_api]
         impl #state {
             #[func]
+            fn get_capability(entity_meta: Gd<bevy_godot4::prelude::EntityMeta>) -> Option<Gd<#state>> {
+                if !entity_meta.is_instance_valid() {
+                    return None;
+                }
+
+                let parent = entity_meta.upcast::<Node>();
+                let mut found = bevy_godot4::prelude::collect_children::<#state>(parent, true);
+
+                if found.len() > 1 {
+                    panic!(
+                        "Multiple {} capability nodes found under EntityMeta. Expected exactly one.",
+                        stringify!(#state)
+                    );
+                }
+
+                found.pop()
+            }
+
+            #[func]
+            fn has_capability(entity_meta: Gd<bevy_godot4::prelude::EntityMeta>) -> bool {
+                Self::get_capability(entity_meta).is_some()
+            }
+
+            #[func]
             fn get_curr(&self) -> Option<Gd<#dto>> {
                 self.curr()
             }
