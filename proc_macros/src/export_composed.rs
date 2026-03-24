@@ -285,10 +285,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             quote! {
                 if is_created || #binding.is_changed() {
-                    if let Some(mut state_node) = exporter.#resolve_fn(eid_i64) {
+                    if let Some(mut state_node) = exporter.#resolve_fn() {
                         let did_change = state_node
                             .bind_mut()
-                            .update_from_data::<#cfg_ty>(&*#binding, &mut identity, next_revision);
+                            .upsert_from_data::<#cfg_ty>(eid_i64, &*#binding, &mut identity, next_revision);
                         if did_change {
                             changed_candidate = true;
                         }
@@ -315,15 +315,29 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 if is_created || #changed_flag {
                     if let Some(value) = #binding.as_ref() {
-                        if let Some(mut state_node) = exporter.#resolve_fn(eid_i64) {
+                        if let Some(mut state_node) = exporter.#resolve_fn() {
                             let did_change = state_node
                                 .bind_mut()
-                                .update_from_data::<#cfg_ty>(&*value, &mut identity, next_revision);
+                                .upsert_from_data::<#cfg_ty>(eid_i64, &*value, &mut identity, next_revision);
                             if did_change {
                                 changed_candidate = true;
                             }
                         }
                     }
+                }
+            }
+        })
+        .collect();
+
+    let state_cleanup_blocks: Vec<TokenStream2> = spec
+        .all
+        .iter()
+        .map(|component| {
+            let resolve_fn = &component.state_resolve_fn_ident;
+
+            quote! {
+                if let Some(mut state_node) = self.#resolve_fn() {
+                    state_node.bind_mut().remove_entity(entity_id);
                 }
             }
         })
@@ -364,7 +378,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 spawned_roots: HashMap<i64, Gd<Node>>,
                 entity_meta_cache: HashMap<i64, Gd<EntityMeta>>,
                 revision_cache: HashMap<i64, i64>,
-                #( #state_cache_idents: HashMap<i64, Gd<#state_alias_idents>>, )*
+                #( #state_cache_idents: Option<Gd<#state_alias_idents>>, )*
                 #[base] base: Base<Node>,
             }
 
@@ -516,7 +530,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
 
                     self.revision_cache.remove(&entity_id);
-                    #( self.#state_cache_idents.remove(&entity_id); )*
+                    #( #state_cleanup_blocks )*
 
                     if let Some(mut root) = self.spawned_roots.remove(&entity_id) {
                         if root.is_instance_valid() && !custom_cleanup {
@@ -526,35 +540,56 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 #(
-                    fn #state_resolve_fn_idents(&mut self, entity_id: i64) -> Option<Gd<#state_alias_idents>> {
-                        if let Some(cached) = self.#state_cache_idents.get(&entity_id) {
+                    fn #state_resolve_fn_idents(&mut self) -> Option<Gd<#state_alias_idents>> {
+                        if let Some(cached) = self.#state_cache_idents.as_ref() {
                             if cached.is_instance_valid() {
                                 return Some(cached.clone());
                             }
                         }
 
-                        let Some(meta) = self.ensure_spawned_entity_meta(entity_id) else {
-                            self.#state_cache_idents.remove(&entity_id);
-                            return None;
+                        let Some(tree) = self.base().get_tree() else {
+                            panic!(
+                                "{} failed to resolve {}: scene tree is unavailable",
+                                stringify!(#exporter_ident),
+                                stringify!(#state_alias_idents)
+                            );
                         };
 
-                        let parent = meta.clone().upcast::<Node>();
-                        let mut found = collect_children::<#state_alias_idents>(parent, true);
+                        let Some(root) = tree.get_root() else {
+                            panic!(
+                                "{} failed to resolve {}: scene tree root is unavailable",
+                                stringify!(#exporter_ident),
+                                stringify!(#state_alias_idents)
+                            );
+                        };
+
+                        let Some(mut owner) = root.try_get_node_as::<Node>("BevyAppSingleton") else {
+                            panic!(
+                                "{} failed to resolve {}: BevyAppSingleton node is missing",
+                                stringify!(#exporter_ident),
+                                stringify!(#state_alias_idents)
+                            );
+                        };
+
+                        let mut found = collect_children::<#state_alias_idents>(owner.clone(), false);
 
                         if found.len() > 1 {
                             panic!(
-                                "Multiple {} nodes found for entity {}. Exported entities must have exactly one state node per capability type.",
-                                stringify!(#state_alias_idents),
-                                entity_id
+                                "{} found multiple {} singletons under BevyAppSingleton; expected exactly one",
+                                stringify!(#exporter_ident),
+                                stringify!(#state_alias_idents)
                             );
                         }
 
                         let Some(state) = found.pop() else {
-                            self.#state_cache_idents.remove(&entity_id);
-                            return None;
+                            panic!(
+                                "{} failed to resolve {} under BevyAppSingleton; add exactly one singleton store node",
+                                stringify!(#exporter_ident),
+                                stringify!(#state_alias_idents)
+                            );
                         };
 
-                        self.#state_cache_idents.insert(entity_id, state.clone());
+                        self.#state_cache_idents = Some(state.clone());
                         Some(state)
                     }
                 )*
@@ -569,7 +604,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         spawned_roots: HashMap::new(),
                         entity_meta_cache: HashMap::new(),
                         revision_cache: HashMap::new(),
-                        #( #state_cache_idents: HashMap::new(), )*
+                        #( #state_cache_idents: None, )*
                         base,
                     }
                 }
@@ -646,7 +681,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 let mut process_entity = |entity: Entity, is_created: bool| {
-                    let eid_u64 = entity.to_bits();
                     let eid_i64 = identity.get_identity(entity);
 
                     let Ok(( #( #req_bindings, )* #( #opt_bindings, )* )) = snapshot.get(entity) else {
