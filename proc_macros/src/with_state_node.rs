@@ -55,16 +55,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
         #[derive(GodotClass)]
         #[class(base=Node)]
         pub struct #state {
-            curr: Option<Gd<#dto>>,
-            prev: Option<Gd<#dto>>,
-            spare: Option<Gd<#dto>>,
-            #[var] pub updated_revision: i64,
+            entries: std::collections::HashMap<i64, (Gd<#dto>, Gd<#dto>, Gd<#dto>, i64)>,
             #[base] base: Base<Node>,
         }
 
         impl #state {
-            pub fn update_from_data<C>(
+            pub fn upsert_from_data<C>(
                 &mut self,
+                entity_id: i64,
                 data: &C::DataType,
                 identity: &mut bevy_godot4::prelude::IdentitySubsystem,
                 revision: i64,
@@ -73,70 +71,77 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 C: bevy_godot4::prelude::DataTransferConfig<DtoType = #dto>,
                 #dto: PartialEq,
             {
-                if self.curr.is_none() {
-                    self.curr = Some(#dto::new_gd());
-                }
-                if self.prev.is_none() {
-                    self.prev = Some(#dto::new_gd());
-                }
-                if self.spare.is_none() {
-                    self.spare = Some(#dto::new_gd());
+                if entity_id < 0 {
+                    return false;
                 }
 
-                if self.updated_revision < 0 {
-                    if let Some(curr) = self.curr.as_mut() {
-                        C::update_dto(curr, data, identity);
-                    }
+                let entry = self.entries.entry(entity_id).or_insert_with(|| {
+                    (#dto::new_gd(), #dto::new_gd(), #dto::new_gd(), -1)
+                });
 
-                    self.updated_revision = revision;
+                let (curr, prev, spare, updated_revision) = entry;
+
+                if *updated_revision < 0 {
+                    C::update_dto(curr, data, identity);
+                    *updated_revision = revision;
                     return true;
                 }
 
-                if let Some(spare) = self.spare.as_mut() {
-                    C::update_dto(spare, data, identity);
-                }
+                C::update_dto(spare, data, identity);
 
-                let same_value = if let (Some(curr), Some(spare)) = (self.curr.as_ref(), self.spare.as_ref()) {
+                let same_value = {
                     let curr_bound = curr.bind();
                     let spare_bound = spare.bind();
                     *curr_bound == *spare_bound
-                } else {
-                    false
                 };
 
                 if same_value {
                     return false;
                 }
 
-                std::mem::swap(&mut self.prev, &mut self.curr);
-                std::mem::swap(&mut self.curr, &mut self.spare);
-                self.updated_revision = revision;
+                std::mem::swap(prev, curr);
+                std::mem::swap(curr, spare);
+                *updated_revision = revision;
                 true
             }
 
-            pub fn curr(&self) -> Option<Gd<#dto>> {
-                self.curr.clone()
+            pub fn remove_entity(&mut self, entity_id: i64) {
+                self.entries.remove(&entity_id);
             }
 
-            pub fn prev(&self) -> Option<Gd<#dto>> {
-                self.prev.clone()
+            pub fn curr_for(&self, entity_id: i64) -> Option<Gd<#dto>> {
+                self.entries
+                    .get(&entity_id)
+                    .map(|(curr, _prev, _spare, _revision)| curr.clone())
+            }
+
+            pub fn prev_for(&self, entity_id: i64) -> Option<Gd<#dto>> {
+                self.entries
+                    .get(&entity_id)
+                    .map(|(_curr, prev, _spare, _revision)| prev.clone())
+            }
+
+            pub fn updated_revision_for(&self, entity_id: i64) -> i64 {
+                self.entries
+                    .get(&entity_id)
+                    .map(|(_curr, _prev, _spare, revision)| *revision)
+                    .unwrap_or(-1)
             }
         }
 
         #[godot_api]
         impl #state {
             #[func]
-            fn get_capability(entity_meta: Gd<bevy_godot4::prelude::EntityMeta>) -> Option<Gd<#state>> {
-                if !entity_meta.is_instance_valid() {
+            fn resolve(owner: Gd<Node>) -> Option<Gd<#state>> {
+                if !owner.is_instance_valid() {
                     return None;
                 }
 
-                let parent = entity_meta.upcast::<Node>();
-                let mut found = bevy_godot4::prelude::collect_children::<#state>(parent, true);
+                let mut found = bevy_godot4::prelude::collect_children::<#state>(owner, false);
 
                 if found.len() > 1 {
                     panic!(
-                        "Multiple {} capability nodes found under EntityMeta. Expected exactly one.",
+                        "Multiple {} nodes found under BevyAppSingleton; expected exactly one singleton store",
                         stringify!(#state)
                     );
                 }
@@ -145,18 +150,60 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             #[func]
+            fn implements(&self, entity_id: i64) -> bool {
+                self.entries.contains_key(&entity_id)
+            }
+
+            #[func]
+            fn get_state(&self, entity_id: i64) -> Option<Gd<#dto>> {
+                self.curr_for(entity_id)
+            }
+
+            #[func]
+            fn get_curr(&self, entity_id: i64) -> Option<Gd<#dto>> {
+                self.curr_for(entity_id)
+            }
+
+            #[func]
+            fn get_prev(&self, entity_id: i64) -> Option<Gd<#dto>> {
+                self.prev_for(entity_id)
+            }
+
+            #[func]
+            fn get_updated_revision(&self, entity_id: i64) -> i64 {
+                self.updated_revision_for(entity_id)
+            }
+
+            #[func]
+            fn get_capability(entity_meta: Gd<bevy_godot4::prelude::EntityMeta>) -> Option<Gd<#state>> {
+                if !entity_meta.is_instance_valid() {
+                    return None;
+                }
+
+                let entity_id = {
+                    let bound = entity_meta.bind();
+                    bound.entity_id
+                };
+
+                if entity_id < 0 {
+                    return None;
+                }
+
+                let tree = entity_meta.get_tree()?;
+                let root = tree.get_root()?;
+                let owner = root.try_get_node_as::<Node>("BevyAppSingleton")?;
+                let store = Self::resolve(owner)?;
+
+                if store.bind().implements(entity_id) {
+                    Some(store)
+                } else {
+                    None
+                }
+            }
+
+            #[func]
             fn has_capability(entity_meta: Gd<bevy_godot4::prelude::EntityMeta>) -> bool {
                 Self::get_capability(entity_meta).is_some()
-            }
-
-            #[func]
-            fn get_curr(&self) -> Option<Gd<#dto>> {
-                self.curr()
-            }
-
-            #[func]
-            fn get_prev(&self) -> Option<Gd<#dto>> {
-                self.prev()
             }
         }
 
@@ -164,10 +211,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         impl INode for #state {
             fn init(base: Base<Node>) -> Self {
                 Self {
-                    curr: None,
-                    prev: None,
-                    spare: None,
-                    updated_revision: -1,
+                    entries: std::collections::HashMap::new(),
                     base,
                 }
             }
