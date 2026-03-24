@@ -395,8 +395,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[derive(GodotClass)]
             #[class(base=Node)]
             pub struct #exporter_ident {
-                #[var] scene: Gd<PackedScene>,
-                #[var] parent_path: NodePath,
+                #[export]
+                #[var]
+                scene: Option<Gd<PackedScene>>,
+                #[export]
+                #[var]
+                parent_path: NodePath,
                 spawned_roots: HashMap<i64, Gd<Node>>,
                 entity_meta_cache: HashMap<i64, Gd<#entity_meta_ident>>,
                 revision_cache: HashMap<i64, i64>,
@@ -499,12 +503,17 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         return Some(meta);
                     }
 
-                    if !self.scene.is_instance_valid() {
-                        godot_error!("{} scene is not configured; set `scene` on exporter", stringify!(#exporter_ident));
+                    let Some(scene) = self.scene.as_ref() else {
+                        // Optional scene: if not configured, exporter stays inert.
+                        return None;
+                    };
+
+                    if !scene.is_instance_valid() {
+                        godot_error!("{} scene is invalid; set a valid `scene` on exporter", stringify!(#exporter_ident));
                         return None;
                     }
 
-                    let Some(instance) = self.scene.instantiate() else {
+                    let Some(instance) = scene.instantiate() else {
                         godot_error!("Failed to instantiate scene for {}", stringify!(#exporter_ident));
                         return None;
                     };
@@ -563,6 +572,26 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
+                #[func]
+                fn get_entity_meta_list(&mut self) -> Array<Gd<#entity_meta_ident>> {
+                    let mut out: Array<Gd<#entity_meta_ident>> = Array::new();
+                    let mut stale_ids: Vec<i64> = Vec::new();
+
+                    for (entity_id, meta) in self.entity_meta_cache.iter() {
+                        if meta.is_instance_valid() {
+                            out.push(&meta.clone());
+                        } else {
+                            stale_ids.push(*entity_id);
+                        }
+                    }
+
+                    for entity_id in stale_ids {
+                        self.cleanup_entity(entity_id);
+                    }
+
+                    out
+                }
+
                 #(
                     fn #state_resolve_fn_idents(&mut self, entity_id: i64) -> Option<Gd<#state_alias_idents>> {
                         if let Some(cached) = self.#state_cache_idents.get(&entity_id) {
@@ -602,7 +631,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             impl INode for #exporter_ident {
                 fn init(base: Base<Node>) -> Self {
                     Self {
-                        scene: PackedScene::new_gd(),
+                        scene: None,
                         parent_path: NodePath::default(),
                         spawned_roots: HashMap::new(),
                         entity_meta_cache: HashMap::new(),
