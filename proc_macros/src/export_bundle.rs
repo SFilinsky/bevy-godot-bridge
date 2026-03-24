@@ -731,6 +731,16 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[godot_api]
             impl #exporter_ident {
                 #[signal] fn batch(batch: Gd<#batch_ident>);
+
+                #[func]
+                fn resolve(owner: Gd<Node>) -> Option<Gd<#exporter_ident>> {
+                    if !owner.is_instance_valid() {
+                        return None;
+                    }
+
+                    let mut owner = owner;
+                    owner.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident))
+                }
             }
 
             // Export system

@@ -370,6 +370,16 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             #[godot_api]
             impl #exporter_ident {
+                #[func]
+                fn resolve(owner: Gd<Node>) -> Option<Gd<#exporter_ident>> {
+                    if !owner.is_instance_valid() {
+                        return None;
+                    }
+
+                    let mut owner = owner;
+                    owner.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident))
+                }
+
                 fn parent_node(&mut self) -> Gd<Node> {
                     if self.parent_path.is_empty() {
                         self.base().clone().upcast()
@@ -486,7 +496,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     {
                         let mut m = meta.bind_mut();
-                        m.entity_id = entity_id;
+                        m.assign_entity_id(entity_id);
                     }
 
                     self.entity_meta_cache.insert(entity_id, meta.clone());
@@ -513,43 +523,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             root.queue_free();
                         }
                     }
-                }
-
-                #[func]
-                fn get_entity_or_null(&mut self, entity_id: i64) -> Option<Gd<Node>> {
-                    let Some(root) = self.spawned_roots.get(&entity_id).cloned() else {
-                        return None;
-                    };
-
-                    if root.is_instance_valid() {
-                        Some(root)
-                    } else {
-                        self.spawned_roots.remove(&entity_id);
-                        self.entity_meta_cache.remove(&entity_id);
-                        self.revision_cache.remove(&entity_id);
-                        #( self.#state_cache_idents.remove(&entity_id); )*
-                        None
-                    }
-                }
-
-                #[func]
-                fn get_entity_meta_list(&mut self) -> Array<Gd<EntityMeta>> {
-                    let mut out: Array<Gd<EntityMeta>> = Array::new();
-                    let mut stale_ids: Vec<i64> = Vec::new();
-
-                    for (entity_id, meta) in self.entity_meta_cache.iter() {
-                        if meta.is_instance_valid() {
-                            out.push(&meta.clone());
-                        } else {
-                            stale_ids.push(*entity_id);
-                        }
-                    }
-
-                    for entity_id in stale_ids {
-                        self.cleanup_entity(entity_id);
-                    }
-
-                    out
                 }
 
                 #(
