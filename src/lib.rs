@@ -7,6 +7,7 @@ mod app_action_queue;
 mod assets;
 mod debug;
 mod dto;
+mod entity_meta;
 mod erased_gd;
 mod import;
 mod performance;
@@ -23,6 +24,7 @@ pub mod prelude {
     pub use super::debug::paths::subsystem::{DebugPathSubsystem, PathConfig};
     pub use super::debug::plugins::DebugVisualizationPlugin;
     pub use super::erased_gd::{ErasedGd, ErasedGdResource};
+    pub use super::entity_meta::EntityMeta;
     pub use super::scene::GodotScene;
     pub use super::scene_tree::SceneTreeSubsystem;
     pub use super::utils::{
