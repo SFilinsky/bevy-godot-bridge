@@ -172,8 +172,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             #[func]
-            fn get_updated_revision(&self, entity_id: i64) -> i64 {
-                self.updated_revision_for(entity_id)
+            fn is_updated_in_revision(&self, entity_id: i64, revision: i64) -> bool {
+                self.updated_revision_for(entity_id) == revision
             }
 
             #[func]
