@@ -14,16 +14,15 @@ struct ComponentSpec {
     cfg_ty: Type,
     binding_ident: Ident,
     state_alias_ident: Ident,
-    state_cache_ident: Ident,
     state_store_var_ident: Ident,
     state_store_bind_ident: Ident,
-    state_resolve_fn_ident: Ident,
 }
 
 struct Spec {
     tag: Path,
     module_ident: Ident,
     exporter_ident: Ident,
+    spawner_ident: Ident,
     plugin_ident: Ident,
     system_ident: Ident,
     exporter_accessor_ident: Ident,
@@ -94,6 +93,7 @@ impl Parse for Spec {
 
         let module_ident = format_ident!("{}_composed_export", name_snake);
         let exporter_ident = format_ident!("{}EntityExporter", name_camel);
+        let spawner_ident = format_ident!("{}EntitySpawner", name_camel);
         let plugin_ident = format_ident!("{}EntityExportPlugin", name_camel);
         let system_ident = format_ident!("export_{}_entity_changes", name_snake);
         let exporter_accessor_ident = format_ident!("{}ExporterAccessor", name_camel);
@@ -120,19 +120,15 @@ impl Parse for Spec {
             let binding_ident = format_ident!("{}_data", field_ident);
             let state_alias_ident =
                 format_ident!("{}{}StateNode", name_camel, field_key.to_upper_camel_case());
-            let state_cache_ident = format_ident!("{}_state_cache", field_ident);
             let state_store_var_ident = format_ident!("{}_state_store", field_ident);
             let state_store_bind_ident = format_ident!("{}_state_store_bind", field_ident);
-            let state_resolve_fn_ident = format_ident!("resolve_{}_state_node", field_ident);
 
             let component = ComponentSpec {
                 cfg_ty,
                 binding_ident,
                 state_alias_ident,
-                state_cache_ident,
                 state_store_var_ident,
                 state_store_bind_ident,
-                state_resolve_fn_ident,
             };
 
             if is_optional {
@@ -148,6 +144,7 @@ impl Parse for Spec {
             tag,
             module_ident,
             exporter_ident,
+            spawner_ident,
             plugin_ident,
             system_ident,
             exporter_accessor_ident,
@@ -214,6 +211,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let tag_ty = &spec.tag;
     let module_ident = &spec.module_ident;
     let exporter_ident = &spec.exporter_ident;
+    let spawner_ident = &spec.spawner_ident;
     let plugin_ident = &spec.plugin_ident;
     let system_ident = &spec.system_ident;
     let exporter_accessor_ident = &spec.exporter_accessor_ident;
@@ -238,16 +236,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .all
         .iter()
         .map(|c| c.state_alias_ident.clone())
-        .collect();
-    let state_cache_idents: Vec<Ident> = spec
-        .all
-        .iter()
-        .map(|c| c.state_cache_ident.clone())
-        .collect();
-    let state_resolve_fn_idents: Vec<Ident> = spec
-        .all
-        .iter()
-        .map(|c| c.state_resolve_fn_ident.clone())
         .collect();
     let req_data_types: Vec<TokenStream2> = req_cfg_tys
         .iter()
@@ -337,12 +325,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .all
         .iter()
         .map(|component| {
-            let resolve_fn = &component.state_resolve_fn_ident;
             let state_store = &component.state_store_var_ident;
             let state_alias = &component.state_alias_ident;
 
             quote! {
-                let mut #state_store = exporter.#resolve_fn().unwrap_or_else(|| {
+                let mut #state_store = #state_alias::resolve(state_store_owner.clone()).unwrap_or_else(|| {
                     panic!(
                         "{} failed to resolve {} singleton store before export tick",
                         stringify!(#exporter_ident),
@@ -404,21 +391,21 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[derive(GodotClass)]
             #[class(base=Node)]
             pub struct #exporter_ident {
-                #[export]
-                #[var]
-                scene: Option<Gd<PackedScene>>,
-                #[export]
-                #[var]
-                parent_path: NodePath,
-                spawned_roots: HashMap<i64, Gd<Node>>,
-                entity_meta_cache: HashMap<i64, Gd<EntityMeta>>,
                 revision_cache: HashMap<i64, i64>,
-                #( #state_cache_idents: Option<Gd<#state_alias_idents>>, )*
                 #[base] base: Base<Node>,
             }
 
             #[godot_api]
             impl #exporter_ident {
+                #[signal]
+                fn on_created(entity_id: i64, revision: i64);
+
+                #[signal]
+                fn on_updated(entity_id: i64, revision: i64);
+
+                #[signal]
+                fn on_removed(entity_id: i64);
+
                 #[func]
                 fn resolve(owner: Gd<Node>) -> Option<Gd<#exporter_ident>> {
                     if !owner.is_instance_valid() {
@@ -427,6 +414,56 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     let mut owner = owner;
                     owner.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident))
+                }
+
+                fn cleanup_entity(&mut self, entity_id: i64) {
+                    self.revision_cache.remove(&entity_id);
+                }
+
+                #[func]
+                fn get_known_entity_ids(&self) -> PackedInt64Array {
+                    let mut out = PackedInt64Array::new();
+                    for entity_id in self.revision_cache.keys() {
+                        out.push(*entity_id);
+                    }
+                    out
+                }
+            }
+
+            #[godot_api]
+            impl INode for #exporter_ident {
+                fn init(base: Base<Node>) -> Self {
+                    Self {
+                        revision_cache: HashMap::new(),
+                        base,
+                    }
+                }
+            }
+
+            #[derive(GodotClass)]
+            #[class(base=Node)]
+            pub struct #spawner_ident {
+                #[export]
+                #[var]
+                scene: Option<Gd<PackedScene>>,
+                #[export]
+                #[var]
+                parent_path: NodePath,
+                spawned_roots: HashMap<i64, Gd<Node>>,
+                entity_meta_cache: HashMap<i64, Gd<EntityMeta>>,
+                #[base] base: Base<Node>,
+            }
+
+            #[godot_api]
+            impl #spawner_ident {
+                #[func]
+                fn resolve(owner: Gd<Node>) -> Option<Gd<#spawner_ident>> {
+                    if !owner.is_instance_valid() {
+                        return None;
+                    }
+
+                    let mut owner = owner;
+                    owner.try_get_node_as::<#spawner_ident>(stringify!(#spawner_ident))
                 }
 
                 fn parent_node(&mut self) -> Gd<Node> {
@@ -450,7 +487,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
 
                     let meta = self.resolve_entity_meta_from_instance(root.clone(), entity_id);
-
                     self.entity_meta_cache.insert(entity_id, meta.clone());
                     Some(meta)
                 }
@@ -495,7 +531,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
 
                     let nested_meta = collect_children::<EntityMeta>(instance.clone(), true);
-
                     if !nested_meta.is_empty() {
                         panic!(
                             "{} must be attached to scene root or as a direct child of the root for entity {}; deeper nested placement is invalid",
@@ -523,18 +558,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
 
                     let Some(scene) = self.scene.as_ref() else {
-                        // Optional scene: if not configured, exporter stays inert.
                         return None;
                     };
 
                     if !scene.is_instance_valid() {
-                        godot_error!("{} scene is invalid; set a valid `scene` on exporter", stringify!(#exporter_ident));
-                        return None;
+                        panic!("{} scene is invalid; set a valid `scene` on spawner", stringify!(#spawner_ident));
                     }
 
                     let Some(instance) = scene.instantiate() else {
-                        godot_error!("Failed to instantiate scene for {}", stringify!(#exporter_ident));
-                        return None;
+                        panic!("Failed to instantiate scene for {}", stringify!(#spawner_ident));
                     };
 
                     let mut parent = self.parent_node();
@@ -542,11 +574,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     self.spawned_roots.insert(entity_id, instance.clone());
 
                     let mut meta = self.resolve_entity_meta_from_instance(instance.clone(), entity_id);
-
-                    {
-                        let mut m = meta.bind_mut();
-                        m.assign_entity_id(entity_id);
-                    }
+                    meta.bind_mut().assign_entity_id(entity_id);
 
                     self.entity_meta_cache.insert(entity_id, meta.clone());
                     Some(meta)
@@ -564,8 +592,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         }
                     }
 
-                    self.revision_cache.remove(&entity_id);
-
                     if let Some(mut root) = self.spawned_roots.remove(&entity_id) {
                         if root.is_instance_valid() && !custom_cleanup {
                             root.queue_free();
@@ -573,73 +599,73 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                #(
-                    fn #state_resolve_fn_idents(&mut self) -> Option<Gd<#state_alias_idents>> {
-                        if let Some(cached) = self.#state_cache_idents.as_ref() {
-                            if cached.is_instance_valid() {
-                                return Some(cached.clone());
-                            }
-                        }
+                #[func]
+                fn _on_created(&mut self, entity_id: i64, revision: i64) {
+                    let Some(mut meta) = self.ensure_spawned_entity_meta(entity_id) else {
+                        return;
+                    };
 
-                        let Some(tree) = self.base().get_tree() else {
-                            panic!(
-                                "{} failed to resolve {}: scene tree is unavailable",
-                                stringify!(#exporter_ident),
-                                stringify!(#state_alias_idents)
-                            );
-                        };
+                    let mut meta = meta.bind_mut();
+                    meta.revision = revision;
+                    meta.signals().on_change().emit(revision);
+                }
 
-                        let Some(root) = tree.get_root() else {
-                            panic!(
-                                "{} failed to resolve {}: scene tree root is unavailable",
-                                stringify!(#exporter_ident),
-                                stringify!(#state_alias_idents)
-                            );
-                        };
+                #[func]
+                fn _on_updated(&mut self, entity_id: i64, revision: i64) {
+                    let Some(mut meta) = self.ensure_spawned_entity_meta(entity_id) else {
+                        return;
+                    };
 
-                        let Some(mut owner) = root.try_get_node_as::<Node>("BevyAppSingleton") else {
-                            panic!(
-                                "{} failed to resolve {}: BevyAppSingleton node is missing",
-                                stringify!(#exporter_ident),
-                                stringify!(#state_alias_idents)
-                            );
-                        };
+                    let mut meta = meta.bind_mut();
+                    meta.revision = revision;
+                    meta.signals().on_change().emit(revision);
+                }
 
-                        let mut found = collect_children::<#state_alias_idents>(owner.clone(), false);
-
-                        if found.len() > 1 {
-                            panic!(
-                                "{} found multiple {} singletons under BevyAppSingleton; expected exactly one",
-                                stringify!(#exporter_ident),
-                                stringify!(#state_alias_idents)
-                            );
-                        }
-
-                        let Some(state) = found.pop() else {
-                            panic!(
-                                "{} failed to resolve {} under BevyAppSingleton; add exactly one singleton store node",
-                                stringify!(#exporter_ident),
-                                stringify!(#state_alias_idents)
-                            );
-                        };
-
-                        self.#state_cache_idents = Some(state.clone());
-                        Some(state)
-                    }
-                )*
+                #[func]
+                fn _on_removed(&mut self, entity_id: i64) {
+                    self.cleanup_entity(entity_id);
+                }
             }
 
             #[godot_api]
-            impl INode for #exporter_ident {
+            impl INode for #spawner_ident {
                 fn init(base: Base<Node>) -> Self {
                     Self {
                         scene: None,
                         parent_path: NodePath::default(),
                         spawned_roots: HashMap::new(),
                         entity_meta_cache: HashMap::new(),
-                        revision_cache: HashMap::new(),
-                        #( #state_cache_idents: None, )*
                         base,
+                    }
+                }
+
+                fn ready(&mut self) {
+                    let Some(tree) = self.base().get_tree() else {
+                        panic!("{} failed to connect: scene tree is unavailable", stringify!(#spawner_ident));
+                    };
+                    let Some(root) = tree.get_root() else {
+                        panic!("{} failed to connect: scene tree root is unavailable", stringify!(#spawner_ident));
+                    };
+                    let Some(mut owner) = root.try_get_node_as::<Node>("BevyAppSingleton") else {
+                        panic!("{} failed to connect: BevyAppSingleton node is missing", stringify!(#spawner_ident));
+                    };
+                    let Some(mut exporter) = owner.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident)) else {
+                        panic!("{} failed to connect: {} node is missing", stringify!(#spawner_ident), stringify!(#exporter_ident));
+                    };
+
+                    let created = Callable::from_object_method(&self.to_gd(), "_on_created");
+                    if !exporter.is_connected("on_created", &created) {
+                        exporter.connect("on_created", &created);
+                    }
+
+                    let updated = Callable::from_object_method(&self.to_gd(), "_on_updated");
+                    if !exporter.is_connected("on_updated", &updated) {
+                        exporter.connect("on_updated", &updated);
+                    }
+
+                    let removed = Callable::from_object_method(&self.to_gd(), "_on_removed");
+                    if !exporter.is_connected("on_removed", &removed) {
+                        exporter.connect("on_removed", &removed);
                     }
                 }
             }
@@ -703,6 +729,16 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     return;
                 };
                 let mut exporter = exporter.bind_mut();
+                let Some(state_store_owner) = scene_tree
+                    .get()
+                    .get_root()
+                    .and_then(|root| root.try_get_node_as::<Node>("BevyAppSingleton"))
+                else {
+                    panic!(
+                        "{} failed to resolve singleton stores: BevyAppSingleton node is missing",
+                        stringify!(#exporter_ident)
+                    );
+                };
                 #( #state_store_resolve_blocks )*
 
                 let mut created_bits: HashSet<u64> = HashSet::new();
@@ -710,8 +746,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 if any_created {
                     for entity in created.iter() {
                         created_bits.insert(entity.to_bits());
-                        let entity_id = identity.get_identity(entity);
-                        let _ = exporter.ensure_spawned_entity_meta(entity_id);
                     }
                 }
 
@@ -719,10 +753,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let eid_i64 = identity.get_identity(entity);
 
                     let Ok(( #( #req_bindings, )* #( #opt_bindings, )* )) = snapshot.get(entity) else {
-                        return;
-                    };
-
-                    let Some(mut meta) = exporter.ensure_spawned_entity_meta(eid_i64) else {
                         return;
                     };
 
@@ -735,13 +765,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         #( #opt_apply_blocks )*
                     }
 
-                    if changed_candidate {
+                    if is_created || changed_candidate {
                         exporter.revision_cache.insert(eid_i64, next_revision);
 
-                        {
-                            let mut m = meta.bind_mut();
-                            m.revision = next_revision;
-                            m.signals().on_change().emit(next_revision);
+                        if is_created {
+                            exporter.signals().on_created().emit(eid_i64, next_revision);
+                        } else {
+                            exporter.signals().on_updated().emit(eid_i64, next_revision);
                         }
                     }
                 };
@@ -767,6 +797,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         if let Some(entity_id) = identity.try_get_identity(entity) {
                             #( #state_remove_blocks )*
                             exporter.cleanup_entity(entity_id);
+                            exporter.signals().on_removed().emit(entity_id);
                         }
                     }
                 }
@@ -784,6 +815,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
         pub use #module_ident::{
             #exporter_ident,
+            #spawner_ident,
             #plugin_ident,
             #( #state_alias_idents, )*
         };
