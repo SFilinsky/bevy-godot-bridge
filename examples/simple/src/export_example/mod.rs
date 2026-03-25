@@ -2,16 +2,13 @@
 
 use bevy::prelude::*;
 use bevy_godot4::prelude::{
-    export_bundle, export_composed, with_state_node, DataTransferConfig, IdentitySubsystem,
+    export_composed, with_state_node, DataTransferConfig, IdentitySubsystem,
 };
 use godot::prelude::*;
 
 // -----------------------------------------------------------------------------
 // 1) Tag component to scope "Unit" entities
 // -----------------------------------------------------------------------------
-#[derive(Component, Debug)]
-pub struct UnitTag;
-
 #[derive(Component, Debug)]
 pub struct UnitComposedTag;
 
@@ -62,27 +59,6 @@ impl DataTransferConfig for TransformExportConfig {
     }
 }
 
-// -----------------------------------------------------------------------------
-// 3) Bundles to export
-//
-// The macro generates (per bundle):
-// - <Name>EntityDto: wrapper with fields + per-field update flags
-// - <Name>EntityExporter: Godot node emitting created/updated/removed
-// - <Name>EntityExportPlugin: Bevy plugin wiring the export system
-// - <Name>Entity / <Name>EntitySpawnHandler: optional helpers for Godot scenes
-//
-// Equality-based behavior:
-// - Creation: all flags true
-// - Update: flags true ONLY if the DTO value actually changed
-// -----------------------------------------------------------------------------
-
-// Export only entities tagged with UnitTag (e.g., your units)
-export_bundle! {
-    name: "Unit",
-    tag:  UnitTag,
-    components: [ TransformExportConfig ],
-}
-
 with_state_node! {
     dto: TransformDto,
     state: TransformStateNode,
@@ -95,17 +71,17 @@ export_composed! {
 }
 
 // -----------------------------------------------------------------------------
-// 4) Plugin that enables both exporters
+// 3) Plugin that enables composed exporter
 // -----------------------------------------------------------------------------
 pub struct ExportBindingsPlugin;
 
 impl Plugin for ExportBindingsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((UnitEntityExportPlugin, UnitComposedEntityExportPlugin));
+        app.add_plugins((UnitComposedEntityExportPlugin,));
     }
 }
 
 // -----------------------------------------------------------------------------
-// 5) Attach UnitEntityExporter Nodes
+// 4) Attach UnitComposedEntityExporter Nodes
 //    To BevyApp and use signals to read entity updates.
 // -----------------------------------------------------------------------------
