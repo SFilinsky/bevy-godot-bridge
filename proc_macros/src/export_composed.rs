@@ -15,6 +15,8 @@ struct ComponentSpec {
     binding_ident: Ident,
     state_alias_ident: Ident,
     state_cache_ident: Ident,
+    state_store_var_ident: Ident,
+    state_store_bind_ident: Ident,
     state_resolve_fn_ident: Ident,
 }
 
@@ -119,6 +121,8 @@ impl Parse for Spec {
             let state_alias_ident =
                 format_ident!("{}{}StateNode", name_camel, field_key.to_upper_camel_case());
             let state_cache_ident = format_ident!("{}_state_cache", field_ident);
+            let state_store_var_ident = format_ident!("{}_state_store", field_ident);
+            let state_store_bind_ident = format_ident!("{}_state_store_bind", field_ident);
             let state_resolve_fn_ident = format_ident!("resolve_{}_state_node", field_ident);
 
             let component = ComponentSpec {
@@ -126,6 +130,8 @@ impl Parse for Spec {
                 binding_ident,
                 state_alias_ident,
                 state_cache_ident,
+                state_store_var_ident,
+                state_store_bind_ident,
                 state_resolve_fn_ident,
             };
 
@@ -243,7 +249,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .iter()
         .map(|c| c.state_resolve_fn_ident.clone())
         .collect();
-
     let req_data_types: Vec<TokenStream2> = req_cfg_tys
         .iter()
         .map(|cfg| quote! { <#cfg as DataTransferConfig>::DataType })
@@ -281,17 +286,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .map(|component| {
             let cfg_ty = &component.cfg_ty;
             let binding = &component.binding_ident;
-            let resolve_fn = &component.state_resolve_fn_ident;
+            let state_store_bind = &component.state_store_bind_ident;
 
             quote! {
                 if is_created || #binding.is_changed() {
-                    if let Some(mut state_node) = exporter.#resolve_fn() {
-                        let did_change = state_node
-                            .bind_mut()
-                            .upsert_from_data::<#cfg_ty>(eid_i64, &*#binding, &mut identity, next_revision);
-                        if did_change {
-                            changed_candidate = true;
-                        }
+                    let did_change = #state_store_bind
+                        .upsert_from_data::<#cfg_ty>(eid_i64, &*#binding, &mut identity, next_revision);
+                    if did_change {
+                        changed_candidate = true;
                     }
                 }
             }
@@ -304,7 +306,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .map(|component| {
             let cfg_ty = &component.cfg_ty;
             let binding = &component.binding_ident;
-            let resolve_fn = &component.state_resolve_fn_ident;
+            let state_store_bind = &component.state_store_bind_ident;
             let changed_flag = format_ident!("{}_changed", binding);
 
             quote! {
@@ -315,13 +317,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 if is_created || #changed_flag {
                     if let Some(value) = #binding.as_ref() {
-                        if let Some(mut state_node) = exporter.#resolve_fn() {
-                            let did_change = state_node
-                                .bind_mut()
-                                .upsert_from_data::<#cfg_ty>(eid_i64, &*value, &mut identity, next_revision);
-                            if did_change {
-                                changed_candidate = true;
-                            }
+                        let did_change = #state_store_bind
+                            .upsert_from_data::<#cfg_ty>(eid_i64, &*value, &mut identity, next_revision);
+                        if did_change {
+                            changed_candidate = true;
                         }
                     }
                 }
@@ -329,16 +328,47 @@ pub fn expand(input: TokenStream) -> TokenStream {
         })
         .collect();
 
-    let state_cleanup_blocks: Vec<TokenStream2> = spec
+    let state_store_resolve_blocks: Vec<TokenStream2> = spec
         .all
         .iter()
         .map(|component| {
             let resolve_fn = &component.state_resolve_fn_ident;
+            let state_store = &component.state_store_var_ident;
+            let state_alias = &component.state_alias_ident;
 
             quote! {
-                if let Some(mut state_node) = self.#resolve_fn() {
-                    state_node.bind_mut().remove_entity(entity_id);
-                }
+                let mut #state_store = exporter.#resolve_fn().unwrap_or_else(|| {
+                    panic!(
+                        "{} failed to resolve {} singleton store before export tick",
+                        stringify!(#exporter_ident),
+                        stringify!(#state_alias)
+                    )
+                });
+            }
+        })
+        .collect();
+
+    let state_store_entity_bind_blocks: Vec<TokenStream2> = spec
+        .all
+        .iter()
+        .map(|component| {
+            let state_store = &component.state_store_var_ident;
+            let state_store_bind = &component.state_store_bind_ident;
+
+            quote! {
+                let mut #state_store_bind = #state_store.bind_mut();
+            }
+        })
+        .collect();
+
+    let state_remove_blocks: Vec<TokenStream2> = spec
+        .all
+        .iter()
+        .map(|component| {
+            let state_store = &component.state_store_var_ident;
+
+            quote! {
+                #state_store.bind_mut().remove_entity(entity_id);
             }
         })
         .collect();
@@ -530,7 +560,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
 
                     self.revision_cache.remove(&entity_id);
-                    #( #state_cleanup_blocks )*
 
                     if let Some(mut root) = self.spawned_roots.remove(&entity_id) {
                         if root.is_instance_valid() && !custom_cleanup {
@@ -669,6 +698,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     return;
                 };
                 let mut exporter = exporter.bind_mut();
+                #( #state_store_resolve_blocks )*
 
                 let mut created_bits: HashSet<u64> = HashSet::new();
 
@@ -694,8 +724,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let next_revision = exporter.revision_cache.get(&eid_i64).copied().unwrap_or(-1) + 1;
                     let mut changed_candidate = false;
 
-                    #( #req_apply_blocks )*
-                    #( #opt_apply_blocks )*
+                    {
+                        #( #state_store_entity_bind_blocks )*
+                        #( #req_apply_blocks )*
+                        #( #opt_apply_blocks )*
+                    }
 
                     if changed_candidate {
                         exporter.revision_cache.insert(eid_i64, next_revision);
@@ -727,6 +760,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 if any_removed {
                     for entity in removed.read() {
                         if let Some(entity_id) = identity.try_get_identity(entity) {
+                            #( #state_remove_blocks )*
                             exporter.cleanup_entity(entity_id);
                         }
                     }
