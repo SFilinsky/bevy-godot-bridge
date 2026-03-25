@@ -268,6 +268,18 @@ pub fn expand(input: TokenStream) -> TokenStream {
         quote! { (With::<#tag_ty>, Or<( #( #changed_terms ),* )>) }
     };
 
+    let opt_removed_reader_idents: Vec<Ident> = spec
+        .optional
+        .iter()
+        .map(|component| format_ident!("{}_removed", component.binding_ident))
+        .collect();
+
+    let any_opt_removed_expr = if opt_removed_reader_idents.is_empty() {
+        quote! { false }
+    } else {
+        quote! { false #( || !#opt_removed_reader_idents.is_empty() )* }
+    };
+
     let req_apply_blocks: Vec<TokenStream2> = spec
         .required
         .iter()
@@ -361,6 +373,44 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             quote! {
                 #state_store.bind_mut().remove_entity(entity_id);
+            }
+        })
+        .collect();
+
+    let opt_removed_apply_blocks: Vec<TokenStream2> = spec
+        .optional
+        .iter()
+        .zip(opt_removed_reader_idents.iter())
+        .map(|(component, removed_reader)| {
+            let state_store = &component.state_store_var_ident;
+
+            quote! {
+                for entity in #removed_reader.read() {
+                    let Some(entity_id) = identity.try_get_identity(entity) else {
+                        continue;
+                    };
+
+                    if removed_entity_ids.contains(&entity_id) || emitted_entity_ids.contains(&entity_id) {
+                        continue;
+                    }
+
+                    let did_remove = {
+                        let mut state_store_bind = #state_store.bind_mut();
+                        if state_store_bind.implements(entity_id) {
+                            state_store_bind.remove_entity(entity_id);
+                            true
+                        } else {
+                            false
+                        }
+                    };
+
+                    if did_remove {
+                        let next_revision = exporter.revision_cache.get(&entity_id).copied().unwrap_or(-1) + 1;
+                        exporter.revision_cache.insert(entity_id, next_revision);
+                        exporter.signals().on_updated().emit(entity_id, next_revision);
+                        emitted_entity_ids.insert(entity_id);
+                    }
+                }
             }
         })
         .collect();
@@ -712,6 +762,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 created: Query<Entity, Added<#tag_ty>>,
                 updated: Query<Entity, #updated_filter>,
                 mut removed: RemovedComponents<#tag_ty>,
+                #( mut #opt_removed_reader_idents: RemovedComponents<<#opt_cfg_tys as DataTransferConfig>::DataType>, )*
                 snapshot: Query<( #( #snapshot_types, )* ), With<#tag_ty>>,
                 mut identity: IdentitySubsystem,
                 mut scene_tree: SceneTreeSubsystem,
@@ -720,8 +771,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 let any_created = !created.is_empty();
                 let any_updated = !updated.is_empty();
                 let any_removed = !removed.is_empty();
+                let any_opt_removed = #any_opt_removed_expr;
 
-                if !any_created && !any_updated && !any_removed {
+                if !any_created && !any_updated && !any_removed && !any_opt_removed {
                     return;
                 }
 
@@ -749,6 +801,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
+                let mut emitted_entity_ids: HashSet<i64> = HashSet::new();
+
                 let mut process_entity = |entity: Entity, is_created: bool| {
                     let eid_i64 = identity.get_identity(entity);
 
@@ -767,6 +821,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     if is_created || changed_candidate {
                         exporter.revision_cache.insert(eid_i64, next_revision);
+                        emitted_entity_ids.insert(eid_i64);
 
                         if is_created {
                             exporter.signals().on_created().emit(eid_i64, next_revision);
@@ -792,15 +847,20 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
+                let mut removed_entity_ids: HashSet<i64> = HashSet::new();
+
                 if any_removed {
                     for entity in removed.read() {
                         if let Some(entity_id) = identity.try_get_identity(entity) {
+                            removed_entity_ids.insert(entity_id);
                             #( #state_remove_blocks )*
                             exporter.cleanup_entity(entity_id);
                             exporter.signals().on_removed().emit(entity_id);
                         }
                     }
                 }
+
+                #( #opt_removed_apply_blocks )*
             }
 
             pub struct #plugin_ident;

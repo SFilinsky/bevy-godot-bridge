@@ -2,8 +2,9 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::{
+    Ident, Path, Result, Token,
     parse::{Parse, ParseStream},
-    parse_macro_input, Ident, Path, Result, Token,
+    parse_macro_input,
 };
 
 struct Spec {
@@ -143,7 +144,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 if found.len() > 1 {
                     panic!(
-                        "Multiple {} nodes found under BevyAppSingleton; expected exactly one singleton store",
+                        "Multiple {} nodes found under the owner node; expected exactly one singleton store",
                         stringify!(#state)
                     );
                 }
