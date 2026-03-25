@@ -83,6 +83,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 if *updated_revision < 0 {
                     C::update_dto(curr, data, identity);
+                    C::update_dto(prev, data, identity);
+                    C::update_dto(spare, data, identity);
                     *updated_revision = revision;
                     return true;
                 }

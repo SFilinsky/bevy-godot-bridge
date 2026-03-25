@@ -322,6 +322,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         if did_change {
                             changed_candidate = true;
                         }
+                    } else if !is_created {
+                        if #state_store_bind.implements(eid_i64) {
+                            #state_store_bind.remove_entity(eid_i64);
+                            changed_candidate = true;
+                        }
                     }
                 }
             }
