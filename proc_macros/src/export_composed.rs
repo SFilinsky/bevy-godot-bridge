@@ -506,6 +506,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             #[godot_api]
             impl #spawner_ident {
+                #[signal]
+                fn on_spawned(entity_id: i64, revision: i64);
+
+                #[signal]
+                fn on_despawned(entity_id: i64);
+
                 #[func]
                 fn resolve(owner: Gd<Node>) -> Option<Gd<#spawner_ident>> {
                     if !owner.is_instance_valid() {
@@ -636,7 +642,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     if let Some(mut meta) = self.entity_meta_cache.remove(&entity_id) {
                         if meta.is_instance_valid() {
                             custom_cleanup = meta.bind().is_custom_cleanup_enabled();
-                            meta.bind_mut().signals().on_removed().emit(entity_id);
+                            meta.bind_mut().signals().on_despawning().emit(entity_id);
                         }
                     }
 
@@ -648,6 +654,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 #[func]
+                fn get_spawned_entity_ids(&self) -> PackedInt64Array {
+                    let mut out = PackedInt64Array::new();
+                    for entity_id in self.spawned_roots.keys() {
+                        out.push(*entity_id);
+                    }
+                    out
+                }
+
+                #[func]
                 fn _on_created(&mut self, entity_id: i64, revision: i64) {
                     let Some(mut meta) = self.ensure_spawned_entity_meta(entity_id) else {
                         return;
@@ -656,6 +671,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let mut meta = meta.bind_mut();
                     meta.revision = revision;
                     meta.signals().on_change().emit(revision);
+                    self.signals().on_spawned().emit(entity_id, revision);
                 }
 
                 #[func]
@@ -672,6 +688,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[func]
                 fn _on_removed(&mut self, entity_id: i64) {
                     self.cleanup_entity(entity_id);
+                    self.signals().on_despawned().emit(entity_id);
                 }
             }
 

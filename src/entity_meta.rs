@@ -20,7 +20,7 @@ impl EntityMeta {
     pub fn on_change(revision: i64);
 
     #[signal]
-    pub fn on_removed(entity_id: i64);
+    pub fn on_despawning(entity_id: i64);
 
     #[func]
     pub fn set_custom_cleanup(&mut self, enabled: bool) {
