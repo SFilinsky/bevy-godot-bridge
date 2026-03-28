@@ -19,6 +19,9 @@ impl EntityMeta {
     #[signal]
     pub fn on_change(revision: i64);
 
+    #[signal]
+    pub fn on_removed(entity_id: i64);
+
     #[func]
     pub fn set_custom_cleanup(&mut self, enabled: bool) {
         self.custom_cleanup_enabled = enabled;
@@ -80,9 +83,6 @@ impl EntityMeta {
 
         registry.bind_mut().unregister_entity_meta(self.entity_id);
     }
-
-    #[func(virtual)]
-    pub fn on_removed(&mut self) {}
 }
 
 #[godot_api]
