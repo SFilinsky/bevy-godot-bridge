@@ -47,7 +47,7 @@ impl EntityRegistry {
 
         for (entity_id, meta) in self.metas.iter() {
             if meta.is_instance_valid() {
-                out.push(&meta.clone());
+                out.push(meta);
             } else {
                 stale_ids.push(*entity_id);
             }
