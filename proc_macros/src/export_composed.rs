@@ -636,9 +636,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     if let Some(mut meta) = self.entity_meta_cache.remove(&entity_id) {
                         if meta.is_instance_valid() {
                             custom_cleanup = meta.bind().is_custom_cleanup_enabled();
-                            if custom_cleanup {
-                                meta.bind_mut().on_removed();
-                            }
+                            meta.bind_mut().signals().on_removed().emit(entity_id);
                         }
                     }
 
