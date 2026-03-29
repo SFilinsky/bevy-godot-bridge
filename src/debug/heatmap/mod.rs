@@ -39,7 +39,7 @@ pub mod nodes {
 }
 
 pub mod resources {
-    use bevy::platform::collections::HashMap;
+    use bevy::platform::collections::{HashMap, HashSet};
     use bevy::prelude::Resource;
     use godot::builtin::Color;
     use godot::classes::{ImageTexture, MeshInstance3D, Node, StandardMaterial3D};
@@ -80,6 +80,7 @@ pub mod resources {
     #[derive(Resource, Default)]
     pub struct DebugHeatmapRequests {
         pub pending: HashMap<String, HeatmapRequest>,
+        pub pending_clear_key_set: HashSet<String>,
     }
 
     #[derive(Default, Clone)]
@@ -94,6 +95,8 @@ pub mod resources {
         pub mesh: Gd<MeshInstance3D>,
         pub material: Gd<StandardMaterial3D>,
         pub texture: Gd<ImageTexture>,
+        pub last_texture_signature: Option<u64>,
+        pub last_geometry_signature: Option<u64>,
     }
 
     #[derive(Default)]
@@ -103,6 +106,9 @@ pub mod resources {
     }
 
     impl DebugHeatmapRequests {
+        // Last operation per key within the frame wins:
+        // - set_heatmap* removes a pending clear for the same key
+        // - clear_heatmap removes a pending set for the same key
         pub fn set_heatmap_owned(
             &mut self,
             key: impl Into<String>,
@@ -117,6 +123,8 @@ pub mod resources {
                 data.len(),
                 "heatmap data size mismatch"
             );
+
+            self.pending_clear_key_set.remove(&key);
 
             self.pending.insert(
                 key,
@@ -138,6 +146,12 @@ pub mod resources {
             cfg: HeatmapConfig,
         ) {
             self.set_heatmap_owned(key, cols, rows, data.to_vec(), cfg);
+        }
+
+        pub fn clear_heatmap(&mut self, key: impl Into<String>) {
+            let key = key.into();
+            self.pending.remove(&key);
+            self.pending_clear_key_set.insert(key);
         }
     }
 }
@@ -175,11 +189,15 @@ pub mod subsystem {
         ) {
             self.requests.set_heatmap(key, cols, rows, data, cfg);
         }
+
+        pub fn clear_heatmap(&mut self, key: impl Into<String>) {
+            self.requests.clear_heatmap(key);
+        }
     }
 }
 
 pub mod systems {
-    use bevy::platform::collections::HashSet;
+    use bevy::platform::collections::hash_map::Entry;
     use bevy::prelude::{NonSendMut, ResMut};
     use godot::builtin::{NodePath, PackedByteArray, Vector2, Vector3};
     use godot::classes::base_material_3d::{
@@ -193,9 +211,54 @@ pub mod systems {
 
     use crate::debug::debug_manager::DebugRenderGateSubsystem;
     use crate::debug::heatmap::resources::{
-        DebugHeatmapDriver, DebugHeatmapRequests, HeatmapNode, Normalize,
+        DebugHeatmapDriver, DebugHeatmapRequests, HeatmapNode, HeatmapRequest, Normalize,
     };
     use crate::prelude::EDebugState;
+    use std::hash::{Hash, Hasher};
+
+    fn hash_texture_request(request: &HeatmapRequest) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+
+        request.columns.hash(&mut hasher);
+        request.rows.hash(&mut hasher);
+
+        request.config.tint_alpha.to_bits().hash(&mut hasher);
+        request.config.upscale.hash(&mut hasher);
+
+        request.config.colors.0.r.to_bits().hash(&mut hasher);
+        request.config.colors.0.g.to_bits().hash(&mut hasher);
+        request.config.colors.0.b.to_bits().hash(&mut hasher);
+        request.config.colors.0.a.to_bits().hash(&mut hasher);
+        request.config.colors.1.r.to_bits().hash(&mut hasher);
+        request.config.colors.1.g.to_bits().hash(&mut hasher);
+        request.config.colors.1.b.to_bits().hash(&mut hasher);
+        request.config.colors.1.a.to_bits().hash(&mut hasher);
+
+        match request.config.normalize {
+            Normalize::Auto => 0_u8.hash(&mut hasher),
+            Normalize::Fixed { min, max } => {
+                1_u8.hash(&mut hasher);
+                min.to_bits().hash(&mut hasher);
+                max.to_bits().hash(&mut hasher);
+            }
+        }
+
+        request.data.len().hash(&mut hasher);
+        for value in &request.data {
+            value.to_bits().hash(&mut hasher);
+        }
+
+        hasher.finish()
+    }
+
+    fn hash_geometry_request(request: &HeatmapRequest) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        request.config.map_size.to_bits().hash(&mut hasher);
+        request.config.world_pos.0.to_bits().hash(&mut hasher);
+        request.config.world_pos.1.to_bits().hash(&mut hasher);
+        request.config.world_pos.2.to_bits().hash(&mut hasher);
+        hasher.finish()
+    }
 
     pub(super) fn ensure_driver_parent(mut driver: NonSendMut<DebugHeatmapDriver>) {
         if driver.parent.is_some() {
@@ -229,6 +292,15 @@ pub mod systems {
         mut reqs: ResMut<DebugHeatmapRequests>,
         mut driver: NonSendMut<DebugHeatmapDriver>,
     ) {
+        let pending_clear_key_set = std::mem::take(&mut reqs.pending_clear_key_set);
+        for key in pending_clear_key_set {
+            reqs.pending.remove(&key);
+            if let Some(node) = driver.nodes.remove(&key) {
+                let mut mesh = node.mesh;
+                mesh.queue_free();
+            }
+        }
+
         let status = gate.get_status(EDebugState::Colliders, 1.0 / 32.0);
 
         if !status.should_rerender {
@@ -239,40 +311,57 @@ pub mod systems {
             return;
         };
 
-        let pending = std::mem::take(&mut reqs.pending);
-        let pending_keys: HashSet<String> = pending.keys().cloned().collect();
-
-        let stale_keys: Vec<String> = driver
-            .nodes
-            .keys()
-            .filter(|k| !pending_keys.contains(*k))
-            .cloned()
-            .collect();
-
-        for key in stale_keys {
-            if let Some(node) = driver.nodes.remove(&key) {
-                let mut mesh = node.mesh;
-                mesh.queue_free();
-            }
+        for node in driver.nodes.values() {
+            let mut mesh = node.mesh.clone();
+            mesh.set_visible(status.is_visible);
         }
 
-        for (key, request) in pending {
-            if !status.is_visible {
-                if let Some(entry) = driver.nodes.get(&key) {
-                    let mut mesh = entry.mesh.clone();
-                    mesh.set_visible(false);
-                }
-                continue;
-            }
+        let pending = std::mem::take(&mut reqs.pending);
 
-            let entry = if let Some(entry) = driver.nodes.get(&key) {
-                HeatmapNode {
-                    mesh: entry.mesh.clone(),
-                    material: entry.material.clone(),
-                    texture: entry.texture.clone(),
+        for (key, request) in pending {
+            let entry = match driver.nodes.entry(key.clone()) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    let mut mesh_instance = MeshInstance3D::new_alloc();
+
+                    let mut plane = PlaneMesh::new_gd();
+                    plane.set_size(Vector2::new(
+                        request.config.map_size,
+                        request.config.map_size,
+                    ));
+                    mesh_instance.set_mesh(&plane);
+
+                    let mut material = StandardMaterial3D::new_gd();
+                    material.set_shading_mode(ShadingMode::UNSHADED);
+                    material.set_transparency(Transparency::ALPHA);
+                    material.set_texture_filter(TextureFilter::LINEAR);
+
+                    let texture = ImageTexture::new_gd();
+                    material.set_texture(TextureParam::ALBEDO, &texture);
+                    mesh_instance.set_material_override(&material);
+
+                    mesh_instance.set_name(&key);
+                    parent.add_child(&mesh_instance);
+
+                    entry.insert(HeatmapNode {
+                        mesh: mesh_instance,
+                        material,
+                        texture,
+                        last_texture_signature: None,
+                        last_geometry_signature: None,
+                    })
                 }
-            } else {
-                let mut mesh_instance = MeshInstance3D::new_alloc();
+            };
+
+            let mut mesh_instance = entry.mesh.clone();
+            mesh_instance.set_visible(status.is_visible);
+
+            let geometry_signature = hash_geometry_request(&request);
+            if entry.last_geometry_signature != Some(geometry_signature) {
+                let (x, y, z) = request.config.world_pos;
+                let mut transform = mesh_instance.get_transform();
+                transform.origin = Vector3::new(x, y, z);
+                mesh_instance.set_transform(transform);
 
                 let mut plane = PlaneMesh::new_gd();
                 plane.set_size(Vector2::new(
@@ -281,41 +370,12 @@ pub mod systems {
                 ));
                 mesh_instance.set_mesh(&plane);
 
-                let mut material = StandardMaterial3D::new_gd();
-                material.set_shading_mode(ShadingMode::UNSHADED);
-                material.set_transparency(Transparency::ALPHA);
+                entry.last_geometry_signature = Some(geometry_signature);
+            }
 
-                material.set_texture_filter(TextureFilter::LINEAR);
-
-                let texture = ImageTexture::new_gd();
-                material.set_texture(TextureParam::ALBEDO, &texture);
-                mesh_instance.set_material_override(&material);
-
-                mesh_instance.set_name(&key);
-                parent.add_child(&mesh_instance);
-
-                let node = HeatmapNode {
-                    mesh: mesh_instance.clone(),
-                    material: material.clone(),
-                    texture: texture.clone(),
-                };
-                driver.nodes.insert(key.clone(), node);
-
-                HeatmapNode {
-                    mesh: mesh_instance,
-                    material,
-                    texture,
-                }
-            };
-
-            let mut mesh_instance = entry.mesh;
-            mesh_instance.set_visible(true);
-
-            {
-                let (x, y, z) = request.config.world_pos;
-                let mut transform = mesh_instance.get_transform();
-                transform.origin = Vector3::new(x, y, z);
-                mesh_instance.set_transform(transform);
+            let texture_signature = hash_texture_request(&request);
+            if entry.last_texture_signature == Some(texture_signature) {
+                continue;
             }
 
             let (boundary_low, boundary_high) = match request.config.normalize {
@@ -380,8 +440,9 @@ pub mod systems {
                 image.resize(src_cols * upscale, src_rows * upscale);
             }
 
-            let mut tex = entry.texture;
+            let mut tex = entry.texture.clone();
             tex.set_image(&image);
+            entry.last_texture_signature = Some(texture_signature);
         }
     }
 }
