@@ -2,9 +2,8 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::{
-    Ident, Path, Result, Token,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, Ident, Path, Result, Token,
 };
 
 struct Spec {
@@ -158,6 +157,41 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             #[func]
+            fn is_implemented_by_id(&self, entity_id: i64) -> bool {
+                if entity_id < 0 {
+                    return false;
+                }
+
+                self.implements(entity_id)
+            }
+
+            #[func]
+            fn is_implemented_by(&self, entity_meta: Gd<bevy_godot4::prelude::EntityMeta>) -> bool {
+                let Some(entity_id) = Self::entity_id_from_meta(&entity_meta) else {
+                    return false;
+                };
+
+                self.implements(entity_id)
+            }
+
+            fn entity_id_from_meta(entity_meta: &Gd<bevy_godot4::prelude::EntityMeta>) -> Option<i64> {
+                if !entity_meta.is_instance_valid() {
+                    return None;
+                }
+
+                let entity_id = {
+                    let bound = entity_meta.bind();
+                    bound.entity_id
+                };
+
+                if entity_id < 0 {
+                    return None;
+                }
+
+                Some(entity_id)
+            }
+
+            #[func]
             fn get_state(&self, entity_id: i64) -> Option<Gd<#dto>> {
                 self.curr_for(entity_id)
             }
@@ -179,18 +213,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             #[func]
             fn get_capability(entity_meta: Gd<bevy_godot4::prelude::EntityMeta>) -> Option<Gd<#state>> {
-                if !entity_meta.is_instance_valid() {
+                let Some(entity_id) = Self::entity_id_from_meta(&entity_meta) else {
                     return None;
-                }
-
-                let entity_id = {
-                    let bound = entity_meta.bind();
-                    bound.entity_id
                 };
-
-                if entity_id < 0 {
-                    return None;
-                }
 
                 let tree = entity_meta.get_tree()?;
                 let root = tree.get_root()?;
@@ -204,10 +229,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
-            #[func]
-            fn has_capability(entity_meta: Gd<bevy_godot4::prelude::EntityMeta>) -> bool {
-                Self::get_capability(entity_meta).is_some()
-            }
         }
 
         #[godot_api]
