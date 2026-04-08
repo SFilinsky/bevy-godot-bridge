@@ -1,4 +1,4 @@
-﻿use bevy::app::App;
+use bevy::app::App;
 
 pub trait AppAction: 'static {
     fn apply(self: Box<Self>, app: &mut App);

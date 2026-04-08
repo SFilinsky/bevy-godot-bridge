@@ -1,4 +1,4 @@
-﻿use godot::prelude::{Gd, GodotClass, Inherits, Node};
+use godot::prelude::{Gd, GodotClass, Inherits, Node};
 
 /**
  * Collect all descendants of `root` that are (or inherit) `T`.
