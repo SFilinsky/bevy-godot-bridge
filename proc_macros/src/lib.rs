@@ -1,3 +1,4 @@
+mod action_pipeline;
 mod bevy_app_impl;
 mod export_component_impl;
 mod export_component_new_impl;
@@ -47,4 +48,9 @@ pub fn import_queue(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn with_state_node(input: TokenStream) -> TokenStream {
     with_state_node::expand(input)
+}
+
+#[proc_macro]
+pub fn action_pipeline(input: TokenStream) -> TokenStream {
+    action_pipeline::expand(input)
 }
