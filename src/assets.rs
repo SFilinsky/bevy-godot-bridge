@@ -3,7 +3,7 @@ use bevy::{
     asset::{AssetLoader, LoadContext, LoadedAsset},
     utils::BoxedFuture,
 };
-use godot::engine::{resource_loader::CacheMode, ResourceLoader};
+use godot::engine::{ResourceLoader, resource_loader::CacheMode};
 
 pub struct GodotAssetsPlugin;
 impl Plugin for GodotAssetsPlugin {
@@ -23,8 +23,8 @@ impl Plugin for GodotAssetsPlugin {
 
 /// Allow for loading godot resources via Bevy's assets framework, can be used with bevy_asset_loader
 ///
-/// This is not a recommended feature due to issues with referencing a PackedScene resource 
-/// simultaneously in Godot during loading - and there currently isn't an easy way to make asset 
+/// This is not a recommended feature due to issues with referencing a PackedScene resource
+/// simultaneously in Godot during loading - and there currently isn't an easy way to make asset
 /// loading into a NonSend Bevy Resource single-threaded.
 #[derive(Default)]
 pub struct GodotResourceLoader;

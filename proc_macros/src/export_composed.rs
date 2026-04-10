@@ -4,9 +4,9 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use std::collections::HashSet;
 use syn::{
-    bracketed,
+    Ident, LitStr, Path, Result, Token, Type, bracketed,
     parse::{Parse, ParseStream},
-    parse_macro_input, Ident, LitStr, Path, Result, Token, Type,
+    parse_macro_input,
 };
 
 #[derive(Clone)]

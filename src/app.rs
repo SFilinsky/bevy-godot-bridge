@@ -2,7 +2,7 @@ use bevy::app::App;
 use godot::{
     classes::{INode, Node},
     obj::Base,
-    prelude::{godot_api, GodotClass},
+    prelude::{GodotClass, godot_api},
 };
 
 use crate::app_action_queue::ActionQueue;
@@ -10,18 +10,18 @@ use crate::import::plugins::IdentitySubsystemPlugin;
 use crate::performance::init_performance_tracing;
 use crate::prelude::*;
 use crate::scene_tree::plugins::SceneTreeSubsystemPlugin;
+use bevy::DefaultPlugins;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::{Fixed, NonSend, Time, Virtual, World};
 use bevy::time::TimeUpdateStrategy;
-use bevy::DefaultPlugins;
 use bevy_godot4::scene::PackedScenePlugin;
 use godot::obj::Singleton;
 use godot::prelude::{Gd, SceneTree};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::{
-    panic::{catch_unwind, resume_unwind, AssertUnwindSafe},
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     sync::Mutex,
 };
 
