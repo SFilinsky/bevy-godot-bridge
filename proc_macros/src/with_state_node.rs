@@ -2,8 +2,9 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::{
+    Ident, Path, Result, Token,
     parse::{Parse, ParseStream},
-    parse_macro_input, Ident, Path, Result, Token,
+    parse_macro_input,
 };
 
 struct Spec {

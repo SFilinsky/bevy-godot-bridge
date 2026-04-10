@@ -3,9 +3,9 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{format_ident, quote};
 use syn::{
-    bracketed,
+    Ident, Path, Result, Token, Type, bracketed,
     parse::{Parse, ParseStream},
-    parse_macro_input, Ident, Path, Result, Token, Type,
+    parse_macro_input,
 };
 
 struct CheckSpec {

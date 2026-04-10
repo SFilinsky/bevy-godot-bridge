@@ -1,9 +1,9 @@
-use crate::debug::debug_manager::{get_debug_flag, EDebugState};
+use crate::debug::debug_manager::{EDebugState, get_debug_flag};
 use godot::builtin::{Array, NodePath};
 use godot::classes::{INode, Node};
 use godot::meta::ToGodot;
 use godot::obj::{Base, WithBaseField};
-use godot::prelude::{godot_api, GodotClass};
+use godot::prelude::{GodotClass, godot_api};
 
 const STATE_OFF_BIT: i64 = 1 << 0;
 const STATE_COLLIDERS_BIT: i64 = 1 << 1;
