@@ -3,9 +3,9 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{format_ident, quote};
 use syn::{
-    Ident, Path, Result, Token, Type, bracketed,
+    bracketed,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, Ident, Path, Result, Token, Type,
 };
 
 struct CheckSpec {
@@ -860,10 +860,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 static_data_cache: Option<Gd<StaticDataDto>>,
             }
 
-            static REQ_SEQ: AtomicU64 = AtomicU64::new(1);
+            static ACTION_INSTANCE_SEQ: AtomicU64 = AtomicU64::new(1);
 
             fn next_action_instance_id() -> ActionInstanceId {
-                REQ_SEQ.fetch_add(1, Ordering::Relaxed)
+                ACTION_INSTANCE_SEQ.fetch_add(1, Ordering::Relaxed)
             }
 
             #[godot_api]
@@ -921,6 +921,24 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             #[godot_api]
             impl #node_name {
+                #[func]
+                fn resolve(owner: Gd<Node>) -> Option<Gd<#node_name>> {
+                    if !owner.is_instance_valid() {
+                        return None;
+                    }
+
+                    let mut found = bevy_godot4::prelude::collect_children::<#node_name>(owner, false);
+
+                    if found.len() > 1 {
+                        panic!(
+                            "Multiple {} nodes found under the owner node; expected exactly one",
+                            stringify!(#node_name)
+                        );
+                    }
+
+                    found.pop()
+                }
+
                 #[func]
                 fn start(&mut self) -> Gd<#instance_name> {
                     let action_instance_id = next_action_instance_id();
