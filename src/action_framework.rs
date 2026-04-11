@@ -32,9 +32,18 @@ impl ActionStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExecuteResult {
+#[derive(Debug, Clone)]
+pub struct ExecuteResult<TPayload> {
     pub ok: bool,
+    pub payload: TPayload,
+}
+
+pub trait ActionParams: Clone + Default {
+    type FullParams: Clone;
+
+    fn to_full(&self) -> Option<Self::FullParams>;
+    fn from_full(full: &Self::FullParams) -> Self;
+    fn merge_from(&mut self, other: &Self);
 }
 
 pub type ActionInstanceId = u64;
@@ -142,4 +151,4 @@ pub trait ExecuteAction<FullParams, ExecuteResult> {
 }
 use godot::classes::RefCounted;
 use godot::obj::Base;
-use godot::prelude::{GodotClass, godot_api};
+use godot::prelude::{godot_api, GodotClass};

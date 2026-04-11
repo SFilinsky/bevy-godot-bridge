@@ -35,7 +35,7 @@ pub mod prelude {
         SystemDeltaTimerSubsystem,
     };
     pub use crate::action_framework::{
-        ActionCheckStatus, ActionCheckStatusCodes, ActionInstanceId, ActionStatus,
+        ActionCheckStatus, ActionCheckStatusCodes, ActionInstanceId, ActionParams, ActionStatus,
         ActionStatusCodes, AllowanceSummary, Check, CheckAdapter, CheckReason, CheckReportLike,
         Criterion, ExecuteAction, ExecuteResult, ExecutionId,
     };

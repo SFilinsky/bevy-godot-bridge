@@ -3,9 +3,9 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{format_ident, quote};
 use syn::{
-    Ident, Path, Result, Token, Type, bracketed,
+    bracketed,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, Ident, Path, Result, Token, Type,
 };
 
 struct CheckSpec {
@@ -25,7 +25,7 @@ impl Parse for CheckSpec {
 struct Spec {
     name: Ident,
     partial_params: Type,
-    full_params: Type,
+    execute_result_payload: Type,
     checks: Vec<CheckSpec>,
     execute_subsystem: Path,
 }
@@ -34,7 +34,7 @@ impl Parse for Spec {
     fn parse(input: ParseStream) -> Result<Self> {
         let mut name: Option<Ident> = None;
         let mut partial_params: Option<Type> = None;
-        let mut full_params: Option<Type> = None;
+        let mut execute_result_payload: Option<Type> = None;
         let mut checks: Option<Vec<CheckSpec>> = None;
         let mut execute_subsystem: Option<Path> = None;
 
@@ -45,7 +45,7 @@ impl Parse for Spec {
             match key.to_string().as_str() {
                 "name" => name = Some(input.parse()?),
                 "partial_params" => partial_params = Some(input.parse()?),
-                "full_params" => full_params = Some(input.parse()?),
+                "execute_result_payload" => execute_result_payload = Some(input.parse()?),
                 "checks" => {
                     let content;
                     bracketed!(content in input);
@@ -60,7 +60,7 @@ impl Parse for Spec {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
-                            "Unknown key `{other}`; expected `name`, `partial_params`, `full_params`, `checks`, `execute_subsystem`"
+                            "Unknown key `{other}`; expected `name`, `partial_params`, `execute_result_payload`, `checks`, `execute_subsystem`"
                         ),
                     ));
                 }
@@ -83,10 +83,10 @@ impl Parse for Spec {
                 "action_pipeline!: missing `partial_params: Type`",
             )
         })?;
-        let full_params = full_params.ok_or_else(|| {
+        let execute_result_payload = execute_result_payload.ok_or_else(|| {
             syn::Error::new(
                 Span::call_site(),
-                "action_pipeline!: missing `full_params: Type`",
+                "action_pipeline!: missing `execute_result_payload: Type`",
             )
         })?;
         let checks = checks.ok_or_else(|| {
@@ -105,7 +105,7 @@ impl Parse for Spec {
         Ok(Self {
             name,
             partial_params,
-            full_params,
+            execute_result_payload,
             checks,
             execute_subsystem,
         })
@@ -130,7 +130,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         format_ident!("{}ActionCheckReportTransferConfig", action_name_ident);
 
     let partial_params = spec.partial_params;
-    let full_params = spec.full_params;
+    let execute_result_payload = spec.execute_result_payload;
     let checks = spec.checks;
     let execute_subsystem = spec.execute_subsystem;
 
@@ -299,15 +299,19 @@ pub fn expand(input: TokenStream) -> TokenStream {
             pub type ActionInstanceId = ::bevy_godot4::action_framework::ActionInstanceId;
             pub type ExecutionId = ::bevy_godot4::action_framework::ExecutionId;
             pub type CheckReason = ::bevy_godot4::action_framework::CheckReason;
+            type FullParams = <#partial_params as ::bevy_godot4::action_framework::ActionParams>::FullParams;
+            type ExecutePayload = #execute_result_payload;
+            type ExecuteResultData = ::bevy_godot4::action_framework::ExecuteResult<ExecutePayload>;
             type StaticData = <#execute_subsystem<'static, 'static> as ::bevy_godot4::action_framework::ExecuteAction<
-                #full_params,
-                ::bevy_godot4::action_framework::ExecuteResult,
+                FullParams,
+                ExecuteResultData,
             >>::StaticData;
             #( #check_type_alias_defs )*
             #( #check_subsystem_type_alias_defs )*
             type ReportData = #check_report_name;
             type ReportDto = #check_report_dto_name;
             type PartialParamsDto = <#partial_params as DataTransferConfig>::DtoType;
+            type ExecutePayloadDto = <ExecutePayload as DataTransferConfig>::DtoType;
             type StaticDataDto = <StaticData as DataTransferConfig>::DtoType;
 
             #[derive(Debug, Clone)]
@@ -428,6 +432,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 Check(
                     ActionInstanceId,
                     Gd<ReportDto>,
+                    Gd<ExecutePayloadDto>,
                     CheckReason,
                 ),
                 ExecuteEnqueued {
@@ -436,8 +441,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 },
                 ExecuteDone {
                     execution_id: ExecutionId,
-                    result: ::bevy_godot4::action_framework::ExecuteResult,
+                    result: ExecuteResultData,
                     report: Gd<ReportDto>,
+                    payload: Gd<ExecutePayloadDto>,
                 },
                 DoneAck {
                     action_instance_id: ActionInstanceId,
@@ -453,7 +459,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 },
                 ExecuteDone {
                     execution_id: ExecutionId,
-                    result: ::bevy_godot4::action_framework::ExecuteResult,
+                    result: ExecuteResultData,
                     report: ReportData,
                 },
                 DoneAck {
@@ -510,7 +516,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         params: #partial_params::default(),
                         dirty: false,
                     });
-                    entry.params.merge_from(&incoming);
+                    ::bevy_godot4::action_framework::ActionParams::merge_from(&mut entry.params, &incoming);
                 }
 
                 pub fn mark_dirty(&mut self, action_instance_id: ActionInstanceId) {
@@ -519,8 +525,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                pub fn resolve_full_params(&self, action_instance_id: ActionInstanceId) -> Option<#full_params> {
-                    self.entries.get(&action_instance_id)?.params.to_full()
+                pub fn resolve_full_params(&self, action_instance_id: ActionInstanceId) -> Option<FullParams> {
+                    ::bevy_godot4::action_framework::ActionParams::to_full(
+                        &self.entries.get(&action_instance_id)?.params,
+                    )
                 }
 
                 pub fn get_entry(&self, action_instance_id: &ActionInstanceId) -> Option<&Entry> {
@@ -579,24 +587,27 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 pub(crate) fn check(
                     &mut self,
-                    params: #full_params,
+                    params: FullParams,
                 ) -> #check_report_name {
-                    let pp = #partial_params::from_full(&params);
+                    let pp = ::bevy_godot4::action_framework::ActionParams::from_full(&params);
                     self.check_partial(&pp)
                 }
 
                 pub(crate) fn execute(
                     &mut self,
-                    params: #full_params,
+                    params: FullParams,
                 ) -> (
-                    ::bevy_godot4::action_framework::ExecuteResult,
+                    ExecuteResultData,
                     #check_report_name,
                 ) {
-                    let partial = #partial_params::from_full(&params);
+                    let partial = ::bevy_godot4::action_framework::ActionParams::from_full(&params);
                     let report = self.check_partial(&partial);
                     if !::bevy_godot4::action_framework::CheckReportLike::is_allowed(&report) {
                         return (
-                            ::bevy_godot4::action_framework::ExecuteResult { ok: false },
+                            ExecuteResultData {
+                                ok: false,
+                                payload: ExecutePayload::default(),
+                            },
                             report,
                         );
                     }
@@ -605,8 +616,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let result = {
                         let mut execution_subsystem = self.subsystems.p0();
                         <#execute_subsystem<'_, '_> as ::bevy_godot4::action_framework::ExecuteAction<
-                            #full_params,
-                            ::bevy_godot4::action_framework::ExecuteResult,
+                            FullParams,
+                            ExecuteResultData,
                         >>::execute_action(&mut execution_subsystem, static_data, params)
                     };
 
@@ -707,7 +718,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         let report = action.check_partial(&partial);
                         action.manager.push_out(OutResponse::ExecuteDone {
                             execution_id,
-                            result: ::bevy_godot4::action_framework::ExecuteResult { ok: false },
+                            result: ExecuteResultData {
+                                ok: false,
+                                payload: ExecutePayload::default(),
+                            },
                             report,
                         });
                     }
@@ -743,9 +757,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                 &report,
                                 &mut identity,
                             );
+                            let default_payload = ExecutePayload::default();
+                            let payload_dto = <ExecutePayload as DataTransferConfig>::from_data(
+                                &default_payload,
+                                &mut identity,
+                            );
                             push_response(ApiResponse::Check(
                                 action_instance_id,
                                 dto,
+                                payload_dto,
                                 reason,
                             ));
                         }
@@ -767,10 +787,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                 &report,
                                 &mut identity,
                             );
+                            let payload_dto = <ExecutePayload as DataTransferConfig>::from_data(
+                                &result.payload,
+                                &mut identity,
+                            );
                             push_response(ApiResponse::ExecuteDone {
                                 execution_id,
                                 result,
                                 report: dto,
+                                payload: payload_dto,
                             });
                         }
                         OutResponse::DoneAck { action_instance_id } => {
@@ -806,7 +831,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 #[signal]
-                fn on_action_status_changed(kind: i64, report: Gd<ReportDto>);
+                fn on_action_status_changed(kind: i64, report: Gd<ReportDto>, result: Gd<ExecutePayloadDto>);
 
                 #[func]
                 fn update_params(&mut self, params: Gd<PartialParamsDto>) -> Gd<Self> {
@@ -871,7 +896,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 fn process(&mut self, _delta: f64) {
                     for response in drain_responses() {
                         match response {
-                            ApiResponse::Check(action_instance_id, report, reason) => {
+                            ApiResponse::Check(action_instance_id, report, result, reason) => {
                                 if let Some(instance) = self.instances_by_action_instance_id.get(&action_instance_id) {
                                     let _ = reason;
                                     instance
@@ -880,6 +905,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                         .emit(
                                             ::bevy_godot4::action_framework::ActionStatus::Checked.as_i64(),
                                             &report,
+                                            &result,
                                         );
                                 }
                             }
@@ -889,7 +915,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                     self.instances_by_execution_id.insert(execution_id, instance);
                                 }
                             }
-                            ApiResponse::ExecuteDone { execution_id, result, report } => {
+                            ApiResponse::ExecuteDone {
+                                execution_id,
+                                result,
+                                report,
+                                payload,
+                            } => {
                                 if let Some(mut instance) = self.instances_by_execution_id.remove(&execution_id) {
                                     instance
                                         .signals()
@@ -903,6 +934,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                                     .as_i64()
                                             },
                                             &report,
+                                            &payload,
                                         );
                                     instance.bind_mut().pending_execution_id = None;
                                 }
