@@ -421,13 +421,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 Done,
             }
 
-            #[derive(Clone)]
             pub struct ApiRequest {
                 pub action_instance_id: Option<ActionInstanceId>,
                 pub kind: ApiRequestKind,
             }
 
-            #[derive(Clone)]
             pub enum ApiResponse {
                 Check(
                     ActionInstanceId,
@@ -450,7 +448,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 },
             }
 
-            #[derive(Clone)]
             pub enum OutResponse {
                 Check(ActionInstanceId, ReportData, CheckReason),
                 ExecuteEnqueued {
@@ -466,6 +463,35 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     action_instance_id: ActionInstanceId,
                 },
             }
+
+            fn _assert_generated_bounds() {
+                fn _partial_params<T>()
+                where
+                    T: ::bevy_godot4::action_framework::ActionParams
+                        + DataTransferConfig<DataType = T>
+                        + Clone
+                        + Default,
+                {
+                }
+
+                fn _execute_payload<T>()
+                where
+                    T: DataTransferConfig<DataType = T> + Default,
+                {
+                }
+
+                fn _static_data<T>()
+                where
+                    T: DataTransferConfig<DataType = T>,
+                {
+                }
+
+                _partial_params::<#partial_params>();
+                _execute_payload::<ExecutePayload>();
+                _static_data::<StaticData>();
+            }
+
+            const _: fn() = _assert_generated_bounds;
 
             thread_local! {
                 static REQUESTS: RefCell<VecDeque<ApiRequest>> = const { RefCell::new(VecDeque::new()) };
@@ -606,7 +632,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         return (
                             ExecuteResultData {
                                 ok: false,
-                                payload: ExecutePayload::default(),
+                                payload: None,
                             },
                             report,
                         );
@@ -720,7 +746,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             execution_id,
                             result: ExecuteResultData {
                                 ok: false,
-                                payload: ExecutePayload::default(),
+                                payload: None,
                             },
                             report,
                         });
@@ -787,10 +813,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                 &report,
                                 &mut identity,
                             );
-                            let payload_dto = <ExecutePayload as DataTransferConfig>::from_data(
-                                &result.payload,
-                                &mut identity,
-                            );
+                            let payload_dto = if let Some(payload) = result.payload.as_ref() {
+                                <ExecutePayload as DataTransferConfig>::from_data(payload, &mut identity)
+                            } else {
+                                let default_payload = ExecutePayload::default();
+                                <ExecutePayload as DataTransferConfig>::from_data(
+                                    &default_payload,
+                                    &mut identity,
+                                )
+                            };
                             push_response(ApiResponse::ExecuteDone {
                                 execution_id,
                                 result,
@@ -831,7 +862,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 #[signal]
-                fn on_action_status_changed(kind: i64, report: Gd<ReportDto>, result: Gd<ExecutePayloadDto>);
+                fn on_action_status_changed(kind: i64, report: Gd<ReportDto>, payload: Gd<ExecutePayloadDto>);
 
                 #[func]
                 fn update_params(&mut self, params: Gd<PartialParamsDto>) -> Gd<Self> {
@@ -896,7 +927,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 fn process(&mut self, _delta: f64) {
                     for response in drain_responses() {
                         match response {
-                            ApiResponse::Check(action_instance_id, report, result, reason) => {
+                            ApiResponse::Check(action_instance_id, report, payload, reason) => {
                                 if let Some(instance) = self.instances_by_action_instance_id.get(&action_instance_id) {
                                     let _ = reason;
                                     instance
@@ -905,7 +936,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                         .emit(
                                             ::bevy_godot4::action_framework::ActionStatus::Checked.as_i64(),
                                             &report,
-                                            &result,
+                                            &payload,
                                         );
                                 }
                             }
