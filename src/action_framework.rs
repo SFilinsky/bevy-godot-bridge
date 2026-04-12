@@ -35,7 +35,7 @@ impl ActionStatus {
 #[derive(Debug, Clone)]
 pub struct ExecuteResult<TPayload> {
     pub ok: bool,
-    pub payload: TPayload,
+    pub payload: Option<TPayload>,
 }
 
 pub trait ActionParams: Clone + Default {
