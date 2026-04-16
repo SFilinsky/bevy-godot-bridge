@@ -106,8 +106,10 @@ fn spawn_scene(
     mut commands: Commands,
     mut new_scenes: Query<(&mut GodotScene, Entity), Without<GodotSceneSpawned>>,
     #[cfg(feature = "assets")] mut assets: ResMut<Assets<ErasedGdResource>>,
-    mut scene_tree: SceneTreeSubsystem,
+    app: BevyAppSubsystem,
 ) {
+    let mut app_host = app.host_node();
+
     for (mut scene, ent) in new_scenes.iter_mut() {
         let packed_scene = match &mut scene.resource {
             GodotSceneResource::Resource(res) => res.get(),
@@ -127,20 +129,7 @@ fn spawn_scene(
             .instantiate()
             .unwrap();
 
-        match scene_tree
-            .get()
-            .get_root()
-            .unwrap()
-            .get_node_or_null("BevyAppSingleton")
-        {
-            Some(mut app) => app.add_child(&instance),
-            None => {
-                tracing::error!(
-                    "attempted to add a child to the BevyAppSingleton autoload, but the BevyAppSingleton autoload wasn't found"
-                );
-                return;
-            }
-        }
+        app_host.add_child(&instance);
 
         if let Some(transform) = &scene.transform {
             match transform {

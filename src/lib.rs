@@ -4,6 +4,7 @@ pub use godot;
 pub mod action_framework;
 mod app;
 mod app_action_queue;
+mod bevy_app_subsystem;
 #[cfg(feature = "assets")]
 mod assets;
 mod debug;
