@@ -1,8 +1,10 @@
+pub use crate::bevy_app_subsystem::BevyAppSubsystem;
+use crate::bevy_app_subsystem::{BevyAppHostPlugin, BevyAppIdAllocatorRef};
 use bevy::app::App;
 use godot::{
     classes::{INode, Node},
-    obj::Base,
-    prelude::{GodotClass, godot_api},
+    obj::{Base, WithBaseField},
+    prelude::{godot_api, GodotClass},
 };
 
 use crate::app_action_queue::ActionQueue;
@@ -10,18 +12,16 @@ use crate::import::plugins::IdentitySubsystemPlugin;
 use crate::performance::init_performance_tracing;
 use crate::prelude::*;
 use crate::scene_tree::plugins::SceneTreeSubsystemPlugin;
-use bevy::DefaultPlugins;
-use bevy::ecs::system::SystemParam;
-use bevy::prelude::{Fixed, NonSend, Time, Virtual, World};
+use bevy::prelude::{Fixed, Time, Virtual, World};
 use bevy::time::TimeUpdateStrategy;
+use bevy::DefaultPlugins;
 use bevy_godot4::scene::PackedScenePlugin;
 use godot::obj::Singleton;
-use godot::prelude::{Gd, SceneTree};
-use std::marker::PhantomData;
-use std::sync::Arc;
+use godot::prelude::Gd;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 use std::{
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    panic::{catch_unwind, resume_unwind, AssertUnwindSafe},
     sync::Mutex,
 };
 
@@ -33,28 +33,6 @@ lazy_static::lazy_static! {
 #[derive(Default, bevy::prelude::Resource)]
 struct GodotClock {
     last_usec: Option<u64>,
-}
-
-#[derive(SystemParam)]
-pub struct BevyAppSubsystem<'w, 's> {
-    allocator: NonSend<'w, BevyAppIdAllocatorRef>,
-    phantom: PhantomData<&'s ()>,
-}
-
-impl BevyAppSubsystem<'_, '_> {
-    pub fn alloc_entity_id(&mut self) -> i64 {
-        self.allocator.0.fetch_add(1, Ordering::Relaxed)
-    }
-}
-
-#[doc(hidden)]
-#[derive(Debug)]
-pub(crate) struct BevyAppIdAllocatorRef(pub(crate) Arc<AtomicI64>);
-
-impl BevyAppIdAllocatorRef {
-    pub(crate) fn new(id_counter: Arc<AtomicI64>) -> Self {
-        Self(id_counter)
-    }
 }
 
 #[derive(Debug)]
@@ -142,44 +120,7 @@ impl BevyApp {
     }
 
     pub fn find_for(host: &Gd<Node>) -> Result<Gd<Self>, BevyAppLookupError> {
-        // 1) parent chain (your existing method)
-        if let Ok(app) = Self::find_in_parents(host) {
-            return Ok(app);
-        }
-
-        // 2) singleton at /root
-        let tree = host.get_tree().ok_or(BevyAppLookupError::NoSceneTree)?;
-        Self::find_singleton(&tree)
-    }
-
-    /// Find BevyApp by scanning `/root/BevyAppSingleton`.
-    ///
-    /// This is the recommended strategy for nodes that are not children of BevyApp.
-    fn find_singleton(tree: &Gd<SceneTree>) -> Result<Gd<Self>, BevyAppLookupError> {
-        let root = tree.get_root().ok_or(BevyAppLookupError::NoRoot)?;
-
-        let Some(node) = root.get_node_or_null("BevyAppSingleton") else {
-            return Err(BevyAppLookupError::SingletonMissing);
-        };
-
-        node.try_cast::<BevyApp>()
-            .map_err(|_| BevyAppLookupError::WrongType)
-    }
-
-    /// Find the nearest BevyApp in the parent chain starting at `start`.
-    ///
-    /// This is multi-instance safe: the "current instance" is determined by scene tree locality.
-    fn find_in_parents(start: &Gd<Node>) -> Result<Gd<BevyApp>, String> {
-        let mut cur: Option<Gd<Node>> = Some(start.clone());
-
-        while let Some(node) = cur {
-            if let Ok(app) = node.clone().try_cast::<BevyApp>() {
-                return Ok(app);
-            }
-            cur = node.get_parent();
-        }
-
-        Err("No BevyApp found in parent chain. Importer must be under a BevyApp node.".to_string())
+        crate::bevy_app_subsystem::find_for(host)
     }
 
     /// Run a closure with a mutable reference to this instance's Bevy World.
@@ -222,6 +163,7 @@ impl INode for BevyApp {
             .add_plugins(PackedScenePlugin)
             .add_plugins(SceneTreeSubsystemPlugin)
             .add_plugins(IdentitySubsystemPlugin)
+            .add_plugins(BevyAppHostPlugin::with_host(self.base().clone().upcast()))
             .insert_non_send_resource(BevyAppIdAllocatorRef::new(self.next_entity_id.clone()));
 
         (APP_BUILDER_FN.lock().unwrap().as_mut().unwrap())(&mut app);
