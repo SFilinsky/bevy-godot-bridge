@@ -289,12 +289,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use ::bevy::prelude::*;
             use ::bevy::ecs::system::SystemParam;
             use ::bevy_godot4::prelude::DataTransferConfig;
+            use ::bevy_godot4::prelude::BevyApp;
             use ::godot::classes::{Node, RefCounted};
             use ::godot::obj::{Base, Gd};
             use ::godot::prelude::*;
-            use ::std::cell::RefCell;
             use ::std::collections::{HashMap, VecDeque};
-            use ::std::sync::atomic::{AtomicU64, Ordering};
 
             pub type ActionInstanceId = ::bevy_godot4::action_framework::ActionInstanceId;
             pub type ExecutionId = ::bevy_godot4::action_framework::ExecutionId;
@@ -493,25 +492,90 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             const _: fn() = _assert_generated_bounds;
 
-            thread_local! {
-                static REQUESTS: RefCell<VecDeque<ApiRequest>> = const { RefCell::new(VecDeque::new()) };
-                static RESPONSES: RefCell<VecDeque<ApiResponse>> = const { RefCell::new(VecDeque::new()) };
+            #[derive(Default)]
+            struct ApiRequestQueue {
+                q: VecDeque<ApiRequest>,
             }
 
-            pub fn enqueue_request(req: ApiRequest) {
-                REQUESTS.with(|q| q.borrow_mut().push_back(req));
+            #[derive(Default)]
+            struct ApiResponseQueue {
+                q: VecDeque<ApiResponse>,
             }
 
-            pub fn drain_requests() -> Vec<ApiRequest> {
-                REQUESTS.with(|q| q.borrow_mut().drain(..).collect())
+            #[derive(Resource, Default, Debug)]
+            struct ActionInstanceSeq {
+                next: ActionInstanceId,
             }
 
-            pub fn push_response(resp: ApiResponse) {
-                RESPONSES.with(|q| q.borrow_mut().push_back(resp));
+            #[derive(SystemParam)]
+            struct ActionIoSubsystem<'w, 's> {
+                requests: NonSendMut<'w, ApiRequestQueue>,
+                responses: NonSendMut<'w, ApiResponseQueue>,
+                seq: ResMut<'w, ActionInstanceSeq>,
+                phantom: ::std::marker::PhantomData<&'s ()>,
             }
 
-            pub fn drain_responses() -> Vec<ApiResponse> {
-                RESPONSES.with(|q| q.borrow_mut().drain(..).collect())
+            impl ActionIoSubsystem<'_, '_> {
+                fn extend_requests(&mut self, reqs: Vec<ApiRequest>) {
+                    self.requests.q.extend(reqs);
+                }
+
+                fn drain_requests(&mut self) -> Vec<ApiRequest> {
+                    self.requests.q.drain(..).collect()
+                }
+
+                fn push_response(&mut self, resp: ApiResponse) {
+                    self.responses.q.push_back(resp);
+                }
+
+                fn drain_responses(&mut self) -> Vec<ApiResponse> {
+                    self.responses.q.drain(..).collect()
+                }
+
+                fn next(&mut self) -> ActionInstanceId {
+                    self.seq.next = self.seq.next.wrapping_add(1);
+                    self.seq.next
+                }
+            }
+
+            fn enqueue_requests_for_app(app: &mut Gd<BevyApp>, reqs: Vec<ApiRequest>) {
+                app.bind_mut().with_world_mut(|world: &mut World| {
+                    let mut state: ::bevy::ecs::system::SystemState<ActionIoSubsystem<'_, '_>> =
+                        ::bevy::ecs::system::SystemState::new(world);
+                    {
+                        let mut io = state.get_mut(world);
+                        io.extend_requests(reqs);
+                    }
+                    state.apply(world);
+                });
+            }
+
+            fn drain_responses_for_app(app: &mut Gd<BevyApp>) -> Vec<ApiResponse> {
+                let mut drained: Vec<ApiResponse> = Vec::new();
+                app.bind_mut().with_world_mut(|world: &mut World| {
+                    let mut state: ::bevy::ecs::system::SystemState<ActionIoSubsystem<'_, '_>> =
+                        ::bevy::ecs::system::SystemState::new(world);
+                    drained = {
+                        let mut io = state.get_mut(world);
+                        io.drain_responses()
+                    };
+                    state.apply(world);
+                });
+                drained
+            }
+
+            fn next_action_instance_id_for_app(app: &mut Gd<BevyApp>) -> ActionInstanceId {
+                let mut id: ActionInstanceId = 0;
+                app.bind_mut().with_world_mut(|world: &mut World| {
+                    let mut state: ::bevy::ecs::system::SystemState<ActionIoSubsystem<'_, '_>> =
+                        ::bevy::ecs::system::SystemState::new(world);
+                    id = {
+                        let mut io = state.get_mut(world);
+                        io.next()
+                    };
+                    state.apply(world);
+                });
+                id
             }
 
             #[derive(Debug, Clone)]
@@ -653,9 +717,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             pub fn api_drain_system<'w, 's>(
                 mut manager: ResMut<Manager>,
+                mut io: ActionIoSubsystem,
                 mut identity: ::bevy_godot4::prelude::IdentitySubsystem<'w, 's>,
             ) {
-                for req in drain_requests() {
+                for req in io.drain_requests() {
                     match req.kind {
                         ApiRequestKind::UpdateParams(params) => {
                             let Some(action_instance_id) = req.action_instance_id else {
@@ -774,6 +839,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             pub fn publish_out_system<'w, 's>(
                 mut manager: ResMut<Manager>,
+                mut io: ActionIoSubsystem,
                 mut identity: ::bevy_godot4::prelude::IdentitySubsystem<'w, 's>,
             ) {
                 for response in manager.drain_out() {
@@ -788,7 +854,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                 &default_payload,
                                 &mut identity,
                             );
-                            push_response(ApiResponse::Check(
+                            io.push_response(ApiResponse::Check(
                                 action_instance_id,
                                 dto,
                                 payload_dto,
@@ -799,7 +865,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             action_instance_id,
                             execution_id,
                         } => {
-                            push_response(ApiResponse::ExecuteEnqueued {
+                            io.push_response(ApiResponse::ExecuteEnqueued {
                                 action_instance_id,
                                 execution_id,
                             });
@@ -822,7 +888,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                                     &mut identity,
                                 )
                             };
-                            push_response(ApiResponse::ExecuteDone {
+                            io.push_response(ApiResponse::ExecuteDone {
                                 execution_id,
                                 result,
                                 report: dto,
@@ -830,7 +896,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             });
                         }
                         OutResponse::DoneAck { action_instance_id } => {
-                            push_response(ApiResponse::DoneAck { action_instance_id });
+                            io.push_response(ApiResponse::DoneAck { action_instance_id });
                         }
                     }
                 }
@@ -843,18 +909,20 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 base: Base<RefCounted>,
                 action_instance_id: ActionInstanceId,
                 pending_execution_id: Option<ExecutionId>,
+                bevy_app: Option<Gd<BevyApp>>,
                 partial_params_dto: Gd<PartialParamsDto>,
                 push_pending: bool,
             }
 
             #[godot_api]
             impl #instance_name {
-                pub fn new_with_instance_id(action_instance_id: ActionInstanceId) -> Gd<Self> {
+                pub fn new_with_instance_id(action_instance_id: ActionInstanceId, bevy_app: Gd<BevyApp>) -> Gd<Self> {
                     let mut gd = Self::new_gd();
                     {
                         let mut b = gd.bind_mut();
                         b.action_instance_id = action_instance_id;
                         b.pending_execution_id = None;
+                        b.bevy_app = Some(bevy_app);
                         b.partial_params_dto = <PartialParamsDto as ::godot::obj::NewGd>::new_gd();
                         b.push_pending = false;
                     }
@@ -881,28 +949,52 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 #[func]
                 fn _flush_params_now(&mut self) {
-                    enqueue_request(ApiRequest {
+                    let Some(mut app) = self.bevy_app.as_ref().cloned() else {
+                        godot_error!("[{}] missing BevyApp in action instance", #action_name);
+                        return;
+                    };
+
+                    enqueue_requests_for_app(&mut app, vec![ApiRequest {
                         action_instance_id: Some(self.action_instance_id),
                         kind: ApiRequestKind::UpdateParams(self.partial_params_dto.clone()),
-                    });
+                    }]);
                     self.push_pending = false;
                 }
 
                 #[func]
                 fn execute(&mut self) {
-                    self._flush_params_now();
-                    enqueue_request(ApiRequest {
-                        action_instance_id: Some(self.action_instance_id),
-                        kind: ApiRequestKind::Execute,
-                    });
+                    let Some(mut app) = self.bevy_app.as_ref().cloned() else {
+                        godot_error!("[{}] missing BevyApp in action instance", #action_name);
+                        return;
+                    };
+
+                    enqueue_requests_for_app(
+                        &mut app,
+                        vec![
+                            ApiRequest {
+                                action_instance_id: Some(self.action_instance_id),
+                                kind: ApiRequestKind::UpdateParams(self.partial_params_dto.clone()),
+                            },
+                            ApiRequest {
+                                action_instance_id: Some(self.action_instance_id),
+                                kind: ApiRequestKind::Execute,
+                            },
+                        ],
+                    );
+                    self.push_pending = false;
                 }
 
                 #[func]
                 fn done(&mut self) {
-                    enqueue_request(ApiRequest {
+                    let Some(mut app) = self.bevy_app.as_ref().cloned() else {
+                        godot_error!("[{}] missing BevyApp in action instance", #action_name);
+                        return;
+                    };
+
+                    enqueue_requests_for_app(&mut app, vec![ApiRequest {
                         action_instance_id: Some(self.action_instance_id),
                         kind: ApiRequestKind::Done,
-                    });
+                    }]);
                 }
             }
 
@@ -911,21 +1003,31 @@ pub fn expand(input: TokenStream) -> TokenStream {
             pub struct #node_name {
                 #[base]
                 base: Base<Node>,
+                bevy_app: Option<Gd<BevyApp>>,
                 instances_by_action_instance_id: HashMap<ActionInstanceId, Gd<#instance_name>>,
                 instances_by_execution_id: HashMap<ExecutionId, Gd<#instance_name>>,
                 static_data_cache: Option<Gd<StaticDataDto>>,
             }
 
-            static ACTION_INSTANCE_SEQ: AtomicU64 = AtomicU64::new(1);
-
-            fn next_action_instance_id() -> ActionInstanceId {
-                ACTION_INSTANCE_SEQ.fetch_add(1, Ordering::Relaxed)
-            }
-
             #[godot_api]
             impl INode for #node_name {
+                fn ready(&mut self) {
+                    let host = self.base().clone().upcast::<Node>();
+                    match BevyApp::find_for(&host) {
+                        Ok(app) => self.bevy_app = Some(app),
+                        Err(err) => {
+                            self.bevy_app = None;
+                            godot_error!("[{}] failed to bind BevyApp: {}", #action_name, err);
+                        }
+                    }
+                }
+
                 fn process(&mut self, _delta: f64) {
-                    for response in drain_responses() {
+                    let Some(mut app) = self.bevy_app.as_ref().cloned() else {
+                        return;
+                    };
+
+                    for response in drain_responses_for_app(&mut app) {
                         match response {
                             ApiResponse::Check(action_instance_id, report, payload, reason) => {
                                 if let Some(instance) = self.instances_by_action_instance_id.get(&action_instance_id) {
@@ -1004,15 +1106,19 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 #[func]
                 fn start(&mut self) -> Gd<#instance_name> {
-                    let action_instance_id = next_action_instance_id();
-                    let instance = #instance_name::new_with_instance_id(action_instance_id);
+                    let Some(mut app) = self.bevy_app.as_ref().cloned() else {
+                        panic!("[{}] start() called before BevyApp binding", #action_name);
+                    };
+
+                    let action_instance_id = next_action_instance_id_for_app(&mut app);
+                    let instance = #instance_name::new_with_instance_id(action_instance_id, app.clone());
                     self.instances_by_action_instance_id
                         .insert(action_instance_id, instance.clone());
 
-                    enqueue_request(ApiRequest {
+                    enqueue_requests_for_app(&mut app, vec![ApiRequest {
                         action_instance_id: Some(action_instance_id),
                         kind: ApiRequestKind::UpdateParams(<PartialParamsDto as ::godot::obj::NewGd>::new_gd()),
-                    });
+                    }]);
 
                     instance
                 }
@@ -1031,10 +1137,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[func]
                 fn set_static_data(&mut self, static_data: Gd<StaticDataDto>) {
                     self.static_data_cache = Some(static_data.clone());
-                    enqueue_request(ApiRequest {
+                    let Some(mut app) = self.bevy_app.as_ref().cloned() else {
+                        godot_error!("[{}] set_static_data() called before BevyApp binding", #action_name);
+                        return;
+                    };
+
+                    enqueue_requests_for_app(&mut app, vec![ApiRequest {
                         action_instance_id: None,
                         kind: ApiRequestKind::SetStaticData(static_data),
-                    });
+                    }]);
                 }
             }
 
@@ -1043,6 +1154,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
             impl Plugin for #plugin_name {
                 fn build(&self, app: &mut App) {
                     app.init_resource::<Manager>();
+                    app.init_resource::<ActionInstanceSeq>();
+                    app.insert_non_send_resource(ApiRequestQueue::default());
+                    app.insert_non_send_resource(ApiResponseQueue::default());
                     app.add_systems(FixedPreUpdate, api_drain_system)
                         .add_systems(FixedUpdate, push_checks_runner_system_driver)
                         .add_systems(FixedUpdate, apply_exec_system_driver)
