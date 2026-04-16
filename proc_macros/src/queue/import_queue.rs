@@ -15,9 +15,8 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{
-    Ident, Path, Result, Token,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, Ident, Path, Result, Token,
 };
 
 const CFG_SUFFIX: &str = "TransferConfig";
@@ -133,6 +132,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
     // Internal names
     let queue_storage_ident = format_ident!("__{}_ImportQueueStorage", domain_ident);
+    let queue_write_subsystem_ident = format_ident!("__{}_ImportQueueWriteSubsystem", domain_ident);
+    let queue_read_subsystem_ident = format_ident!("__{}_ImportQueueReadSubsystem", domain_ident);
     let drain_fn_ident = format_ident!("__drain_{}", domain_snake);
     let module_ident = format_ident!("__{}_import_queue", domain_snake);
 
@@ -148,6 +149,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         #[allow(non_snake_case)]
         mod #module_ident {
             use bevy::prelude::*;
+            use bevy::ecs::system::SystemParam;
             use std::collections::VecDeque;
 
             use godot::prelude::*;
@@ -194,6 +196,34 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
+            #[derive(SystemParam)]
+            struct #queue_write_subsystem_ident<'w, 's> {
+                queue: NonSendMut<'w, #queue_storage_ident>,
+                phantom: std::marker::PhantomData<&'s ()>,
+            }
+
+            impl #queue_write_subsystem_ident<'_, '_> {
+                fn push(&mut self, dto: Gd<__Dto>) {
+                    self.queue.push(dto);
+                }
+            }
+
+            #[derive(SystemParam)]
+            struct #queue_read_subsystem_ident<'w, 's> {
+                queue: NonSendMut<'w, #queue_storage_ident>,
+                phantom: std::marker::PhantomData<&'s ()>,
+            }
+
+            impl #queue_read_subsystem_ident<'_, '_> {
+                fn drain_into(
+                    &mut self,
+                    out: &mut MessageWriter<__Msg>,
+                    identity: &mut IdentitySubsystem,
+                ) {
+                    self.queue.drain_into(out, identity);
+                }
+            }
+
             // -----------------------------------------
             // RefCounted Queue Accessor (composable)
             // -----------------------------------------
@@ -226,13 +256,19 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         return;
                     };
 
-                    // Write into per-app non-send queue
+                    // Write into per-app queue via subsystem API
                     app.bind_mut().with_world_mut(|world: &mut World| {
                         if world.get_non_send_resource::<#queue_storage_ident>().is_none() {
                             world.insert_non_send_resource::<#queue_storage_ident>(#queue_storage_ident::default());
                         }
-                        let mut q = world.non_send_resource_mut::<#queue_storage_ident>();
-                        q.push(dto);
+
+                        let mut state: bevy::ecs::system::SystemState<#queue_write_subsystem_ident<'_, '_>> =
+                            bevy::ecs::system::SystemState::new(world);
+                        {
+                            let mut queue = state.get_mut(world);
+                            queue.push(dto);
+                        }
+                        state.apply(world);
                     });
                 }
 
@@ -247,7 +283,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             // -----------------------------------------
             fn #drain_fn_ident(
                 mut out: MessageWriter<__Msg>,
-                mut q: NonSendMut<#queue_storage_ident>,
+                mut q: #queue_read_subsystem_ident,
                 mut identity: IdentitySubsystem,
             )
             where
