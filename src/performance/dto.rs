@@ -3,7 +3,10 @@ use godot::classes::{Node, RefCounted};
 use godot::obj::{Base, Gd, NewGd};
 use godot::prelude::*;
 
-use crate::performance::layer::{get_sorted_metrics, SystemMetricsEntry};
+use crate::performance::layer::{
+    get_sorted_metrics, get_sorted_metrics_for_scope, AppScopeId, SystemMetricsEntry,
+    GLOBAL_APP_SCOPE_ID,
+};
 
 /// Godot-facing DTO for a single system's performance metrics.
 #[derive(GodotClass)]
@@ -84,9 +87,29 @@ impl PerformanceMetrics {
 
 #[godot_api]
 impl PerformanceMetrics {
+    fn resolve_scope_id(&self) -> AppScopeId {
+        let host = self.base().clone().upcast::<Node>();
+        let Ok(app) = crate::app::BevyApp::resolve(&host) else {
+            return GLOBAL_APP_SCOPE_ID;
+        };
+
+        app.bind().performance_scope_id()
+    }
+
     /// Returns an Array[SystemPerformanceEntryDto], with schedules first then systems.
     #[func]
     pub fn get_metrics(&self) -> Array<Gd<SystemPerformanceEntryDto>> {
+        let scope_id = self.resolve_scope_id();
+        let mut arr: Array<Gd<SystemPerformanceEntryDto>> = Array::new();
+        for entry in get_sorted_metrics_for_scope(scope_id) {
+            arr.push(&Gd::<SystemPerformanceEntryDto>::from(entry));
+        }
+        arr
+    }
+
+    /// Returns metrics that were collected outside a bound app scope.
+    #[func]
+    pub fn get_global_metrics(&self) -> Array<Gd<SystemPerformanceEntryDto>> {
         let mut arr: Array<Gd<SystemPerformanceEntryDto>> = Array::new();
         for entry in get_sorted_metrics() {
             arr.push(&Gd::<SystemPerformanceEntryDto>::from(entry));

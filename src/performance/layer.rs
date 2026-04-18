@@ -1,9 +1,10 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use tracing::field::{Field, Visit};
-use tracing::{Id, span};
+use tracing::{span, Id};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{
     layer::{Context, Layer},
@@ -96,7 +97,34 @@ pub struct SystemMetricsEntry {
 }
 
 /// Global storage for all metrics, keyed by name.
-static METRICS: Lazy<DashMap<String, (SystemMetrics, SpanInfo)>> = Lazy::new(DashMap::new);
+pub type AppScopeId = u64;
+pub const GLOBAL_APP_SCOPE_ID: AppScopeId = 0;
+
+static NEXT_APP_SCOPE_ID: AtomicU64 = AtomicU64::new(1);
+static CURRENT_APP_SCOPE_ID: AtomicU64 = AtomicU64::new(GLOBAL_APP_SCOPE_ID);
+
+/// Metrics keyed by `(app_scope_id, span_name)`.
+static METRICS: Lazy<DashMap<(AppScopeId, String), (SystemMetrics, SpanInfo)>> =
+    Lazy::new(DashMap::new);
+
+pub fn allocate_app_scope_id() -> AppScopeId {
+    NEXT_APP_SCOPE_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+pub struct AppScopeGuard {
+    prev_scope_id: AppScopeId,
+}
+
+impl Drop for AppScopeGuard {
+    fn drop(&mut self) {
+        CURRENT_APP_SCOPE_ID.store(self.prev_scope_id, Ordering::Relaxed);
+    }
+}
+
+pub fn enter_app_scope(scope_id: AppScopeId) -> AppScopeGuard {
+    let prev_scope_id = CURRENT_APP_SCOPE_ID.swap(scope_id, Ordering::Relaxed);
+    AppScopeGuard { prev_scope_id }
+}
 
 /// Install the performance tracing layer.
 ///
@@ -123,15 +151,21 @@ pub fn init_performance_tracing() {
 ///
 /// - Schedules are returned in a pre-defined order.
 /// - Systems are returned sorted slowest -> fastest by last execution time.
-pub fn get_grouped_metrics() -> (Vec<SystemMetricsEntry>, Vec<SystemMetricsEntry>) {
+pub fn get_grouped_metrics_for_scope(
+    scope_id: AppScopeId,
+) -> (Vec<SystemMetricsEntry>, Vec<SystemMetricsEntry>) {
     let mut schedules: Vec<SystemMetricsEntry> = Vec::new();
     let mut systems: Vec<SystemMetricsEntry> = Vec::new();
 
     for kv in METRICS.iter() {
+        if kv.key().0 != scope_id {
+            continue;
+        }
+
         let (m, info) = kv.value();
 
         let e = SystemMetricsEntry {
-            name: kv.key().clone(),
+            name: kv.key().1.clone(),
             last: m.last,
             avg: if m.calls > 0 {
                 m.total / m.calls as f64
@@ -163,7 +197,11 @@ pub fn get_grouped_metrics() -> (Vec<SystemMetricsEntry>, Vec<SystemMetricsEntry
 
 /// Backwards compatible: schedules first, then systems.
 pub fn get_sorted_metrics() -> Vec<SystemMetricsEntry> {
-    let (mut schedules, mut systems) = get_grouped_metrics();
+    get_sorted_metrics_for_scope(GLOBAL_APP_SCOPE_ID)
+}
+
+pub fn get_sorted_metrics_for_scope(scope_id: AppScopeId) -> Vec<SystemMetricsEntry> {
+    let (mut schedules, mut systems) = get_grouped_metrics_for_scope(scope_id);
     schedules.append(&mut systems);
     schedules
 }
@@ -329,8 +367,10 @@ where
             (start.elapsed().as_secs_f64(), now)
         };
 
+        let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
+
         let mut entry = METRICS
-            .entry(key)
+            .entry((scope_id, key))
             .or_insert_with(|| (SystemMetrics::default(), info.clone()));
 
         entry.value_mut().1 = info;
