@@ -197,6 +197,10 @@ pub mod importers {
         fn ready(&mut self) {
             self.register_internal();
         }
+
+        fn process(&mut self, _delta: f64) {
+            self.queue.bind_mut().flush();
+        }
     }
 }
 
