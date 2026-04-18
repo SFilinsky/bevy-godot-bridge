@@ -1,4 +1,4 @@
-﻿//! Performance tracing support for Bevy systems.
+//! Performance tracing support for Bevy systems.
 //!
 //! This module installs a custom `tracing_subscriber` layer that records
 //! execution times of *all* Bevy ECS systems (engine, user, and plugin

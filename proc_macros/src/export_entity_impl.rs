@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote, quote_spanned};
-use syn::{ItemStruct, Type, parse_macro_input, spanned::Spanned};
+use syn::{parse_macro_input, spanned::Spanned, ItemStruct, Type};
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as ItemStruct);
@@ -221,7 +221,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
     // --- expansion -----------------------------------------------------------
     let expanded = quote! {
         use bevy::prelude::{Added, App, Changed, Entity, Plugin, PostUpdate, Query, RemovedComponents, With, Or};
-        use bevy_godot4::prelude::{ExportMeta, SceneTreeSubsystem};
+        use bevy_godot4::prelude::{BevyApp, ExportMeta, SceneTreeSubsystem};
         use godot::prelude::*;
         use std::collections::HashMap;
 
@@ -255,10 +255,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
             updated: Query<Entity, #updated_filter>,
             mut removed: RemovedComponents<#tag_ident>,
             list:   Query<#tuple_read_types, With<#tag_ident>>,
-            mut scene_tree: SceneTreeSubsystem,
+            app: BevyAppSubsystem,
         ) {
-            let Some(app) = scene_tree.get().get_root().unwrap().get_node_or_null("BevyAppSingleton") else { return; };
-            let Some(exporter) = app.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident)) else { return; };
+            let host = app.host_node();
+            let Some(exporter) = host.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident)) else { return; };
 
             let mut created_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
 
@@ -374,13 +374,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             fn ready(&mut self) {
-                let tree = self.base().get_tree().unwrap();
-                let root = tree.get_root().unwrap();
-                let Some(app) = root.try_get_node_as::<Node>("BevyAppSingleton") else {
-                    godot_error!("BevyAppSingleton not found at /root"); return;
+                let host = self.base().clone().upcast::<Node>();
+                let Ok(app) = BevyApp::resolve(&host) else {
+                    godot_error!("BevyApp not found for {}", stringify!(#entity_spawn_handler_ident)); return;
                 };
                 let Some(mut exporter) = app.try_get_node_as::<Node>(stringify!(#exporter_ident)) else {
-                    godot_warn!("{} not found under BevyAppSingleton", stringify!(#exporter_ident)); return;
+                    godot_warn!("{} not found under resolved BevyApp", stringify!(#exporter_ident)); return;
                 };
 
                 let on_created = self.base().callable("_on_created");

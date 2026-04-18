@@ -187,10 +187,10 @@ pub mod importers {
         }
 
         fn enter_tree(&mut self) {
-            let node = &self.base().clone().upcast();
+            let node = &self.base().clone().upcast::<Node>();
             let mut queue = self.queue.bind_mut();
             queue.bind_bevy_app(
-                BevyApp::find_for(node).expect("PositionImporter must be in a BevyApp"),
+                BevyApp::resolve(node).expect("PositionImporter must be in a BevyApp"),
             );
         }
 

@@ -47,10 +47,8 @@ impl EntityMeta {
     }
 
     fn find_registry(&self) -> Option<Gd<EntityRegistry>> {
-        let tree = self.base().get_tree()?;
-        let root = tree.get_root()?;
-        let app = root.try_get_node_as::<Node>("BevyAppSingleton")?;
-        app.try_get_node_as::<EntityRegistry>("EntityRegistry")
+        let host = self.base().clone().upcast::<Node>();
+        EntityRegistry::resolve(&host)
     }
 
     fn register_in_registry(&mut self) {

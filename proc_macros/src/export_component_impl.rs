@@ -205,7 +205,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         use bevy::prelude::{App, Added, Changed, Entity, Query, RemovedComponents, PostUpdate, Plugin};
         use std::collections::HashSet;
         use bevy_godot4::{collect_children, ExportMeta};
-        use bevy_godot4::prelude::{AsVisualSystem, SceneTreeSubsystem};
+        use bevy_godot4::prelude::{AsVisualSystem, BevyApp, SceneTreeSubsystem};
 
         impl ExportMeta for #comp_ident {
             type Dto = #dto_ident;
@@ -252,15 +252,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
             created: Query<(Entity, &#comp_ident), Added<#comp_ident>>,
             updated: Query<(Entity, &#comp_ident), Changed<#comp_ident>>,
             mut removed: RemovedComponents<#comp_ident>,
-            mut scene_tree: SceneTreeSubsystem,
+            app: BevyAppSubsystem,
         ) {
-            // Scope to the current BevyAppSingleton host
-            let Some(mut host) = scene_tree
-                .get()
-                .get_root()
-                .unwrap()
-                .get_node_or_null("BevyAppSingleton")
-            else { return; };
+            // Scope to this Bevy app host
+            let host = app.host_node();
 
             // Find all exporters of this type under the host
             let mut exporters = collect_children::<#exporter_ident>(host, true);

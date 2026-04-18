@@ -1,9 +1,9 @@
-﻿use godot::builtin::{Array, GString};
-use godot::classes::RefCounted;
+use godot::builtin::{Array, GString};
+use godot::classes::{Node, RefCounted};
 use godot::obj::{Base, Gd, NewGd};
 use godot::prelude::*;
 
-use crate::performance::layer::{SystemMetricsEntry, get_sorted_metrics};
+use crate::performance::layer::{get_sorted_metrics, SystemMetricsEntry};
 
 /// Godot-facing DTO for a single system's performance metrics.
 #[derive(GodotClass)]
@@ -72,6 +72,16 @@ pub struct PerformanceMetrics {
     base: Base<Node>,
 }
 
+impl PerformanceMetrics {
+    pub fn resolve(host: &Gd<Node>) -> Option<Gd<PerformanceMetrics>> {
+        let Ok(app) = crate::app::BevyApp::resolve(host) else {
+            return None;
+        };
+
+        app.try_get_node_as::<PerformanceMetrics>("PerformanceMetrics")
+    }
+}
+
 #[godot_api]
 impl PerformanceMetrics {
     /// Returns an Array[SystemPerformanceEntryDto], with schedules first then systems.
@@ -82,5 +92,10 @@ impl PerformanceMetrics {
             arr.push(&Gd::<SystemPerformanceEntryDto>::from(entry));
         }
         arr
+    }
+
+    #[func]
+    pub fn resolve_or_null(host: Gd<Node>) -> Option<Gd<PerformanceMetrics>> {
+        Self::resolve(&host)
     }
 }

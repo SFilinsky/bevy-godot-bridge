@@ -1,4 +1,5 @@
 use crate::entity_meta::EntityMeta;
+use crate::prelude::BevyApp;
 use godot::prelude::*;
 use std::collections::HashMap;
 
@@ -12,6 +13,19 @@ pub struct EntityRegistry {
 
 #[godot_api]
 impl EntityRegistry {
+    pub fn resolve(host: &Gd<Node>) -> Option<Gd<EntityRegistry>> {
+        let Ok(app) = BevyApp::resolve(host) else {
+            return None;
+        };
+
+        app.try_get_node_as::<EntityRegistry>("EntityRegistry")
+    }
+
+    #[func]
+    pub fn resolve_or_null(host: Gd<Node>) -> Option<Gd<EntityRegistry>> {
+        Self::resolve(&host)
+    }
+
     #[func]
     pub fn register_entity_meta(&mut self, entity_id: i64, meta: Gd<EntityMeta>) {
         if entity_id < 0 || !meta.is_instance_valid() {
@@ -58,32 +72,6 @@ impl EntityRegistry {
         }
 
         out
-    }
-
-    #[func]
-    pub fn resolve_entity_meta_from_node(&mut self, mut node: Gd<Node>) -> Option<Gd<EntityMeta>> {
-        if !node.is_instance_valid() {
-            return None;
-        }
-
-        loop {
-            if let Ok(meta) = node.clone().try_cast::<EntityMeta>() {
-                if meta.is_instance_valid() {
-                    let entity_id = meta.bind().entity_id;
-                    if entity_id >= 0 {
-                        self.metas.insert(entity_id, meta.clone());
-                    }
-                    return Some(meta);
-                }
-                return None;
-            }
-
-            let Some(parent) = node.get_parent() else {
-                return None;
-            };
-
-            node = parent;
-        }
     }
 }
 

@@ -1,3 +1,5 @@
+pub mod scene_root;
+
 use std::str::FromStr;
 
 use crate::prelude::*;
