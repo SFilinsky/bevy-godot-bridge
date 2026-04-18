@@ -30,6 +30,7 @@ pub mod prelude {
     pub use super::entity_registry::EntityRegistry;
     pub use super::erased_gd::{ErasedGd, ErasedGdResource};
     pub use super::scene::GodotScene;
+    pub use super::scene::root_scripts::RootScripts;
     pub use super::scene::scene_root::SceneRoot;
     pub use super::scene_tree::SceneTreeSubsystem;
     pub use super::utils::{
