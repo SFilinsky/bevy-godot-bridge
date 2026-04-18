@@ -4,12 +4,12 @@
 //! execution times of *all* Bevy ECS systems (engine, user, and plugin
 //! systems) when Bevy is built with the `trace` feature enabled.
 //!
-//! The collected metrics are stored globally and can be queried at runtime,
-//! making them suitable for tight integration with the Godot editor
-//! (custom inspector, debug UI, overlays, etc).
+//! The collected metrics are stored per app-scope (plus a global fallback bucket)
+//! and can be queried at runtime, making them suitable for tight integration
+//! with the Godot editor (custom inspector, debug UI, overlays, etc).
 
 pub mod dto;
 pub mod layer;
 mod ui;
 
-pub use layer::{SystemMetricsEntry, get_sorted_metrics, init_performance_tracing};
+pub use layer::{get_sorted_metrics, init_performance_tracing, SystemMetricsEntry};

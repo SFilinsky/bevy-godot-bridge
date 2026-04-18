@@ -10,6 +10,7 @@ use godot::{
 use crate::app_action_queue::ActionQueue;
 use crate::import::plugins::IdentitySubsystemPlugin;
 use crate::performance::init_performance_tracing;
+use crate::performance::layer::{allocate_app_scope_id, enter_app_scope};
 use crate::prelude::*;
 use crate::scene_tree::plugins::SceneTreeSubsystemPlugin;
 use bevy::prelude::{Fixed, Time, Virtual, World};
@@ -71,6 +72,7 @@ pub struct BevyApp {
     pub action_queue: ActionQueue,
 
     next_entity_id: Arc<AtomicI64>,
+    performance_scope_id: u64,
 
     base: Base<Node>,
 }
@@ -159,6 +161,10 @@ impl BevyApp {
     pub fn alloc_entity_id(&mut self) -> i64 {
         self.next_entity_id.fetch_add(1, Ordering::Relaxed)
     }
+
+    pub fn performance_scope_id(&self) -> u64 {
+        self.performance_scope_id
+    }
 }
 
 #[godot_api]
@@ -168,6 +174,7 @@ impl INode for BevyApp {
             app: None,
             action_queue: ActionQueue::default(),
             next_entity_id: Arc::new(AtomicI64::new(1)),
+            performance_scope_id: allocate_app_scope_id(),
             base,
         }
     }
@@ -213,6 +220,7 @@ impl INode for BevyApp {
             Self::update_clock(app);
 
             app.insert_resource(GodotVisualFrame);
+            let _scope_guard = enter_app_scope(self.performance_scope_id);
             if let Err(e) = catch_unwind(AssertUnwindSafe(|| app.update())) {
                 self.app = None;
 
