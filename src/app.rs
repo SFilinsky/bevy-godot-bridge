@@ -2,6 +2,7 @@ pub use crate::bevy_app_subsystem::BevyAppSubsystem;
 use crate::bevy_app_subsystem::{BevyAppHostPlugin, BevyAppIdAllocatorRef};
 use bevy::app::App;
 use godot::{
+    builtin::NodePath,
     classes::{INode, Node},
     obj::{Base, WithBaseField},
     prelude::{godot_api, GodotClass, Inherits},
@@ -69,6 +70,9 @@ impl std::fmt::Display for BevyAppLookupError {
 pub struct BevyApp {
     app: Option<App>,
 
+    #[export]
+    node_host: NodePath,
+
     pub action_queue: ActionQueue,
 
     next_entity_id: Arc<AtomicI64>,
@@ -128,17 +132,58 @@ impl BevyApp {
         *world.resource_mut::<TimeUpdateStrategy>() = TimeUpdateStrategy::ManualDuration(dt);
     }
 
+    fn resolve_via_scene_root(host: &Gd<Node>) -> Result<Gd<BevyApp>, BevyAppLookupError> {
+        let Some(scene_root) = SceneRoot::resolve_as_parent(host) else {
+            return Err(BevyAppLookupError::MissingSceneRoot);
+        };
+
+        let mut apps = collect_children::<BevyApp>(scene_root.upcast::<Node>(), false);
+
+        if apps.is_empty() {
+            return Err(BevyAppLookupError::MissingUnderSceneRoot);
+        }
+
+        if apps.len() > 1 {
+            return Err(BevyAppLookupError::MultipleUnderSceneRoot);
+        }
+
+        Ok(apps.remove(0))
+    }
+
+    fn resolve_as_parent(start: &Gd<Node>) -> Result<Gd<BevyApp>, BevyAppLookupError> {
+        let mut cur: Option<Gd<Node>> = Some(start.clone());
+
+        while let Some(node) = cur {
+            if let Ok(app) = node.clone().try_cast::<BevyApp>() {
+                return Ok(app);
+            }
+            cur = node.get_parent();
+        }
+
+        Err(BevyAppLookupError::MissingInParentChain)
+    }
+
     pub fn resolve<T>(host: &Gd<T>) -> Result<Gd<Self>, BevyAppLookupError>
     where
         T: GodotClass + Inherits<Node>,
     {
         let host_node: Gd<Node> = host.clone().upcast();
-        let result = crate::bevy_app_subsystem::resolve(&host_node);
+
+        let result = match Self::resolve_as_parent(&host_node) {
+            Ok(app) => Ok(app),
+            Err(_) => Self::resolve_via_scene_root(&host_node),
+        };
 
         if let Err(err) = &result {
+            let host_path = if host_node.is_inside_tree() {
+                host_node.get_path().to_string()
+            } else {
+                "<detached host>".to_string()
+            };
+
             godot_error!(
                 "BevyApp::resolve() failed for host '{}': {}",
-                host_node.get_path().to_string(),
+                host_path,
                 err
             );
         }
@@ -165,6 +210,21 @@ impl BevyApp {
     pub fn performance_scope_id(&self) -> u64 {
         self.performance_scope_id
     }
+
+    pub fn resolve_node_host(&self) -> Gd<Node> {
+        if self.node_host.is_empty() {
+            return self.base().clone().upcast();
+        }
+
+        let Some(node) = self.base().get_node_or_null(&self.node_host) else {
+            return self.base().clone().upcast();
+        };
+
+        match node.try_cast::<Node>() {
+            Ok(node) => node,
+            Err(_) => self.base().clone().upcast(),
+        }
+    }
 }
 
 #[godot_api]
@@ -172,6 +232,7 @@ impl INode for BevyApp {
     fn init(base: Base<Self::Base>) -> Self {
         Self {
             app: None,
+            node_host: NodePath::default(),
             action_queue: ActionQueue::default(),
             next_entity_id: Arc::new(AtomicI64::new(1)),
             performance_scope_id: allocate_app_scope_id(),
@@ -191,7 +252,10 @@ impl INode for BevyApp {
             .add_plugins(PackedScenePlugin)
             .add_plugins(SceneTreeSubsystemPlugin)
             .add_plugins(IdentitySubsystemPlugin)
-            .add_plugins(BevyAppHostPlugin::with_host(self.base().clone().upcast()))
+            .add_plugins(BevyAppHostPlugin::with_host(
+                self.base().clone().upcast(),
+                self.resolve_node_host(),
+            ))
             .insert_non_send_resource(BevyAppIdAllocatorRef::new(self.next_entity_id.clone()));
 
         (APP_BUILDER_FN.lock().unwrap().as_mut().unwrap())(&mut app);

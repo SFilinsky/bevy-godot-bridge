@@ -1,13 +1,10 @@
-use crate::app::{BevyApp, BevyAppLookupError};
-use crate::scene::scene_root::SceneRoot;
-use crate::tools::collect_children;
 use bevy::app::{App, Plugin};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::NonSend;
 use godot::{
     builtin::NodePath,
     classes::{Engine, Node, SceneTree},
-    obj::Singleton,
+    obj::{NewAlloc, Singleton},
     prelude::{Gd, GodotClass, Inherits},
 };
 use std::marker::PhantomData;
@@ -18,6 +15,7 @@ use std::sync::Arc;
 pub struct BevyAppSubsystem<'w, 's> {
     allocator: NonSend<'w, BevyAppIdAllocatorRef>,
     host: NonSend<'w, BevyAppHostRef>,
+    node_host: NonSend<'w, BevyAppNodeHostRef>,
     phantom: PhantomData<&'s ()>,
 }
 
@@ -28,6 +26,23 @@ impl BevyAppSubsystem<'_, '_> {
 
     pub fn host_node(&self) -> Gd<Node> {
         self.host.0.clone()
+    }
+
+    pub fn node_host(&self) -> Gd<Node> {
+        self.node_host.0.clone()
+    }
+
+    pub fn ensure_named_root(&mut self, root_name: &str) -> Gd<Node> {
+        let mut host = self.node_host();
+
+        if let Some(existing) = host.try_get_node_as::<Node>(root_name) {
+            return existing;
+        }
+
+        let mut node = Node::new_alloc();
+        node.set_name(root_name);
+        host.add_child(&node);
+        node
     }
 
     pub fn try_get_host_child<T>(&self, path: &str) -> Option<Gd<T>>
@@ -53,14 +68,20 @@ impl BevyAppIdAllocatorRef {
 pub(crate) struct BevyAppHostRef(pub(crate) Gd<Node>);
 
 #[doc(hidden)]
+#[derive(Debug)]
+pub(crate) struct BevyAppNodeHostRef(pub(crate) Gd<Node>);
+
+#[doc(hidden)]
 pub(crate) struct BevyAppHostPlugin {
     host_path: String,
+    node_host_path: String,
 }
 
 impl BevyAppHostPlugin {
-    pub(crate) fn with_host(host: Gd<Node>) -> Self {
+    pub(crate) fn with_host(host: Gd<Node>, node_host: Gd<Node>) -> Self {
         Self {
             host_path: host.get_path().to_string(),
+            node_host_path: node_host.get_path().to_string(),
         }
     }
 }
@@ -77,46 +98,11 @@ impl Plugin for BevyAppHostPlugin {
         let host = root
             .get_node_or_null(&NodePath::from(self.host_path.as_str()))
             .expect("BevyAppHostPlugin failed to resolve host node by path");
+        let node_host = root
+            .get_node_or_null(&NodePath::from(self.node_host_path.as_str()))
+            .expect("BevyAppHostPlugin failed to resolve node host by path");
 
         app.insert_non_send_resource(BevyAppHostRef(host));
+        app.insert_non_send_resource(BevyAppNodeHostRef(node_host));
     }
-}
-
-pub(crate) fn resolve(host: &Gd<Node>) -> Result<Gd<BevyApp>, BevyAppLookupError> {
-    if let Ok(app) = resolve_as_parent(host) {
-        return Ok(app);
-    }
-
-    resolve_via_scene_root(host)
-}
-
-fn resolve_via_scene_root(host: &Gd<Node>) -> Result<Gd<BevyApp>, BevyAppLookupError> {
-    let Some(scene_root) = SceneRoot::resolve_as_parent(host) else {
-        return Err(BevyAppLookupError::MissingSceneRoot);
-    };
-
-    let mut apps = collect_children::<BevyApp>(scene_root.upcast::<Node>(), false);
-
-    if apps.is_empty() {
-        return Err(BevyAppLookupError::MissingUnderSceneRoot);
-    }
-
-    if apps.len() > 1 {
-        return Err(BevyAppLookupError::MultipleUnderSceneRoot);
-    }
-
-    Ok(apps.remove(0))
-}
-
-fn resolve_as_parent(start: &Gd<Node>) -> Result<Gd<BevyApp>, BevyAppLookupError> {
-    let mut cur: Option<Gd<Node>> = Some(start.clone());
-
-    while let Some(node) = cur {
-        if let Ok(app) = node.clone().try_cast::<BevyApp>() {
-            return Ok(app);
-        }
-        cur = node.get_parent();
-    }
-
-    Err(BevyAppLookupError::MissingInParentChain)
 }

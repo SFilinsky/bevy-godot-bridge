@@ -126,12 +126,13 @@ pub mod subsystem {
 pub mod systems {
     use super::resources::{CuboidDriver, CuboidNode, DebugCuboidRequests};
     use crate::debug::debug_manager::DebugRenderGateSubsystem;
+    use crate::prelude::BevyAppSubsystem;
     use bevy::prelude::{NonSendMut, ResMut, Transform};
     use bevy_godot4::prelude::EDebugState;
-    use godot::builtin::{Basis, NodePath, Quaternion, Transform3D, Vector3};
+    use godot::builtin::{Basis, Quaternion, Transform3D, Vector3};
     use godot::classes::base_material_3d::{CullMode, Flags, ShadingMode, Transparency};
-    use godot::classes::{BoxMesh, Engine, MeshInstance3D, SceneTree, StandardMaterial3D};
-    use godot::obj::{Gd, NewAlloc, NewGd, Singleton};
+    use godot::classes::{BoxMesh, MeshInstance3D, StandardMaterial3D};
+    use godot::obj::{Gd, NewAlloc, NewGd};
 
     pub fn bevy_to_godot_transform(t: &Transform) -> Transform3D {
         let rot = Quaternion::new(t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w);
@@ -140,29 +141,12 @@ pub mod systems {
         Transform3D::new(basis, origin)
     }
 
-    pub(super) fn ensure_parent(mut driver: NonSendMut<CuboidDriver>) {
+    pub(super) fn ensure_parent(mut driver: NonSendMut<CuboidDriver>, mut app: BevyAppSubsystem) {
         if driver.parent.is_some() {
             return;
         }
 
-        let engine = Engine::singleton();
-        let Some(loop_obj) = engine.get_main_loop() else {
-            return;
-        };
-        let tree = loop_obj.cast::<SceneTree>();
-        let Some(mut root) = tree.get_root() else {
-            return;
-        };
-
-        let path = NodePath::from("BevyDebug");
-        let parent: Gd<_> = if let Some(n) = root.try_get_node_as::<godot::classes::Node>(&path) {
-            n
-        } else {
-            let mut n = godot::classes::Node::new_alloc();
-            n.set_name("BevyDebug");
-            root.add_child(&n);
-            n
-        };
+        let parent: Gd<_> = app.ensure_named_root("BevyDebug");
         driver.parent = Some(parent);
     }
 
