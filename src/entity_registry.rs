@@ -13,6 +13,10 @@ pub struct EntityRegistry {
 
 #[godot_api]
 impl EntityRegistry {
+    // NOTE:
+    // Registry entries are currently managed by Bevy-driven spawners only.
+    // Scene-authored EntityMeta nodes that are not spawned by Bevy are not
+    // auto-registered in this phase.
     pub fn resolve(host: &Gd<Node>) -> Option<Gd<EntityRegistry>> {
         let Ok(app) = BevyApp::resolve(host) else {
             return None;

@@ -1,3 +1,4 @@
+pub mod root_scripts;
 pub mod scene_root;
 
 use std::str::FromStr;

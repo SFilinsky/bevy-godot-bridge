@@ -1,4 +1,4 @@
-use crate::entity_registry::EntityRegistry;
+use crate::tools::collect_children;
 use godot::prelude::*;
 
 #[derive(GodotClass)]
@@ -33,53 +33,58 @@ impl EntityMeta {
 
     #[func]
     pub fn assign_entity_id(&mut self, entity_id: i64) {
-        if self.entity_id == entity_id {
-            self.register_in_registry();
-            return;
-        }
-
-        if self.entity_id >= 0 {
-            self.unregister_from_registry();
-        }
-
         self.entity_id = entity_id;
-        self.register_in_registry();
     }
 
-    fn find_registry(&self) -> Option<Gd<EntityRegistry>> {
-        let host = self.base().clone().upcast::<Node>();
-        EntityRegistry::resolve(&host)
-    }
+    pub fn resolve_from_scene_root(instance: Gd<Node>, entity_id: i64) -> Gd<EntityMeta> {
+        let root_meta = instance.clone().try_cast::<EntityMeta>().ok();
 
-    fn register_in_registry(&mut self) {
-        if self.entity_id < 0 {
-            return;
+        let mut direct_children_meta: Vec<Gd<EntityMeta>> = Vec::new();
+        let child_count = instance.get_child_count();
+        for idx in 0..child_count {
+            let Some(child) = instance.get_child(idx) else {
+                continue;
+            };
+
+            if let Ok(meta) = child.try_cast::<EntityMeta>() {
+                direct_children_meta.push(meta);
+            }
         }
 
-        let Some(mut registry) = self.find_registry() else {
-            return;
-        };
-
-        let node = self.base().clone().upcast::<Node>();
-        let Ok(meta) = node.try_cast::<EntityMeta>() else {
-            return;
-        };
-
-        registry
-            .bind_mut()
-            .register_entity_meta(self.entity_id, meta);
-    }
-
-    fn unregister_from_registry(&mut self) {
-        if self.entity_id < 0 {
-            return;
+        if root_meta.is_some() && !direct_children_meta.is_empty() {
+            godot_warn!(
+                "Multiple EntityMeta nodes found for entity {}; using root-attached one",
+                entity_id
+            );
         }
 
-        let Some(mut registry) = self.find_registry() else {
-            return;
-        };
+        if direct_children_meta.len() > 1 {
+            godot_warn!(
+                "Multiple direct-child EntityMeta nodes found for entity {}; using the first one",
+                entity_id
+            );
+        }
 
-        registry.bind_mut().unregister_entity_meta(self.entity_id);
+        if let Some(meta) = root_meta {
+            return meta;
+        }
+
+        if let Some(meta) = direct_children_meta.into_iter().next() {
+            return meta;
+        }
+
+        let nested_meta = collect_children::<EntityMeta>(instance.clone(), true);
+        if !nested_meta.is_empty() {
+            panic!(
+                "EntityMeta must be attached to scene root or as a direct child of the root for entity {}; deeper nested placement is invalid",
+                entity_id
+            );
+        }
+
+        panic!(
+            "Spawned scene is missing EntityMeta for entity {}; attach it to root or root direct child",
+            entity_id
+        );
     }
 }
 
@@ -92,13 +97,5 @@ impl INode for EntityMeta {
             custom_cleanup_enabled: false,
             base,
         }
-    }
-
-    fn ready(&mut self) {
-        self.register_in_registry();
-    }
-
-    fn exit_tree(&mut self) {
-        self.unregister_from_registry();
     }
 }

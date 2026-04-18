@@ -504,6 +504,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 parent_path: NodePath,
                 spawned_roots: HashMap<i64, Gd<Node>>,
                 entity_meta_cache: HashMap<i64, Gd<EntityMeta>>,
+                entity_registry: Option<Gd<EntityRegistry>>,
                 parent_node_cache: Option<Gd<Node>>,
                 exported_group_cache: Option<Gd<Node>>,
                 #[base] base: Base<Node>,
@@ -592,64 +593,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         return None;
                     }
 
-                    let meta = self.resolve_entity_meta_from_instance(root.clone(), entity_id);
+                    let meta = EntityMeta::resolve_from_scene_root(root.clone(), entity_id);
                     self.entity_meta_cache.insert(entity_id, meta.clone());
                     Some(meta)
-                }
-
-                fn resolve_entity_meta_from_instance(&mut self, instance: Gd<Node>, entity_id: i64) -> Gd<EntityMeta> {
-                    let root_meta = instance.clone().try_cast::<EntityMeta>().ok();
-
-                    let mut direct_children_meta: Vec<Gd<EntityMeta>> = Vec::new();
-                    let child_count = instance.get_child_count();
-                    for idx in 0..child_count {
-                        let Some(child) = instance.get_child(idx) else {
-                            continue;
-                        };
-
-                        if let Ok(meta) = child.try_cast::<EntityMeta>() {
-                            direct_children_meta.push(meta);
-                        }
-                    }
-
-                    if root_meta.is_some() && !direct_children_meta.is_empty() {
-                        godot_warn!(
-                            "Multiple {} nodes found for entity {}; using root-attached one",
-                            "EntityMeta",
-                            entity_id
-                        );
-                    }
-
-                    if direct_children_meta.len() > 1 {
-                        godot_warn!(
-                            "Multiple direct-child {} nodes found for entity {}; using the first one",
-                            "EntityMeta",
-                            entity_id
-                        );
-                    }
-
-                    if let Some(meta) = root_meta {
-                        return meta;
-                    }
-
-                    if let Some(meta) = direct_children_meta.into_iter().next() {
-                        return meta;
-                    }
-
-                    let nested_meta = collect_children::<EntityMeta>(instance.clone(), true);
-                    if !nested_meta.is_empty() {
-                        panic!(
-                            "{} must be attached to scene root or as a direct child of the root for entity {}; deeper nested placement is invalid",
-                            "EntityMeta",
-                            entity_id
-                        );
-                    }
-
-                    panic!(
-                        "Spawned scene is missing {} for entity {}; attach it to root or root direct child",
-                        "EntityMeta",
-                        entity_id
-                    );
                 }
 
                 fn ensure_spawned_entity_meta(&mut self, entity_id: i64) -> Option<Gd<EntityMeta>> {
@@ -675,17 +621,53 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         panic!("Failed to instantiate scene for {}", stringify!(#spawner_ident));
                     };
 
+                    let mut meta = EntityMeta::resolve_from_scene_root(instance.clone(), entity_id);
+                    meta.bind_mut().assign_entity_id(entity_id);
+
                     let Some(mut parent) = self.parent_node() else {
                         return None;
                     };
                     parent.add_child(&instance);
                     self.spawned_roots.insert(entity_id, instance.clone());
 
-                    let mut meta = self.resolve_entity_meta_from_instance(instance.clone(), entity_id);
-                    meta.bind_mut().assign_entity_id(entity_id);
+                    self.register_entity_meta(entity_id, meta.clone());
 
                     self.entity_meta_cache.insert(entity_id, meta.clone());
                     Some(meta)
+                }
+
+                fn register_entity_meta(&mut self, entity_id: i64, meta: Gd<EntityMeta>) {
+                    let Some(mut registry) = self.entity_registry.as_ref().cloned() else {
+                        godot_error!(
+                            "{} cannot register entity {}: EntityRegistry was not resolved during ready()",
+                            stringify!(#spawner_ident),
+                            entity_id
+                        );
+                        return;
+                    };
+
+                    if !registry.is_instance_valid() {
+                        godot_error!(
+                            "{} cannot register entity {}: cached EntityRegistry became invalid",
+                            stringify!(#spawner_ident),
+                            entity_id
+                        );
+                        return;
+                    }
+
+                    registry.bind_mut().register_entity_meta(entity_id, meta);
+                }
+
+                fn unregister_entity_meta(&mut self, entity_id: i64) {
+                    let Some(mut registry) = self.entity_registry.as_ref().cloned() else {
+                        return;
+                    };
+
+                    if !registry.is_instance_valid() {
+                        return;
+                    }
+
+                    registry.bind_mut().unregister_entity_meta(entity_id);
                 }
 
                 fn cleanup_entity(&mut self, entity_id: i64) {
@@ -697,6 +679,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             meta.bind_mut().signals().on_despawning().emit(entity_id);
                         }
                     }
+
+                    self.unregister_entity_meta(entity_id);
 
                     if let Some(mut root) = self.spawned_roots.remove(&entity_id) {
                         if root.is_instance_valid() && !custom_cleanup {
@@ -752,6 +736,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         parent_path: NodePath::default(),
                         spawned_roots: HashMap::new(),
                         entity_meta_cache: HashMap::new(),
+                        entity_registry: None,
                         parent_node_cache: None,
                         exported_group_cache: None,
                         base,
@@ -766,6 +751,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let Some(mut exporter) = owner.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident)) else {
                         panic!("{} failed to connect: {} node is missing", stringify!(#spawner_ident), stringify!(#exporter_ident));
                     };
+
+                    let owner_node: Gd<Node> = owner.clone().upcast();
+                    self.entity_registry = EntityRegistry::resolve(&owner_node);
+                    if self.entity_registry.is_none() {
+                        godot_error!(
+                            "{} failed to resolve EntityRegistry under BevyApp; spawned entities will not be registered",
+                            stringify!(#spawner_ident)
+                        );
+                    }
 
                     if !self.parent_path.is_empty() {
                         self.parent_node_cache = Some(self.base().get_node_as::<Node>(&self.parent_path));
