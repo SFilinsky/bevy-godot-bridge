@@ -266,8 +266,8 @@ pub mod importers {
 
         fn enter_tree(&mut self) {
             {
-                let node = &self.base().clone().upcast();
-                let mut app = BevyApp::find_for(node).expect("BevyApp not found");
+                let node = &self.base().clone().upcast::<Node>();
+                let mut app = BevyApp::resolve(node).expect("BevyApp not found");
 
                 {
                     let mut queue = self.queue.bind_mut();

@@ -3,9 +3,9 @@ use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{
-    Ident, LitStr, Path, Result, Token, bracketed,
+    bracketed,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, Ident, LitStr, Path, Result, Token,
 };
 
 /// Usage:
@@ -415,8 +415,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 fn enter_tree(&mut self) {
-                    let host_node = &self.base().clone().upcast();
-                    let bevy_app = BevyApp::find_for(host_node).expect("BevyApp not found");
+                    let host_node = &self.base().clone().upcast::<Node>();
+                    let bevy_app = BevyApp::resolve(host_node).expect("BevyApp not found");
 
                     self.queue
                         .bind_mut()

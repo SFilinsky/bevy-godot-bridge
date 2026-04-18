@@ -1,11 +1,11 @@
-﻿use once_cell::sync::Lazy;
 use std::cmp::PartialEq;
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicI32, Ordering};
 
-use bevy::app::{App, FixedUpdate, Plugin};
+use crate::app_action_queue::AppAction;
+use crate::prelude::BevyApp;
+use bevy::app::{App, Plugin};
 use bevy::ecs::system::SystemParam;
-use bevy::prelude::{Local, Res, ResMut, Resource, Time, Timer, TimerMode};
+use bevy::prelude::{Local, Res, Resource, Time, Timer, TimerMode};
 use godot::classes::Node;
 use godot::obj::Base;
 use godot::prelude::*;
@@ -68,17 +68,6 @@ impl<'w, 's> DebugRenderGateSubsystem<'w, 's> {
     }
 }
 
-/// Process-wide flag readable from Bevy.
-static DEBUG_FLAG: Lazy<AtomicI32> = Lazy::new(|| AtomicI32::new(0));
-
-pub fn get_debug_flag() -> EDebugState {
-    DEBUG_FLAG.load(Ordering::Relaxed).into()
-}
-
-fn set_debug_flag(new_state: EDebugState) {
-    DEBUG_FLAG.store(new_state.into(), Ordering::Relaxed);
-}
-
 #[derive(GodotConvert, Var, Export, Clone, Default, Copy, PartialEq)]
 #[godot(via = GString)]
 #[derive(Debug)]
@@ -126,12 +115,65 @@ pub struct DebugManager {
     #[export]
     current_debug_state: EDebugState,
 
+    bevy_app: Option<Gd<BevyApp>>,
+
     #[base]
     base: Base<Node>,
 }
 
+struct SetDebugModeAction {
+    new_state: EDebugState,
+}
+
+impl AppAction for SetDebugModeAction {
+    fn apply(self: Box<Self>, app: &mut App) {
+        if let Some(mut mode) = app.world_mut().get_resource_mut::<DebugMode>() {
+            mode.current_state = self.new_state;
+        }
+    }
+}
+
 #[godot_api]
 impl DebugManager {
+    pub fn resolve(host: &Gd<Node>) -> Option<Gd<DebugManager>> {
+        let Ok(app) = BevyApp::resolve(host) else {
+            return None;
+        };
+
+        app.try_get_node_as::<DebugManager>("DebugManager")
+    }
+
+    pub(crate) fn current_state(&self) -> EDebugState {
+        self.current_debug_state
+    }
+
+    fn enqueue_state_to_bevy(&self, new_state: EDebugState) {
+        let Some(mut bevy_app) = self.bevy_app.as_ref().cloned() else {
+            godot_error!("DebugManager.enqueue_state_to_bevy() failed: BevyApp not bound");
+            return;
+        };
+
+        bevy_app
+            .bind_mut()
+            .action_queue
+            .add(SetDebugModeAction { new_state });
+    }
+
+    fn schedule_sync_state_to_bevy(&mut self) {
+        let callable = Callable::from_object_method(&self.to_gd(), "_sync_state_to_bevy");
+        let _ = callable.call_deferred(&[]);
+    }
+
+    #[func]
+    fn _sync_state_to_bevy(&mut self) {
+        self.enqueue_state_to_bevy(self.current_debug_state);
+    }
+
+    #[func]
+    pub fn resolve_or_null(host: Gd<Node>) -> Option<Gd<DebugManager>> {
+        Self::resolve(&host)
+    }
+
     #[func]
     pub fn set_debug_off(&mut self) {
         self.set_debug_state(EDebugState::Off);
@@ -164,8 +206,9 @@ impl DebugManager {
         );
 
         self.current_debug_state = new_state.clone();
-        set_debug_flag(new_state);
-        self.signals().on_debug_change().emit();
+        self.enqueue_state_to_bevy(new_state);
+
+        self.signals().on_debug_change().emit(new_state);
     }
 
     #[func]
@@ -184,15 +227,21 @@ impl DebugManager {
     }
 
     #[signal]
-    fn on_debug_change();
+    fn on_debug_change(new_state: EDebugState);
 }
 
 #[godot_api]
 impl INode for DebugManager {
     fn ready(&mut self) {
-        set_debug_flag(self.current_debug_state);
+        let host = self.base().clone().upcast::<Node>();
+        self.bevy_app = BevyApp::resolve(&host).ok();
 
-        self.signals().on_debug_change().emit();
+        if self.bevy_app.is_some() {
+            self.schedule_sync_state_to_bevy();
+        }
+
+        let current_state = self.current_debug_state;
+        self.signals().on_debug_change().emit(current_state);
     }
 }
 
@@ -201,14 +250,9 @@ pub struct DebugMode {
     pub current_state: EDebugState,
 }
 
-fn sync_debug_mode_from_godot(mut res: ResMut<DebugMode>) {
-    res.current_state = get_debug_flag();
-}
-
 pub struct DebugModeBridgePlugin;
 impl Plugin for DebugModeBridgePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DebugMode>()
-            .add_systems(FixedUpdate, sync_debug_mode_from_godot);
+        app.init_resource::<DebugMode>();
     }
 }

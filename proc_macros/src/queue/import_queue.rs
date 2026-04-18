@@ -206,6 +206,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 fn push(&mut self, dto: Gd<__Dto>) {
                     self.queue.push(dto);
                 }
+
+                fn push_batch(&mut self, dtos: Vec<Gd<__Dto>>) {
+                    for dto in dtos {
+                        self.queue.push(dto);
+                    }
+                }
             }
 
             #[derive(SystemParam)]
@@ -248,6 +254,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 /// Enqueue a DTO. Conversion to Bevy message happens in the drain system.
                 #[func]
                 pub fn enqueue(&mut self, dto: Gd<__Dto>) {
+                    self.enqueue_many(vec![dto]);
+                }
+
+                pub fn enqueue_many(&mut self, dtos: Vec<Gd<__Dto>>) {
                     let Some(mut app) = self.bevy_app.as_ref().cloned() else {
                         godot_error!(
                             "[ImportQueue:{}] enqueue() called before bind_bevy_app() (or BevyApp not found)",
@@ -266,10 +276,21 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             bevy::ecs::system::SystemState::new(world);
                         {
                             let mut queue = state.get_mut(world);
-                            queue.push(dto);
+                            queue.push_batch(dtos);
                         }
                         state.apply(world);
                     });
+                }
+
+                #[func]
+                pub fn enqueue_batch(&mut self, dtos: Array<Gd<__Dto>>) {
+                    let mut batch: Vec<Gd<__Dto>> = Vec::with_capacity(dtos.len() as usize);
+                    for i in 0..dtos.len() {
+                        if let Some(dto) = dtos.get(i) {
+                            batch.push(dto);
+                        }
+                    }
+                    self.enqueue_many(batch);
                 }
 
                 #[func]

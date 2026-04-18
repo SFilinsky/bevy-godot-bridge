@@ -2,9 +2,8 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::{
-    Ident, Path, Result, Token,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, Ident, Path, Result, Token,
 };
 
 struct Spec {
@@ -140,7 +139,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     return None;
                 }
 
-                let mut found = bevy_godot4::prelude::collect_children::<#state>(owner, false);
+                let Ok(app) = bevy_godot4::prelude::BevyApp::resolve(&owner) else {
+                    return None;
+                };
+
+                let mut found = bevy_godot4::prelude::collect_children::<#state>(app.upcast::<Node>(), false);
 
                 if found.len() > 1 {
                     panic!(
@@ -218,10 +221,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     return None;
                 };
 
-                let tree = entity_meta.get_tree()?;
-                let root = tree.get_root()?;
-                let owner = root.try_get_node_as::<Node>("BevyAppSingleton")?;
-                let store = Self::resolve(owner)?;
+                let owner = bevy_godot4::prelude::BevyApp::resolve(&entity_meta.clone().upcast::<Node>()).ok()?;
+                let store = Self::resolve(owner.upcast::<Node>())?;
 
                 if store.bind().implements(entity_id) {
                     Some(store)

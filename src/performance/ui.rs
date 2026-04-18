@@ -1,4 +1,4 @@
-﻿use super::dto::{PerformanceMetrics, SystemPerformanceEntryDto};
+use super::dto::{PerformanceMetrics, SystemPerformanceEntryDto};
 use godot::classes::{Control, INode, Label, Node};
 use godot::obj::{Base, Gd, NewAlloc};
 use godot::prelude::*;
@@ -7,7 +7,6 @@ use godot::prelude::*;
 ///
 /// Intended usage:
 /// - Add as a child somewhere in your debug UI scene
-/// - Ensure `bevy_app_path` points at your autoload singleton (default: `/root/BevyAppSingleton`)
 /// - Assign `container_path` in the editor to any Control that should host the labels
 ///
 /// This Node will pull metrics and render labels as children of the referenced container.
@@ -19,11 +18,6 @@ use godot::prelude::*;
 #[derive(GodotClass)]
 #[class(base = Node)]
 pub struct PerformanceHud {
-    /// Path to BevyApp singleton autoload.
-    /// Default assumes you have an autoload named `BevyAppSingleton`.
-    #[export]
-    bevy_app_path: NodePath,
-
     /// Path (relative to this node) to a Node that will host the labels.
     /// This is configured in the editor by the consumer.
     #[export]
@@ -56,7 +50,6 @@ pub struct PerformanceHud {
 impl INode for PerformanceHud {
     fn init(base: Base<Node>) -> Self {
         Self {
-            bevy_app_path: NodePath::from("/root/BevyAppSingleton"),
             container_path: NodePath::from(""),
             refresh_interval_sec: 0.25,
             max_rows: 60,
@@ -112,20 +105,8 @@ impl PerformanceHud {
     }
 
     fn resolve_metrics(&mut self) -> Option<Gd<PerformanceMetrics>> {
-        let tree = self.base().get_tree()?;
-        let root = tree.get_root();
-
-        let bevy_root: Gd<Node> = root.unwrap().get_node_or_null(&self.bevy_app_path)?;
-
-        let child_count = bevy_root.get_child_count();
-        for i in 0..child_count {
-            let child = bevy_root.get_child(i)?;
-            if let Ok(metrics) = child.try_cast::<PerformanceMetrics>() {
-                return Some(metrics);
-            }
-        }
-
-        None
+        let host = self.base().clone().upcast::<Node>();
+        PerformanceMetrics::resolve(&host)
     }
 
     fn refresh(&mut self) {
@@ -136,7 +117,7 @@ impl PerformanceHud {
 
         let Some(metrics) = self.metrics.as_ref() else {
             self.show_single_line(
-                "PerformanceHud: metrics unavailable (BevyAppSingleton not found?)",
+                "PerformanceHud: metrics unavailable (PerformanceMetrics not found)",
             );
             return;
         };

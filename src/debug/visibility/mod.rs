@@ -1,9 +1,9 @@
-use crate::debug::debug_manager::{EDebugState, get_debug_flag};
+use crate::debug::debug_manager::{DebugManager, EDebugState};
 use godot::builtin::{Array, NodePath};
 use godot::classes::{INode, Node};
 use godot::meta::ToGodot;
 use godot::obj::{Base, WithBaseField};
-use godot::prelude::{GodotClass, godot_api};
+use godot::prelude::{godot_api, Gd, GodotClass};
 
 const STATE_OFF_BIT: i64 = 1 << 0;
 const STATE_COLLIDERS_BIT: i64 = 1 << 1;
@@ -19,6 +19,7 @@ pub struct DebugVisibilityGroup {
     #[export(flags = (Off = 1, Colliders = 2, Navmesh = 4))]
     visible_state_mask: i64,
 
+    debug_manager: Option<Gd<DebugManager>>,
     last_state: Option<EDebugState>,
 
     #[base]
@@ -31,20 +32,38 @@ impl INode for DebugVisibilityGroup {
         Self {
             target_node_list: Array::new(),
             visible_state_mask: STATE_OFF_BIT,
+            debug_manager: None,
             last_state: None,
             base,
         }
     }
 
     fn ready(&mut self) {
-        self.base_mut().set_process(true);
-        let current_state = get_debug_flag();
+        self.base_mut().set_process(false);
+
+        let host = self.base().clone().upcast::<Node>();
+        self.debug_manager = DebugManager::resolve(&host);
+
+        let Some(mut manager) = self.debug_manager.as_ref().cloned() else {
+            self.apply_visibility(EDebugState::Off);
+            self.last_state = Some(EDebugState::Off);
+            return;
+        };
+
+        let on_change = self.base().callable("_on_debug_state_changed");
+        let mut manager_node = manager.clone().upcast::<Node>();
+        let _ = manager_node.connect("on_debug_change", &on_change);
+
+        let current_state = manager.bind().current_state();
         self.apply_visibility(current_state);
         self.last_state = Some(current_state);
     }
+}
 
-    fn process(&mut self, _delta: f64) {
-        let current_state = get_debug_flag();
+#[godot_api]
+impl DebugVisibilityGroup {
+    #[func]
+    fn _on_debug_state_changed(&mut self, current_state: EDebugState) {
         if self
             .last_state
             .is_some_and(|old_state| old_state == current_state)

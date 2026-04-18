@@ -4,9 +4,9 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use std::collections::HashSet;
 use syn::{
-    Ident, LitStr, Path, Result, Token, Type, bracketed,
+    bracketed,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, Ident, LitStr, Path, Result, Token, Type,
 };
 
 #[derive(Clone)]
@@ -462,8 +462,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         return None;
                     }
 
-                    let mut owner = owner;
-                    owner.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident))
+                    let Ok(app) = BevyApp::resolve(&owner) else {
+                        return None;
+                    };
+
+                    app.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident))
                 }
 
                 fn cleanup_entity(&mut self, entity_id: i64) {
@@ -518,8 +521,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         return None;
                     }
 
-                    let mut owner = owner;
-                    owner.try_get_node_as::<#spawner_ident>(stringify!(#spawner_ident))
+                    let Ok(app) = BevyApp::resolve(&owner) else {
+                        return None;
+                    };
+
+                    app.try_get_node_as::<#spawner_ident>(stringify!(#spawner_ident))
                 }
 
                 fn parent_node(&mut self) -> Gd<Node> {
@@ -705,14 +711,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 fn ready(&mut self) {
-                    let Some(tree) = self.base().get_tree() else {
-                        panic!("{} failed to connect: scene tree is unavailable", stringify!(#spawner_ident));
-                    };
-                    let Some(root) = tree.get_root() else {
-                        panic!("{} failed to connect: scene tree root is unavailable", stringify!(#spawner_ident));
-                    };
-                    let Some(mut owner) = root.try_get_node_as::<Node>("BevyAppSingleton") else {
-                        panic!("{} failed to connect: BevyAppSingleton node is missing", stringify!(#spawner_ident));
+                    let host = self.base().clone().upcast::<Node>();
+                    let Ok(mut owner) = BevyApp::resolve(&host) else {
+                        panic!("{} failed to connect: BevyApp node is missing", stringify!(#spawner_ident));
                     };
                     let Some(mut exporter) = owner.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident)) else {
                         panic!("{} failed to connect: {} node is missing", stringify!(#spawner_ident), stringify!(#exporter_ident));
@@ -745,22 +746,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             impl #exporter_accessor_ident<'_, '_> {
-                fn get(&mut self, scene_tree: &mut SceneTreeSubsystem) -> Option<Gd<#exporter_ident>> {
+                fn get(&mut self, app: &mut BevyAppSubsystem) -> Option<Gd<#exporter_ident>> {
                     if let Some(cached) = self.gd.0.as_ref() {
                         if cached.is_instance_valid() {
                             return Some(cached.clone());
                         }
                     }
 
-                    let Some(mut host) = scene_tree
-                        .get()
-                        .get_root()
-                        .unwrap()
-                        .get_node_or_null("BevyAppSingleton")
-                    else {
-                        self.gd.0 = None;
-                        return None;
-                    };
+                    let host = app.host_node();
 
                     let Some(exporter) = host.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident)) else {
                         self.gd.0 = None;
@@ -780,7 +773,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #( mut #opt_removed_reader_idents: RemovedComponents<<#opt_cfg_tys as DataTransferConfig>::DataType>, )*
                 snapshot: Query<( #( #snapshot_types, )* ), With<#tag_ty>>,
                 mut identity: IdentitySubsystem,
-                mut scene_tree: SceneTreeSubsystem,
+                mut app: BevyAppSubsystem,
                 mut exporter_accessor: #exporter_accessor_ident,
             ) {
                 let any_created = !created.is_empty();
@@ -792,20 +785,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     return;
                 }
 
-                let Some(mut exporter) = exporter_accessor.get(&mut scene_tree) else {
+                let Some(mut exporter) = exporter_accessor.get(&mut app) else {
                     return;
                 };
                 let mut exporter = exporter.bind_mut();
-                let Some(state_store_owner) = scene_tree
-                    .get()
-                    .get_root()
-                    .and_then(|root| root.try_get_node_as::<Node>("BevyAppSingleton"))
-                else {
-                    panic!(
-                        "{} failed to resolve singleton stores: BevyAppSingleton node is missing",
-                        stringify!(#exporter_ident)
-                    );
-                };
+                let state_store_owner: Gd<Node> = app.host_node();
                 #( #state_store_resolve_blocks )*
 
                 let mut created_bits: HashSet<u64> = HashSet::new();

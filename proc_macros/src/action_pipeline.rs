@@ -1011,10 +1011,20 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             #[godot_api]
             impl INode for #node_name {
-                fn ready(&mut self) {
+                fn enter_tree(&mut self) {
                     let host = self.base().clone().upcast::<Node>();
-                    match BevyApp::find_for(&host) {
-                        Ok(app) => self.bevy_app = Some(app),
+                    match BevyApp::resolve(&host) {
+                        Ok(app) => {
+                            let mut app = app;
+                            self.bevy_app = Some(app.clone());
+
+                            if let Some(static_data) = self.static_data_cache.as_ref().cloned() {
+                                enqueue_requests_for_app(&mut app, vec![ApiRequest {
+                                    action_instance_id: None,
+                                    kind: ApiRequestKind::SetStaticData(static_data),
+                                }]);
+                            }
+                        }
                         Err(err) => {
                             self.bevy_app = None;
                             godot_error!("[{}] failed to bind BevyApp: {}", #action_name, err);
@@ -1092,7 +1102,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         return None;
                     }
 
-                    let mut found = bevy_godot4::prelude::collect_children::<#node_name>(owner, false);
+                    let Ok(app) = bevy_godot4::prelude::BevyApp::resolve(&owner) else {
+                        return None;
+                    };
+
+                    let mut found = bevy_godot4::prelude::collect_children::<#node_name>(app.upcast::<Node>(), false);
 
                     if found.len() > 1 {
                         panic!(
@@ -1138,7 +1152,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 fn set_static_data(&mut self, static_data: Gd<StaticDataDto>) {
                     self.static_data_cache = Some(static_data.clone());
                     let Some(mut app) = self.bevy_app.as_ref().cloned() else {
-                        godot_error!("[{}] set_static_data() called before BevyApp binding", #action_name);
                         return;
                     };
 

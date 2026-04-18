@@ -1,4 +1,6 @@
 use crate::app::{BevyApp, BevyAppLookupError};
+use crate::scene::scene_root::SceneRoot;
+use crate::tools::collect_children;
 use bevy::app::{App, Plugin};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::NonSend;
@@ -80,27 +82,33 @@ impl Plugin for BevyAppHostPlugin {
     }
 }
 
-pub(crate) fn find_for(host: &Gd<Node>) -> Result<Gd<BevyApp>, BevyAppLookupError> {
-    if let Ok(app) = find_in_parents(host) {
+pub(crate) fn resolve(host: &Gd<Node>) -> Result<Gd<BevyApp>, BevyAppLookupError> {
+    if let Ok(app) = resolve_as_parent(host) {
         return Ok(app);
     }
 
-    let tree = host.get_tree().ok_or(BevyAppLookupError::NoSceneTree)?;
-    find_singleton(&tree)
+    resolve_via_scene_root(host)
 }
 
-fn find_singleton(tree: &Gd<SceneTree>) -> Result<Gd<BevyApp>, BevyAppLookupError> {
-    let root = tree.get_root().ok_or(BevyAppLookupError::NoRoot)?;
-
-    let Some(node) = root.get_node_or_null("BevyAppSingleton") else {
-        return Err(BevyAppLookupError::SingletonMissing);
+fn resolve_via_scene_root(host: &Gd<Node>) -> Result<Gd<BevyApp>, BevyAppLookupError> {
+    let Some(scene_root) = SceneRoot::resolve_as_parent(host) else {
+        return Err(BevyAppLookupError::MissingSceneRoot);
     };
 
-    node.try_cast::<BevyApp>()
-        .map_err(|_| BevyAppLookupError::WrongType)
+    let mut apps = collect_children::<BevyApp>(scene_root.upcast::<Node>(), false);
+
+    if apps.is_empty() {
+        return Err(BevyAppLookupError::MissingUnderSceneRoot);
+    }
+
+    if apps.len() > 1 {
+        return Err(BevyAppLookupError::MultipleUnderSceneRoot);
+    }
+
+    Ok(apps.remove(0))
 }
 
-fn find_in_parents(start: &Gd<Node>) -> Result<Gd<BevyApp>, String> {
+fn resolve_as_parent(start: &Gd<Node>) -> Result<Gd<BevyApp>, BevyAppLookupError> {
     let mut cur: Option<Gd<Node>> = Some(start.clone());
 
     while let Some(node) = cur {
@@ -110,5 +118,5 @@ fn find_in_parents(start: &Gd<Node>) -> Result<Gd<BevyApp>, String> {
         cur = node.get_parent();
     }
 
-    Err("No BevyApp found in parent chain. Importer must be under a BevyApp node.".to_string())
+    Err(BevyAppLookupError::MissingInParentChain)
 }

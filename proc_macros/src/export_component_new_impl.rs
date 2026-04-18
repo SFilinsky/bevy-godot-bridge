@@ -3,7 +3,7 @@
 use heck::ToSnakeCase;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Data, DeriveInput, parse_macro_input};
+use syn::{parse_macro_input, Data, DeriveInput};
 
 /// Derive macro: `#[derive(ExportFor)]`
 ///
@@ -53,7 +53,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
         // --- Godot exporter node with signals (docs included) ---
         #[doc = "Godot exporter node for Bevy component changes."]
         #[doc = ""]
-        #[doc = "Place this under `BevyAppSingleton`. It emits signals on Added/Changed/Removed"]
+        #[doc = "Place this under a resolved `BevyApp` host. It emits signals on Added/Changed/Removed"]
         #[doc = "for the Bevy component associated with the DTO that derived `ExportFor`."]
         #[doc = ""]
         #[doc = "Signals:"]
@@ -91,17 +91,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 Changed<<#dto_ident as DTO>::Component>
             >,
             mut removed: RemovedComponents<<#dto_ident as DTO>::Component>,
-            mut scene_tree: SceneTreeSubsystem,
+            app: BevyAppSubsystem,
         )
         where
             #dto_ident: DTO + DtoFrom<<#dto_ident as DTO>::Component>,
         {
-            let Some(mut host) = scene_tree
-                .get()
-                .get_root()
-                .unwrap()
-                .get_node_or_null("BevyAppSingleton")
-            else { return; };
+            let host = app.host_node();
 
             let mut exporters = collect_children::<#exporter_ident>(host, true);
             if exporters.is_empty() { return; }

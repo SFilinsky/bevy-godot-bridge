@@ -4,7 +4,7 @@ use bevy::app::App;
 use godot::{
     classes::{INode, Node},
     obj::{Base, WithBaseField},
-    prelude::{godot_api, GodotClass},
+    prelude::{godot_api, GodotClass, Inherits},
 };
 
 use crate::app_action_queue::ActionQueue;
@@ -16,6 +16,7 @@ use bevy::prelude::{Fixed, Time, Virtual, World};
 use bevy::time::TimeUpdateStrategy;
 use bevy::DefaultPlugins;
 use bevy_godot4::scene::PackedScenePlugin;
+use godot::global::godot_error;
 use godot::obj::Singleton;
 use godot::prelude::Gd;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -37,21 +38,27 @@ struct GodotClock {
 
 #[derive(Debug)]
 pub enum BevyAppLookupError {
-    NoSceneTree,
-    NoRoot,
-    SingletonMissing,
-    WrongType,
+    MissingInParentChain,
+    MissingSceneRoot,
+    MissingUnderSceneRoot,
+    MultipleUnderSceneRoot,
 }
 
 impl std::fmt::Display for BevyAppLookupError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BevyAppLookupError::NoSceneTree => write!(f, "SceneTree not available"),
-            BevyAppLookupError::NoRoot => write!(f, "Scene root not available"),
-            BevyAppLookupError::SingletonMissing => {
-                write!(f, "BevyAppSingleton not found at /root")
+            BevyAppLookupError::MissingInParentChain => {
+                write!(f, "No BevyApp found in host parent chain")
             }
-            BevyAppLookupError::WrongType => write!(f, "Node 'BevyAppSingleton' is not a BevyApp"),
+            BevyAppLookupError::MissingSceneRoot => {
+                write!(f, "No SceneRoot found in host parent chain")
+            }
+            BevyAppLookupError::MissingUnderSceneRoot => {
+                write!(f, "No BevyApp found as direct child of resolved SceneRoot")
+            }
+            BevyAppLookupError::MultipleUnderSceneRoot => {
+                write!(f, "Multiple BevyApp nodes found under resolved SceneRoot")
+            }
         }
     }
 }
@@ -119,8 +126,22 @@ impl BevyApp {
         *world.resource_mut::<TimeUpdateStrategy>() = TimeUpdateStrategy::ManualDuration(dt);
     }
 
-    pub fn find_for(host: &Gd<Node>) -> Result<Gd<Self>, BevyAppLookupError> {
-        crate::bevy_app_subsystem::find_for(host)
+    pub fn resolve<T>(host: &Gd<T>) -> Result<Gd<Self>, BevyAppLookupError>
+    where
+        T: GodotClass + Inherits<Node>,
+    {
+        let host_node: Gd<Node> = host.clone().upcast();
+        let result = crate::bevy_app_subsystem::resolve(&host_node);
+
+        if let Err(err) = &result {
+            godot_error!(
+                "BevyApp::resolve() failed for host '{}': {}",
+                host_node.get_path().to_string(),
+                err
+            );
+        }
+
+        result
     }
 
     /// Run a closure with a mutable reference to this instance's Bevy World.
@@ -150,7 +171,7 @@ impl INode for BevyApp {
             base,
         }
     }
-    fn ready(&mut self) {
+    fn enter_tree(&mut self) {
         if godot::classes::Engine::singleton().is_editor_hint() {
             return;
         }
