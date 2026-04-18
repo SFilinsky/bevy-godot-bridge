@@ -110,7 +110,7 @@ fn spawn_scene(
     #[cfg(feature = "assets")] mut assets: ResMut<Assets<ErasedGdResource>>,
     app: BevyAppSubsystem,
 ) {
-    let mut app_host = app.host_node();
+    let mut app_host = app.node_host();
 
     for (mut scene, ent) in new_scenes.iter_mut() {
         let packed_scene = match &mut scene.resource {

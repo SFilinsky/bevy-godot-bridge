@@ -134,41 +134,23 @@ pub mod subsystem {
 pub mod systems {
     use crate::debug::debug_manager::DebugRenderGateSubsystem;
     use crate::debug::paths::resources::{DebugPathRequests, PathDriver, PathNode};
+    use crate::prelude::BevyAppSubsystem;
     use bevy::platform::collections::HashSet;
     use bevy::prelude::{NonSendMut, ResMut};
     use bevy_godot4::debug::debug_manager::EDebugState;
-    use godot::builtin::{
-        NodePath, PackedColorArray, PackedVector3Array, VarArray, Variant, Vector3,
-    };
+    use godot::builtin::{PackedColorArray, PackedVector3Array, VarArray, Variant, Vector3};
     use godot::classes::base_material_3d::{Flags, ShadingMode};
     use godot::classes::mesh::{ArrayType, PrimitiveType};
-    use godot::classes::{ArrayMesh, Engine, MeshInstance3D, SceneTree, StandardMaterial3D};
+    use godot::classes::{ArrayMesh, MeshInstance3D, StandardMaterial3D};
     use godot::meta::ToGodot;
-    use godot::obj::{EngineEnum, Gd, NewAlloc, NewGd, Singleton};
+    use godot::obj::{EngineEnum, Gd, NewAlloc, NewGd};
 
-    pub(super) fn ensure_parent(mut driver: NonSendMut<PathDriver>) {
+    pub(super) fn ensure_parent(mut driver: NonSendMut<PathDriver>, mut app: BevyAppSubsystem) {
         if driver.parent.is_some() {
             return;
         }
 
-        let engine = Engine::singleton();
-        let Some(loop_obj) = engine.get_main_loop() else {
-            return;
-        };
-        let tree = loop_obj.cast::<SceneTree>();
-        let Some(mut root) = tree.get_root() else {
-            return;
-        };
-
-        let path = NodePath::from("BevyDebug");
-        let parent: Gd<_> = if let Some(n) = root.try_get_node_as::<godot::classes::Node>(&path) {
-            n
-        } else {
-            let mut n = godot::classes::Node::new_alloc();
-            n.set_name("BevyDebug");
-            root.add_child(&n);
-            n
-        };
+        let parent: Gd<_> = app.ensure_named_root("BevyDebug");
 
         driver.parent = Some(parent);
     }

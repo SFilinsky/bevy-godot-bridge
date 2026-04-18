@@ -504,6 +504,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 parent_path: NodePath,
                 spawned_roots: HashMap<i64, Gd<Node>>,
                 entity_meta_cache: HashMap<i64, Gd<EntityMeta>>,
+                parent_node_cache: Option<Gd<Node>>,
+                exported_group_cache: Option<Gd<Node>>,
                 #[base] base: Base<Node>,
             }
 
@@ -528,12 +530,54 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     app.try_get_node_as::<#spawner_ident>(stringify!(#spawner_ident))
                 }
 
-                fn parent_node(&mut self) -> Gd<Node> {
-                    if self.parent_path.is_empty() {
-                        self.base().clone().upcast()
-                    } else {
-                        self.base().get_node_as::<Node>(&self.parent_path)
+                fn ensure_child_root(parent: &mut Gd<Node>, child_name: &str) -> Gd<Node> {
+                    if let Some(existing) = parent.try_get_node_as::<Node>(child_name) {
+                        return existing;
                     }
+
+                    let mut node = Node::new_alloc();
+                    node.set_name(child_name);
+                    parent.add_child(&node);
+                    node
+                }
+
+                fn parent_node(&mut self) -> Option<Gd<Node>> {
+                    if let Some(parent) = self.parent_node_cache.as_ref() {
+                        if parent.is_instance_valid() {
+                            if !self.parent_path.is_empty() {
+                                return Some(parent.clone());
+                            }
+
+                            if let Some(group) = self.exported_group_cache.as_ref() {
+                                if group.is_instance_valid() {
+                                    return Some(group.clone());
+                                }
+
+                                godot_error!(
+                                    "{} exported grouping node became invalid after initial resolve",
+                                    stringify!(#spawner_ident)
+                                );
+                                return None;
+                            }
+
+                            let mut host = parent.clone();
+                            let group = Self::ensure_child_root(&mut host, "Exported");
+                            self.exported_group_cache = Some(group.clone());
+                            return Some(group);
+                        }
+
+                        godot_error!(
+                            "{} parent node became invalid after initial resolve",
+                            stringify!(#spawner_ident)
+                        );
+                        return None;
+                    }
+
+                    godot_error!(
+                        "{} parent node was not resolved during ready()",
+                        stringify!(#spawner_ident)
+                    );
+                    None
                 }
 
                 fn resolve_entity_meta_from_root(&mut self, entity_id: i64) -> Option<Gd<EntityMeta>> {
@@ -631,7 +675,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         panic!("Failed to instantiate scene for {}", stringify!(#spawner_ident));
                     };
 
-                    let mut parent = self.parent_node();
+                    let Some(mut parent) = self.parent_node() else {
+                        return None;
+                    };
                     parent.add_child(&instance);
                     self.spawned_roots.insert(entity_id, instance.clone());
 
@@ -706,6 +752,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         parent_path: NodePath::default(),
                         spawned_roots: HashMap::new(),
                         entity_meta_cache: HashMap::new(),
+                        parent_node_cache: None,
+                        exported_group_cache: None,
                         base,
                     }
                 }
@@ -718,6 +766,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let Some(mut exporter) = owner.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident)) else {
                         panic!("{} failed to connect: {} node is missing", stringify!(#spawner_ident), stringify!(#exporter_ident));
                     };
+
+                    if !self.parent_path.is_empty() {
+                        self.parent_node_cache = Some(self.base().get_node_as::<Node>(&self.parent_path));
+                    } else {
+                        self.parent_node_cache = Some(owner.bind().resolve_node_host());
+                    }
 
                     let created = Callable::from_object_method(&self.to_gd(), "_on_created");
                     if !exporter.is_connected("on_created", &created) {
@@ -737,7 +791,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             #[derive(Debug, Default)]
-            struct #exporter_accessor_impl_ident(Option<Gd<#exporter_ident>>);
+            struct #exporter_accessor_impl_ident {
+                node: Option<Gd<#exporter_ident>>,
+                had_report_missing: bool,
+                had_report_invalid: bool,
+            }
 
             #[derive(SystemParam)]
             struct #exporter_accessor_ident<'w, 's> {
@@ -747,20 +805,38 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             impl #exporter_accessor_ident<'_, '_> {
                 fn get(&mut self, app: &mut BevyAppSubsystem) -> Option<Gd<#exporter_ident>> {
-                    if let Some(cached) = self.gd.0.as_ref() {
+                    if let Some(cached) = self.gd.node.as_ref() {
                         if cached.is_instance_valid() {
                             return Some(cached.clone());
                         }
+
+                        if !self.gd.had_report_invalid {
+                            godot_error!(
+                                "{} accessor: cached exporter became invalid after initial resolve",
+                                stringify!(#exporter_ident)
+                            );
+                            self.gd.had_report_invalid = true;
+                        }
+                        return None;
+                    }
+
+                    if self.gd.had_report_missing {
+                        return None;
                     }
 
                     let host = app.host_node();
 
                     let Some(exporter) = host.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident)) else {
-                        self.gd.0 = None;
+                        self.gd.node = None;
+                        self.gd.had_report_missing = true;
+                        godot_error!(
+                            "{} accessor: failed initial resolve under BevyApp host",
+                            stringify!(#exporter_ident)
+                        );
                         return None;
                     };
 
-                    self.gd.0 = Some(exporter.clone());
+                    self.gd.node = Some(exporter.clone());
                     Some(exporter)
                 }
             }

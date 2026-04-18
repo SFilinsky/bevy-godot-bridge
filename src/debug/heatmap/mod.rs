@@ -199,20 +199,21 @@ pub mod subsystem {
 pub mod systems {
     use bevy::platform::collections::hash_map::Entry;
     use bevy::prelude::{NonSendMut, ResMut};
-    use godot::builtin::{NodePath, PackedByteArray, Vector2, Vector3};
+    use godot::builtin::{PackedByteArray, Vector2, Vector3};
     use godot::classes::base_material_3d::{
         ShadingMode, TextureFilter, TextureParam, Transparency,
     };
     use godot::classes::image::Format;
     use godot::classes::{
-        Engine, Image, ImageTexture, MeshInstance3D, Node, PlaneMesh, SceneTree, StandardMaterial3D,
+        Image, ImageTexture, MeshInstance3D, Node, PlaneMesh, StandardMaterial3D,
     };
-    use godot::obj::{Gd, NewAlloc, NewGd, Singleton};
+    use godot::obj::{Gd, NewAlloc, NewGd};
 
     use crate::debug::debug_manager::DebugRenderGateSubsystem;
     use crate::debug::heatmap::resources::{
         DebugHeatmapDriver, DebugHeatmapRequests, HeatmapNode, HeatmapRequest, Normalize,
     };
+    use crate::prelude::BevyAppSubsystem;
     use crate::prelude::EDebugState;
     use std::hash::{Hash, Hasher};
 
@@ -260,29 +261,15 @@ pub mod systems {
         hasher.finish()
     }
 
-    pub(super) fn ensure_driver_parent(mut driver: NonSendMut<DebugHeatmapDriver>) {
+    pub(super) fn ensure_driver_parent(
+        mut driver: NonSendMut<DebugHeatmapDriver>,
+        mut app: BevyAppSubsystem,
+    ) {
         if driver.parent.is_some() {
             return;
         }
 
-        let engine = Engine::singleton();
-        let Some(loop_obj) = engine.get_main_loop() else {
-            return;
-        };
-        let tree = loop_obj.cast::<SceneTree>();
-        let Some(mut root) = tree.get_root() else {
-            return;
-        };
-
-        let path = NodePath::from("BevyDebug");
-        let parent: Gd<Node> = if let Some(n) = root.try_get_node_as::<Node>(&path) {
-            n
-        } else {
-            let mut n = Node::new_alloc();
-            n.set_name("BevyDebug");
-            root.add_child(&n);
-            n
-        };
+        let parent: Gd<Node> = app.ensure_named_root("BevyDebug");
 
         driver.parent = Some(parent);
     }

@@ -310,19 +310,73 @@ pub fn expand(input: TokenStream) -> TokenStream {
             /// Cache of spawned nodes
             map: HashMap<i64, Gd<#entity_node_ident>>,
 
+            /// Resolved parent for spawned runtime entities.
+            parent_node_cache: Option<Gd<Node>>,
+
+            /// Resolved `Exported` grouping node under parent host.
+            exported_group_cache: Option<Gd<Node>>,
+
             #[base]
             base: Base<Node>,
         }
 
         #[godot_api]
         impl #entity_spawn_handler_ident {
+            fn ensure_child_group(parent: &mut Gd<Node>, group_name: &str) -> Gd<Node> {
+                if let Some(existing) = parent.try_get_node_as::<Node>(group_name) {
+                    return existing;
+                }
+
+                let mut node = Node::new_alloc();
+                node.set_name(group_name);
+                parent.add_child(&node);
+                node
+            }
+
+            fn parent_node(&mut self) -> Option<Gd<Node>> {
+                if let Some(parent) = self.parent_node_cache.as_ref() {
+                    if parent.is_instance_valid() {
+                        if !self.parent_path.is_empty() {
+                            return Some(parent.clone());
+                        }
+
+                        if let Some(group) = self.exported_group_cache.as_ref() {
+                            if group.is_instance_valid() {
+                                return Some(group.clone());
+                            }
+
+                            godot_error!(
+                                "{} exported grouping node became invalid after initial resolve",
+                                stringify!(#entity_spawn_handler_ident)
+                            );
+                            return None;
+                        }
+
+                        let mut host = parent.clone();
+                        let group = Self::ensure_child_group(&mut host, "Exported");
+                        self.exported_group_cache = Some(group.clone());
+                        return Some(group);
+                    }
+
+                    godot_error!(
+                        "{} parent node became invalid after initial resolve",
+                        stringify!(#entity_spawn_handler_ident)
+                    );
+                    return None;
+                }
+
+                godot_error!(
+                    "{} parent node was not resolved during ready()",
+                    stringify!(#entity_spawn_handler_ident)
+                );
+                None
+            }
+
             #[func]
             fn _on_created(&mut self, entity_id: i64, dto: Gd<#dto_ident>) {
                 // decide parent
-                let mut parent: Gd<Node> = if self.parent_path.is_empty() {
-                    self.base().clone().upcast()
-                } else {
-                    self.base().get_node_as::<Node>(&self.parent_path)
+                let Some(mut parent) = self.parent_node() else {
+                    return;
                 };
 
                 // instance + add
@@ -369,6 +423,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     scene: PackedScene::new_gd(),
                     parent_path: NodePath::default(),
                     map: HashMap::new(),
+                    parent_node_cache: None,
+                    exported_group_cache: None,
                     base,
                 }
             }
@@ -381,6 +437,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 let Some(mut exporter) = app.try_get_node_as::<Node>(stringify!(#exporter_ident)) else {
                     godot_warn!("{} not found under resolved BevyApp", stringify!(#exporter_ident)); return;
                 };
+
+                if !self.parent_path.is_empty() {
+                    self.parent_node_cache = Some(self.base().get_node_as::<Node>(&self.parent_path));
+                } else {
+                    self.parent_node_cache = Some(app.bind().resolve_node_host());
+                }
 
                 let on_created = self.base().callable("_on_created");
                 let on_updated = self.base().callable("_on_updated");

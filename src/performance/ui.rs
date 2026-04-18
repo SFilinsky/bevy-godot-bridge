@@ -1,5 +1,6 @@
 use super::dto::{PerformanceMetrics, SystemPerformanceEntryDto};
 use godot::classes::{Control, INode, Label, Node};
+use godot::global::godot_error;
 use godot::obj::{Base, Gd, NewAlloc};
 use godot::prelude::*;
 
@@ -41,6 +42,9 @@ pub struct PerformanceHud {
 
     labels: Vec<Gd<Label>>,
     time_accum: f64,
+    is_enabled: bool,
+    did_report_metrics_missing: bool,
+    did_report_metrics_invalid: bool,
 
     #[base]
     base: Base<Node>,
@@ -58,13 +62,29 @@ impl INode for PerformanceHud {
             container: None,
             labels: Vec::new(),
             time_accum: 0.0,
+            is_enabled: true,
+            did_report_metrics_missing: false,
+            did_report_metrics_invalid: false,
             base,
+        }
+    }
+
+    fn enter_tree(&mut self) {
+        self.metrics = self.resolve_metrics();
+
+        if self.metrics.is_none() {
+            self.is_enabled = false;
+            if !self.did_report_metrics_missing {
+                godot_error!(
+                    "PerformanceHud: failed to resolve PerformanceMetrics during enter_tree; HUD disabled"
+                );
+                self.did_report_metrics_missing = true;
+            }
         }
     }
 
     fn ready(&mut self) {
         self.container = self.resolve_container();
-        self.metrics = self.resolve_metrics();
         self.refresh();
     }
 
@@ -87,12 +107,14 @@ impl INode for PerformanceHud {
 impl PerformanceHud {
     #[func]
     pub fn refresh_now(&mut self) {
+        if !self.is_enabled {
+            return;
+        }
+
         if self.container.is_none() {
             self.container = self.resolve_container();
         }
-        if self.metrics.is_none() {
-            self.metrics = self.resolve_metrics();
-        }
+
         self.refresh();
     }
 
@@ -110,17 +132,39 @@ impl PerformanceHud {
     }
 
     fn refresh(&mut self) {
+        if !self.is_enabled {
+            self.show_single_line("PerformanceHud: disabled");
+            return;
+        }
+
         let Some(mut container) = self.container.clone() else {
             self.show_single_line("PerformanceHud: container_path not set or invalid");
             return;
         };
 
         let Some(metrics) = self.metrics.as_ref() else {
+            if !self.did_report_metrics_missing {
+                godot_error!(
+                    "PerformanceHud: metrics were not resolved during ready(); skipping refresh"
+                );
+                self.did_report_metrics_missing = true;
+            }
             self.show_single_line(
                 "PerformanceHud: metrics unavailable (PerformanceMetrics not found)",
             );
             return;
         };
+
+        if !metrics.is_instance_valid() {
+            if !self.did_report_metrics_invalid {
+                godot_error!(
+                    "PerformanceHud: PerformanceMetrics became invalid after initial resolve"
+                );
+                self.did_report_metrics_invalid = true;
+            }
+            self.show_single_line("PerformanceHud: metrics node became invalid");
+            return;
+        }
 
         let entries = metrics.bind().get_metrics();
 
