@@ -281,6 +281,10 @@ pub mod importers {
         fn ready(&mut self) {
             self.enqueue_init();
         }
+
+        fn process(&mut self, _delta: f64) {
+            self.queue.bind_mut().flush();
+        }
     }
 }
 

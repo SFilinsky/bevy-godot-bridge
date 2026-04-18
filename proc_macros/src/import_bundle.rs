@@ -425,6 +425,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 fn ready(&mut self) {
                     self.enqueue();
+                    self.queue.bind_mut().flush();
 
                     // Destroy placeholder scene object (spawn is driven by Bevy export afterwards).
                     if (!self.destroy_parent) {
@@ -437,6 +438,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     } else {
                         self.base_mut().queue_free();
                     }
+                }
+
+                fn process(&mut self, _delta: f64) {
+                    self.queue.bind_mut().flush();
                 }
             }
 

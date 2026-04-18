@@ -141,7 +141,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
     // because DTO may contain Godot-only types. We enqueue DTO itself and convert
     // to Message in the drain system via DataTransferConfig::from_dto().
     //
-    // Godot side call is: queue.enqueue(dto: Gd<DtoType>)
+    // Godot side call is: queue.enqueue(dto: Gd<DtoType>) + queue.flush() from owner _process().
     //
     // This matches your requirement after the Vec3 issue.
 
@@ -237,6 +237,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[class(init, base=RefCounted)]
             pub struct #queue_rc_ident {
                 bevy_app: Option<Gd<BevyApp>>,
+                pending: Vec<Gd<__Dto>>,
                 #[base]
                 base: Base<RefCounted>,
             }
@@ -251,22 +252,46 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     self.bevy_app = Some(app);
                 }
 
-                /// Enqueue a DTO. Conversion to Bevy message happens in the drain system.
+                /// Enqueue a DTO into local pending batch.
                 #[func]
                 pub fn enqueue(&mut self, dto: Gd<__Dto>) {
-                    self.enqueue_many(vec![dto]);
+                    self.pending.push(dto);
                 }
 
                 pub fn enqueue_many(&mut self, dtos: Vec<Gd<__Dto>>) {
+                    self.pending.extend(dtos);
+                }
+
+                #[func]
+                pub fn enqueue_batch(&mut self, dtos: Array<Gd<__Dto>>) {
+                    let mut batch: Vec<Gd<__Dto>> = Vec::with_capacity(dtos.len() as usize);
+                    for i in 0..dtos.len() {
+                        if let Some(dto) = dtos.get(i) {
+                            batch.push(dto);
+                        }
+                    }
+                    self.enqueue_many(batch);
+                }
+
+                /// Flush pending DTOs into this queue's app-local Bevy queue storage.
+                /// Should be called by owner node once per frame (for example in `_process()`).
+                #[func]
+                pub fn flush(&mut self) {
+                    if self.pending.is_empty() {
+                        return;
+                    }
+
                     let Some(mut app) = self.bevy_app.as_ref().cloned() else {
                         godot_error!(
-                            "[ImportQueue:{}] enqueue() called before bind_bevy_app() (or BevyApp not found)",
+                            "[ImportQueue:{}] flush() called before bind_bevy_app() (or BevyApp not found)",
                             stringify!(#cfg_path),
                         );
                         return;
                     };
 
-                    // Write into per-app queue via subsystem API
+                    let dtos = std::mem::take(&mut self.pending);
+
+                    // Write batched DTOs into per-app queue via subsystem API.
                     app.bind_mut().with_world_mut(|world: &mut World| {
                         if world.get_non_send_resource::<#queue_storage_ident>().is_none() {
                             world.insert_non_send_resource::<#queue_storage_ident>(#queue_storage_ident::default());
@@ -280,17 +305,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         }
                         state.apply(world);
                     });
-                }
-
-                #[func]
-                pub fn enqueue_batch(&mut self, dtos: Array<Gd<__Dto>>) {
-                    let mut batch: Vec<Gd<__Dto>> = Vec::with_capacity(dtos.len() as usize);
-                    for i in 0..dtos.len() {
-                        if let Some(dto) = dtos.get(i) {
-                            batch.push(dto);
-                        }
-                    }
-                    self.enqueue_many(batch);
                 }
 
                 #[func]
