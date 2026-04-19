@@ -593,7 +593,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         return None;
                     }
 
-                    let meta = EntityMeta::resolve_from_scene_root(root.clone(), entity_id);
+                    let Some(meta) = EntityMeta::resolve_from_scene_root(root.clone(), entity_id) else {
+                        return None;
+                    };
                     self.entity_meta_cache.insert(entity_id, meta.clone());
                     Some(meta)
                 }
@@ -621,7 +623,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         panic!("Failed to instantiate scene for {}", stringify!(#spawner_ident));
                     };
 
-                    let mut meta = EntityMeta::resolve_from_scene_root(instance.clone(), entity_id);
+                    let Some(mut meta) = EntityMeta::resolve_from_scene_root(instance.clone(), entity_id) else {
+                        return None;
+                    };
                     meta.bind_mut().assign_entity_id(entity_id);
 
                     let Some(mut parent) = self.parent_node() else {

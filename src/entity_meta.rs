@@ -1,4 +1,4 @@
-use crate::tools::collect_children;
+use godot::global::godot_error;
 use godot::prelude::*;
 
 #[derive(GodotClass)]
@@ -36,7 +36,7 @@ impl EntityMeta {
         self.entity_id = entity_id;
     }
 
-    pub fn resolve_from_scene_root(instance: Gd<Node>, entity_id: i64) -> Gd<EntityMeta> {
+    pub fn resolve_from_scene_root(instance: Gd<Node>, entity_id: i64) -> Option<Gd<EntityMeta>> {
         let root_meta = instance.clone().try_cast::<EntityMeta>().ok();
 
         let mut direct_children_meta: Vec<Gd<EntityMeta>> = Vec::new();
@@ -52,39 +52,33 @@ impl EntityMeta {
         }
 
         if root_meta.is_some() && !direct_children_meta.is_empty() {
-            godot_warn!(
-                "Multiple EntityMeta nodes found for entity {}; using root-attached one",
+            godot_error!(
+                "Multiple EntityMeta nodes found for entity {}; keep exactly one at scene root or direct child",
                 entity_id
             );
         }
 
         if direct_children_meta.len() > 1 {
-            godot_warn!(
-                "Multiple direct-child EntityMeta nodes found for entity {}; using the first one",
+            godot_error!(
+                "Multiple direct-child EntityMeta nodes found for entity {}; keep exactly one",
                 entity_id
             );
         }
 
         if let Some(meta) = root_meta {
-            return meta;
+            return Some(meta);
         }
 
         if let Some(meta) = direct_children_meta.into_iter().next() {
-            return meta;
+            return Some(meta);
         }
 
-        let nested_meta = collect_children::<EntityMeta>(instance.clone(), true);
-        if !nested_meta.is_empty() {
-            panic!(
-                "EntityMeta must be attached to scene root or as a direct child of the root for entity {}; deeper nested placement is invalid",
-                entity_id
-            );
-        }
-
-        panic!(
+        godot_error!(
             "Spawned scene is missing EntityMeta for entity {}; attach it to root or root direct child",
             entity_id
         );
+
+        None
     }
 }
 

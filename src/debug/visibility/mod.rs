@@ -1,6 +1,7 @@
 use crate::debug::debug_manager::{DebugManager, EDebugState};
 use godot::builtin::{Array, NodePath};
 use godot::classes::{INode, Node};
+use godot::global::{godot_error, Error};
 use godot::meta::ToGodot;
 use godot::obj::{Base, WithBaseField};
 use godot::prelude::{godot_api, Gd, GodotClass};
@@ -52,7 +53,13 @@ impl INode for DebugVisibilityGroup {
 
         let on_change = self.base().callable("_on_debug_state_changed");
         let mut manager_node = manager.clone().upcast::<Node>();
-        let _ = manager_node.connect("on_debug_change", &on_change);
+        let err = manager_node.connect("on_debug_change", &on_change);
+        if err != Error::OK {
+            godot_error!(
+                "DebugVisibilityGroup: failed to connect on_debug_change signal: {:?}",
+                err
+            );
+        }
 
         let current_state = manager.bind().current_state();
         self.apply_visibility(current_state);
