@@ -1007,6 +1007,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 instances_by_action_instance_id: HashMap<ActionInstanceId, Gd<#instance_name>>,
                 instances_by_execution_id: HashMap<ExecutionId, Gd<#instance_name>>,
                 static_data_cache: Option<Gd<StaticDataDto>>,
+                pending_static_data_sync: bool,
             }
 
             #[godot_api]
@@ -1017,12 +1018,16 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         Ok(app) => {
                             let mut app = app;
                             self.bevy_app = Some(app.clone());
+                            self.pending_static_data_sync = self.static_data_cache.is_some();
 
-                            if let Some(static_data) = self.static_data_cache.as_ref().cloned() {
-                                enqueue_requests_for_app(&mut app, vec![ApiRequest {
-                                    action_instance_id: None,
-                                    kind: ApiRequestKind::SetStaticData(static_data),
-                                }]);
+                            if self.pending_static_data_sync && app.bind().get_app().is_some() {
+                                if let Some(static_data) = self.static_data_cache.as_ref().cloned() {
+                                    enqueue_requests_for_app(&mut app, vec![ApiRequest {
+                                        action_instance_id: None,
+                                        kind: ApiRequestKind::SetStaticData(static_data),
+                                    }]);
+                                    self.pending_static_data_sync = false;
+                                }
                             }
                         }
                         Err(err) => {
@@ -1036,6 +1041,16 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let Some(mut app) = self.bevy_app.as_ref().cloned() else {
                         return;
                     };
+
+                    if self.pending_static_data_sync && app.bind().get_app().is_some() {
+                        if let Some(static_data) = self.static_data_cache.as_ref().cloned() {
+                            enqueue_requests_for_app(&mut app, vec![ApiRequest {
+                                action_instance_id: None,
+                                kind: ApiRequestKind::SetStaticData(static_data),
+                            }]);
+                        }
+                        self.pending_static_data_sync = false;
+                    }
 
                     for response in drain_responses_for_app(&mut app) {
                         match response {
@@ -1151,14 +1166,20 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[func]
                 fn set_static_data(&mut self, static_data: Gd<StaticDataDto>) {
                     self.static_data_cache = Some(static_data.clone());
+                    self.pending_static_data_sync = true;
                     let Some(mut app) = self.bevy_app.as_ref().cloned() else {
                         return;
                     };
+
+                    if app.bind().get_app().is_none() {
+                        return;
+                    }
 
                     enqueue_requests_for_app(&mut app, vec![ApiRequest {
                         action_instance_id: None,
                         kind: ApiRequestKind::SetStaticData(static_data),
                     }]);
+                    self.pending_static_data_sync = false;
                 }
             }
 

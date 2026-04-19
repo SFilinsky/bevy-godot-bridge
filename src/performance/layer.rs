@@ -26,6 +26,9 @@ struct KindVisitor {
     name: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct SpanScopeId(AppScopeId);
+
 impl Visit for KindVisitor {
     fn record_str(&mut self, field: &Field, value: &str) {
         if field.name() == "name" {
@@ -340,7 +343,11 @@ where
             if span.extensions().get::<SpanInfo>().is_none() {
                 return;
             }
-            span.extensions_mut().insert(Instant::now());
+
+            let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
+            let mut ext = span.extensions_mut();
+            ext.insert(Instant::now());
+            ext.insert(SpanScopeId(scope_id));
         }
     }
 
@@ -358,16 +365,18 @@ where
         };
 
         // Then compute elapsed.
-        let (elapsed, now) = {
+        let (elapsed, now, scope_id) = {
             let mut ext = span.extensions_mut();
             let Some(start) = ext.remove::<Instant>() else {
                 return;
             };
+            let scope_id = ext
+                .remove::<SpanScopeId>()
+                .map(|scope| scope.0)
+                .unwrap_or(GLOBAL_APP_SCOPE_ID);
             let now = Instant::now();
-            (start.elapsed().as_secs_f64(), now)
+            (start.elapsed().as_secs_f64(), now, scope_id)
         };
-
-        let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
 
         let mut entry = METRICS
             .entry((scope_id, key))
