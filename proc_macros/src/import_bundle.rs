@@ -401,6 +401,24 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     self.queue.bind_mut().enqueue(dto_wrapper);
                 }
+
+                #[func]
+                pub fn initialize(&mut self) {
+                    self.enqueue();
+                    self.queue.bind_mut().flush();
+
+                    // Destroy placeholder scene object (spawn is driven by Bevy export afterwards).
+                    if (!self.destroy_parent) {
+                        self.base_mut().queue_free();
+                        return;
+                    }
+
+                    if let Some(mut parent) = self.base().get_parent() {
+                        parent.queue_free();
+                    } else {
+                        self.base_mut().queue_free();
+                    }
+                }
             }
 
             #[godot_api]
@@ -424,20 +442,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 fn ready(&mut self) {
-                    self.enqueue();
-                    self.queue.bind_mut().flush();
-
-                    // Destroy placeholder scene object (spawn is driven by Bevy export afterwards).
-                    if (!self.destroy_parent) {
-                        self.base_mut().queue_free();
-                        return;
-                    }
-
-                    if let Some(mut parent) = self.base().get_parent() {
-                        parent.queue_free();
-                    } else {
-                        self.base_mut().queue_free();
-                    }
+                    InitializationCoordinator::register_initializer_node(self.base().clone().upcast());
                 }
 
                 fn process(&mut self, _delta: f64) {

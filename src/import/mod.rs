@@ -198,7 +198,7 @@ pub mod sets {
 
 pub mod importers {
     use crate::import::intentions::{InitializeEntityIntentionDto, InitializeEntityIntentionQueue};
-    use bevy_godot4::prelude::BevyApp;
+    use bevy_godot4::prelude::{BevyApp, InitializationCoordinator};
     use godot::classes::Node;
     use godot::global::godot_print;
     use godot::obj::Base;
@@ -251,6 +251,12 @@ pub mod importers {
 
             self.queue.bind_mut().enqueue(dto);
         }
+
+        #[func]
+        pub fn initialize(&mut self) {
+            self.enqueue_init();
+            self.queue.bind_mut().flush();
+        }
     }
 
     #[godot_api]
@@ -279,7 +285,7 @@ pub mod importers {
         }
 
         fn ready(&mut self) {
-            self.enqueue_init();
+            InitializationCoordinator::register_initializer_node(self.base().clone().upcast());
         }
 
         fn process(&mut self, _delta: f64) {

@@ -104,7 +104,7 @@ pub mod importers {
     use crate::import::position::intentions::{
         InitializePositionIntentionDto, InitializePositionIntentionQueue,
     };
-    use crate::prelude::BevyApp;
+    use crate::prelude::{BevyApp, InitializationCoordinator};
     use godot::classes::{Node, Node3D};
     use godot::global::{godot_error, godot_print};
     use godot::obj::Base;
@@ -174,6 +174,12 @@ pub mod importers {
 
             self.queue.bind_mut().enqueue(dto);
         }
+
+        #[func]
+        pub fn initialize(&mut self) {
+            self.register_internal();
+            self.queue.bind_mut().flush();
+        }
     }
 
     #[godot_api]
@@ -195,7 +201,7 @@ pub mod importers {
         }
 
         fn ready(&mut self) {
-            self.register_internal();
+            InitializationCoordinator::register_initializer_node(self.base().clone().upcast());
         }
 
         fn process(&mut self, _delta: f64) {
