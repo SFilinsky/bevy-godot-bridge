@@ -159,10 +159,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[derive(GodotClass)]
             #[class(base=Node)]
             pub struct #node_ident {
-                #[export]
-                #[var]
-                pub settings: Option<Gd<SettingsDto>>,
-
+                settings_cache: Option<Gd<SettingsDto>>,
                 queue: Gd<#queue_accessor_ident>,
                 did_enqueue: bool,
 
@@ -188,7 +185,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         return;
                     }
 
-                    let settings = self.settings.clone().unwrap_or_else(|| {
+                    let settings = self.settings_cache.clone().unwrap_or_else(|| {
                         <SettingsDto as godot::obj::NewGd>::new_gd()
                     });
 
@@ -202,13 +199,18 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     self.enqueue_settings();
                 }
 
+                #[func]
+                fn set_settings(&mut self, settings: Gd<SettingsDto>) {
+                    self.settings_cache = Some(settings);
+                }
+
             }
 
             #[godot_api]
             impl INode for #node_ident {
                 fn init(base: Base<Node>) -> Self {
                     Self {
-                        settings: Some(<SettingsDto as godot::obj::NewGd>::new_gd()),
+                        settings_cache: Some(<SettingsDto as godot::obj::NewGd>::new_gd()),
                         queue: #queue_accessor_ident::new_gd(),
                         did_enqueue: false,
                         base,
