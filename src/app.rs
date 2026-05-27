@@ -286,6 +286,12 @@ impl INode for BevyApp {
         self.app = Some(app);
 
         self.apply_pending_actions();
+
+        // Scenes without an InitializationCoordinator keep the old standalone
+        // behavior: Bevy starts ticking as soon as BevyApp is ready.
+        if !InitializationCoordinator::exists_for(&self.base().clone().upcast::<Node>()) {
+            self.mark_scene_initialized();
+        }
     }
 
     fn process(&mut self, _delta_seconds: f64) {

@@ -37,6 +37,11 @@ coordinator must not call the Bevy update loop directly because initializer meth
 If a startup node affects how entities are spawned, it should use the configuration phase. If a startup node creates or
 configures scene-authored entities, it should use the entity phase.
 
+Scenes that do not include an `InitializationCoordinator` keep standalone behavior: `BevyApp` starts ticking after its
+own setup finishes, and any registered initializer node calls `initialize()` immediately with a one-time warning. Add a
+coordinator when the scene has Godot-authored startup data that must be ordered before the first Bevy update or grouped
+across multiple initialization phases.
+
 ## The Concept
 
 Original repo idea was "what if Bevy could manipulate Godot scenes to drive the whole game". However, as Rust is 

@@ -2,12 +2,14 @@ use crate::prelude::{BevyApp, SceneRoot};
 use crate::tools::collect_children;
 use godot::builtin::StringName;
 use godot::classes::{INode, Node};
-use godot::global::{godot_error, godot_print};
+use godot::global::{godot_error, godot_print, godot_warn};
 use godot::obj::{Base, InstanceId, WithBaseField};
 use godot::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const INITIALIZE_METHOD: &str = "initialize";
+static DID_WARN_MISSING_COORDINATOR: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum InitializationPhase {
@@ -50,12 +52,31 @@ pub struct InitializationCoordinator {
 }
 
 impl InitializationCoordinator {
+    fn find_for<T>(host: &Gd<T>) -> Option<Vec<Gd<InitializationCoordinator>>>
+    where
+        T: GodotClass + Inherits<Node>,
+    {
+        let host_node = host.clone().upcast::<Node>();
+        let scene_root = SceneRoot::resolve_as_parent(&host_node)?;
+        Some(collect_children::<InitializationCoordinator>(
+            scene_root.upcast::<Node>(),
+            true,
+        ))
+    }
+
+    pub fn exists_for<T>(host: &Gd<T>) -> bool
+    where
+        T: GodotClass + Inherits<Node>,
+    {
+        Self::find_for(host).is_some_and(|coordinator_list| !coordinator_list.is_empty())
+    }
+
     pub fn resolve<T>(host: &Gd<T>) -> Option<Gd<InitializationCoordinator>>
     where
         T: GodotClass + Inherits<Node>,
     {
         let host_node = host.clone().upcast::<Node>();
-        let Some(scene_root) = SceneRoot::resolve_as_parent(&host_node) else {
+        if SceneRoot::resolve_as_parent(&host_node).is_none() {
             let host_path = if host_node.is_inside_tree() {
                 host_node.get_path().to_string()
             } else {
@@ -66,10 +87,9 @@ impl InitializationCoordinator {
                 host_path
             );
             return None;
-        };
+        }
 
-        let mut coordinator_list =
-            collect_children::<InitializationCoordinator>(scene_root.upcast::<Node>(), true);
+        let mut coordinator_list = Self::find_for(host).unwrap_or_default();
 
         if coordinator_list.is_empty() {
             godot_error!("InitializationCoordinator::resolve() failed: no coordinator in SceneRoot.");
@@ -87,7 +107,24 @@ impl InitializationCoordinator {
     }
 
     pub fn register_initializer_node(initializer: Gd<Node>, phase: InitializationPhase) {
-        let Some(mut coordinator) = Self::resolve(&initializer) else {
+        let Some(mut coordinator_list) = Self::find_for(&initializer) else {
+            Self::initialize_without_coordinator(initializer);
+            return;
+        };
+
+        if coordinator_list.is_empty() {
+            Self::initialize_without_coordinator(initializer);
+            return;
+        }
+
+        if coordinator_list.len() > 1 {
+            godot_error!(
+                "InitializationCoordinator::register_initializer_node() found multiple coordinators in SceneRoot."
+            );
+            return;
+        }
+
+        let Some(mut coordinator) = coordinator_list.pop() else {
             return;
         };
 
@@ -99,6 +136,19 @@ impl InitializationCoordinator {
         coordinator_bind
             .initializer_phase_by_id_map
             .insert(initializer_id, phase);
+    }
+
+    fn initialize_without_coordinator(mut initializer: Gd<Node>) {
+        if !DID_WARN_MISSING_COORDINATOR.swap(true, Ordering::Relaxed) {
+            godot_warn!(
+                "InitializationCoordinator is missing. Registered initializer nodes will initialize immediately; add an InitializationCoordinator to coordinate startup ordering."
+            );
+        }
+
+        let initialize_method = StringName::from(INITIALIZE_METHOD);
+        if initializer.has_method(&initialize_method) {
+            initializer.call(&initialize_method, &[]);
+        }
     }
 
     fn resolve_scene_root(&self) -> Option<Gd<SceneRoot>> {
