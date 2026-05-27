@@ -198,7 +198,7 @@ pub mod sets {
 
 pub mod importers {
     use crate::import::intentions::{InitializeEntityIntentionDto, InitializeEntityIntentionQueue};
-    use bevy_godot4::prelude::{BevyApp, InitializationCoordinator};
+    use bevy_godot4::prelude::{BevyApp, InitializationCoordinator, InitializationPhase};
     use godot::classes::Node;
     use godot::global::godot_print;
     use godot::obj::Base;
@@ -285,7 +285,10 @@ pub mod importers {
         }
 
         fn ready(&mut self) {
-            InitializationCoordinator::register_initializer_node(self.base().clone().upcast());
+            InitializationCoordinator::register_initializer_node(
+                self.base().clone().upcast(),
+                InitializationPhase::Entity,
+            );
         }
 
         fn process(&mut self, _delta: f64) {

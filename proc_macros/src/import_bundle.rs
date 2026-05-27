@@ -442,7 +442,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 fn ready(&mut self) {
-                    InitializationCoordinator::register_initializer_node(self.base().clone().upcast());
+                    InitializationCoordinator::register_initializer_node(
+                        self.base().clone().upcast(),
+                        InitializationPhase::Entity,
+                    );
                 }
 
                 fn process(&mut self, _delta: f64) {

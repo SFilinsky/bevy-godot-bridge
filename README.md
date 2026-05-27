@@ -22,14 +22,20 @@ Bridge contracts should be documented in the bridge itself: code comments, modul
 `InitializationCoordinator` owns the Godot-side startup pass:
 
 1. Initializer nodes register themselves from their own `_ready()` callbacks.
-2. The coordinator calls each registered node's `initialize()` method once, in scene-tree order.
-3. Initializers enqueue startup data into `BevyApp`.
-4. The coordinator marks `BevyApp` as scene-initialized.
-5. On the next `BevyApp.process()`, queued imports are drained and the first Bevy update runs.
+2. The coordinator groups registered nodes by initialization phase.
+3. Configuration initializers run first. This includes action static data and other settings-like imports.
+4. Entity initializers run second. This includes level-authored entity imports and their component imports.
+5. Within each phase, initializers run in scene-tree order.
+6. Initializers enqueue startup data into `BevyApp`.
+7. The coordinator marks `BevyApp` as scene-initialized.
+8. On the next `BevyApp.process()`, queued imports are drained and the first Bevy update runs.
 
 This guarantees scene-authored imports are submitted before gameplay systems can observe the Bevy world. The
 coordinator must not call the Bevy update loop directly because initializer methods may need to resolve and mutate
 `BevyApp` while submitting their data.
+
+If a startup node affects how entities are spawned, it should use the configuration phase. If a startup node creates or
+configures scene-authored entities, it should use the entity phase.
 
 ## The Concept
 

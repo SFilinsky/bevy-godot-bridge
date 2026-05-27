@@ -5,15 +5,31 @@ use godot::classes::{INode, Node};
 use godot::global::{godot_error, godot_print};
 use godot::obj::{Base, InstanceId, WithBaseField};
 use godot::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const INITIALIZE_METHOD: &str = "initialize";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum InitializationPhase {
+    /// Settings-like data that entity startup may depend on.
+    ///
+    /// Examples: action static data and entity settings resources.
+    Configuration,
+
+    /// Scene-authored entities and entity component imports.
+    ///
+    /// These run after configuration so entity spawn logic can read startup
+    /// settings before creating gameplay entities.
+    Entity,
+}
 
 /// Coordinates Godot-authored startup data before Bevy starts ticking.
 ///
 /// Initializer nodes register themselves from their own `_ready()` callbacks and
-/// expose an `initialize()` method. This node calls those methods once, in scene
-/// tree order, then marks the hosting BevyApp as ready for its first update.
+/// expose an `initialize()` method. Each registration includes the initializer
+/// phase, making startup order explicit at the call site. This node calls
+/// initializers once, grouped by phase and then scene-tree order, then marks the
+/// hosting BevyApp as ready for its first update.
 ///
 /// BevyApp owns the actual update loop. The coordinator must not call
 /// `app.update()` or drain Bevy queues directly because initializer methods may
@@ -27,6 +43,7 @@ pub struct InitializationCoordinator {
 
     did_initialize: bool,
     registered_initializer_id_set: HashSet<InstanceId>,
+    initializer_phase_by_id_map: HashMap<InstanceId, InitializationPhase>,
 
     #[base]
     base: Base<Node>,
@@ -69,15 +86,19 @@ impl InitializationCoordinator {
         Some(coordinator_list.remove(0))
     }
 
-    pub fn register_initializer_node(initializer: Gd<Node>) {
+    pub fn register_initializer_node(initializer: Gd<Node>, phase: InitializationPhase) {
         let Some(mut coordinator) = Self::resolve(&initializer) else {
             return;
         };
 
-        coordinator
-            .bind_mut()
+        let initializer_id = initializer.instance_id();
+        let mut coordinator_bind = coordinator.bind_mut();
+        coordinator_bind
             .registered_initializer_id_set
-            .insert(initializer.instance_id());
+            .insert(initializer_id);
+        coordinator_bind
+            .initializer_phase_by_id_map
+            .insert(initializer_id, phase);
     }
 
     fn resolve_scene_root(&self) -> Option<Gd<SceneRoot>> {
@@ -97,14 +118,35 @@ impl InitializationCoordinator {
 
         let initialize_method = StringName::from(INITIALIZE_METHOD);
         // Walk the final scene tree instead of the registration order. Parent entity
-        // initializers must run before child component initializers.
-        collect_children::<Node>(scene_root.upcast::<Node>(), true)
+        // initializers must run before child component initializers within the
+        // Entity phase.
+        let initializer_list = collect_children::<Node>(scene_root.upcast::<Node>(), true)
             .into_iter()
             .filter(|node| {
                 self.registered_initializer_id_set
                     .contains(&node.instance_id())
                     && node.has_method(&initialize_method)
             })
+            .collect::<Vec<_>>();
+
+        let mut indexed_initializer_list = initializer_list
+            .into_iter()
+            .enumerate()
+            .collect::<Vec<_>>();
+
+        indexed_initializer_list.sort_by_key(|(tree_index, node)| {
+            (
+                self.initializer_phase_by_id_map
+                    .get(&node.instance_id())
+                    .copied()
+                    .unwrap_or(InitializationPhase::Entity),
+                *tree_index,
+            )
+        });
+
+        indexed_initializer_list
+            .into_iter()
+            .map(|(_tree_index, node)| node)
             .collect()
     }
 
@@ -154,6 +196,7 @@ impl INode for InitializationCoordinator {
             enabled: true,
             did_initialize: false,
             registered_initializer_id_set: HashSet::new(),
+            initializer_phase_by_id_map: HashMap::new(),
             base,
         }
     }

@@ -290,6 +290,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use ::bevy::ecs::system::SystemParam;
             use ::bevy_godot4::prelude::DataTransferConfig;
             use ::bevy_godot4::prelude::BevyApp;
+            use ::bevy_godot4::prelude::{InitializationCoordinator, InitializationPhase};
             use ::godot::classes::{Node, RefCounted};
             use ::godot::obj::{Base, Gd};
             use ::godot::prelude::*;
@@ -1037,6 +1038,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
+                fn ready(&mut self) {
+                    InitializationCoordinator::register_initializer_node(
+                        self.base().clone().upcast(),
+                        InitializationPhase::Configuration,
+                    );
+                }
+
                 fn process(&mut self, _delta: f64) {
                     let Some(mut app) = self.bevy_app.as_ref().cloned() else {
                         return;
@@ -1111,6 +1119,23 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             #[godot_api]
             impl #node_name {
+                #[func]
+                fn initialize(&mut self) {
+                    let Some(mut app) = self.bevy_app.as_ref().cloned() else {
+                        return;
+                    };
+
+                    if self.pending_static_data_sync && app.bind().get_app().is_some() {
+                        if let Some(static_data) = self.static_data_cache.as_ref().cloned() {
+                            enqueue_requests_for_app(&mut app, vec![ApiRequest {
+                                action_instance_id: None,
+                                kind: ApiRequestKind::SetStaticData(static_data),
+                            }]);
+                        }
+                        self.pending_static_data_sync = false;
+                    }
+                }
+
                 #[func]
                 fn resolve(owner: Gd<Node>) -> Option<Gd<#node_name>> {
                     if !owner.is_instance_valid() {
