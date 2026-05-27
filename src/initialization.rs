@@ -1,4 +1,4 @@
-use crate::prelude::SceneRoot;
+use crate::prelude::{BevyApp, SceneRoot};
 use crate::tools::collect_children;
 use godot::builtin::StringName;
 use godot::classes::{INode, Node};
@@ -9,6 +9,15 @@ use std::collections::HashSet;
 
 const INITIALIZE_METHOD: &str = "initialize";
 
+/// Coordinates Godot-authored startup data before Bevy starts ticking.
+///
+/// Initializer nodes register themselves from their own `_ready()` callbacks and
+/// expose an `initialize()` method. This node calls those methods once, in scene
+/// tree order, then marks the hosting BevyApp as ready for its first update.
+///
+/// BevyApp owns the actual update loop. The coordinator must not call
+/// `app.update()` or drain Bevy queues directly because initializer methods may
+/// resolve and mutate BevyApp while submitting startup data.
 #[derive(GodotClass)]
 #[class(base=Node)]
 pub struct InitializationCoordinator {
@@ -99,16 +108,32 @@ impl InitializationCoordinator {
             .collect()
     }
 
+    fn mark_scene_initialized(&self) {
+        let host = self.base().clone().upcast::<Node>();
+        let Ok(mut app) = BevyApp::resolve(&host) else {
+            return;
+        };
+
+        app.bind_mut().mark_scene_initialized();
+    }
+
     fn initialize_scene(&mut self) {
-        if self.did_initialize || !self.enabled {
+        if self.did_initialize {
             return;
         }
         self.did_initialize = true;
+
+        if !self.enabled {
+            self.mark_scene_initialized();
+            return;
+        }
 
         let initialize_method = StringName::from(INITIALIZE_METHOD);
         let mut initialized_count = 0;
         // Initialization is intentionally centralized here. Individual nodes only
         // register and expose initialize(); they do not decide startup timing.
+        // After this loop finishes, queued imports exist but Bevy has not ticked
+        // yet. BevyApp will drain those queues on its next process callback.
         for mut node in self.collect_initializers() {
             initialized_count += 1;
             node.call(&initialize_method, &[]);
@@ -118,6 +143,7 @@ impl InitializationCoordinator {
             "[InitializationCoordinator] initialized {} scene nodes",
             initialized_count
         );
+        self.mark_scene_initialized();
     }
 }
 

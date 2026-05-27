@@ -77,6 +77,12 @@ pub struct BevyApp {
 
     next_entity_id: Arc<AtomicI64>,
     performance_scope_id: u64,
+    // Scene-authored import nodes must enqueue their startup data before Bevy's
+    // first update. This gate is released by InitializationCoordinator after it
+    // calls all registered Godot initializers.
+    // This is intentionally owned by BevyApp because BevyApp owns app.update().
+    // The coordinator may mark readiness, but it must not drive the Bevy loop.
+    scene_initialized: bool,
 
     base: Base<Node>,
 }
@@ -88,6 +94,13 @@ impl BevyApp {
 
     pub fn get_app_mut(&mut self) -> Option<&mut App> {
         self.app.as_mut()
+    }
+
+    /// Release the startup gate after Godot scene initializers submitted their
+    /// import data. The next BevyApp::process() call will drain queued imports
+    /// and run the first Bevy update.
+    pub fn mark_scene_initialized(&mut self) {
+        self.scene_initialized = true;
     }
 }
 
@@ -225,6 +238,7 @@ impl BevyApp {
             Err(_) => self.base().clone().upcast(),
         }
     }
+
 }
 
 #[godot_api]
@@ -236,6 +250,7 @@ impl INode for BevyApp {
             action_queue: ActionQueue::default(),
             next_entity_id: Arc::new(AtomicI64::new(1)),
             performance_scope_id: allocate_app_scope_id(),
+            scene_initialized: false,
             base,
         }
     }
@@ -275,6 +290,13 @@ impl INode for BevyApp {
 
     fn process(&mut self, _delta_seconds: f64) {
         if godot::classes::Engine::singleton().is_editor_hint() {
+            return;
+        }
+
+        // Parent nodes process before children in Godot. Without this guard,
+        // BevyApp can tick before InitializationCoordinator has called scene
+        // initializers, so gameplay systems can observe an empty startup world.
+        if !self.scene_initialized {
             return;
         }
 

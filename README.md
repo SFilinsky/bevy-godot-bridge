@@ -2,9 +2,34 @@
 
 This library allows using Bevy simulation inside Godot scenes and binding to the Bevy state. 
 
-At the moment of writing (May 2026) it's developed actively and backwards compatibility is not guaranteed.
+At the moment of writing (May 2026) it is experimental and developed actively.
+
+The library is published so other people can learn from the idea and follow the direction, not because the API is
+stable. Backwards compatibility is not a goal yet. If a cleaner architecture requires changing public API, generated
+nodes, or scene contracts, the cleaner architecture wins.
 
 It was forked from [bevy_godot4](https://github.com/jrockett6/bevy_godot4), but the concept changed dramatically.
+
+## Documentation
+
+Bridge contracts should be documented in the bridge itself: code comments, module docs, this README, or docs under
+`bevy-godot-docs/`.
+
+### Startup Initialization Contract
+
+`BevyApp` owns the Bevy update loop. It waits for Godot scene initialization before the first Bevy update.
+
+`InitializationCoordinator` owns the Godot-side startup pass:
+
+1. Initializer nodes register themselves from their own `_ready()` callbacks.
+2. The coordinator calls each registered node's `initialize()` method once, in scene-tree order.
+3. Initializers enqueue startup data into `BevyApp`.
+4. The coordinator marks `BevyApp` as scene-initialized.
+5. On the next `BevyApp.process()`, queued imports are drained and the first Bevy update runs.
+
+This guarantees scene-authored imports are submitted before gameplay systems can observe the Bevy world. The
+coordinator must not call the Bevy update loop directly because initializer methods may need to resolve and mutate
+`BevyApp` while submitting their data.
 
 ## The Concept
 
