@@ -6,6 +6,7 @@ mod export_composed;
 mod export_entity_impl;
 mod import_bundle;
 mod queue;
+mod settings_pipeline;
 mod with_state_node;
 
 use proc_macro::TokenStream;
@@ -43,6 +44,11 @@ pub fn import_bundle(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn import_queue(input: TokenStream) -> TokenStream {
     queue::import_queue::expand(input)
+}
+
+#[proc_macro]
+pub fn settings_pipeline(input: TokenStream) -> TokenStream {
+    settings_pipeline::expand(input)
 }
 
 #[proc_macro]
