@@ -204,6 +204,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     self.settings_cache = Some(settings);
                 }
 
+                #[func]
+                fn get_settings(&self) -> Option<Gd<SettingsDto>> {
+                    self.settings_cache.clone()
+                }
+
             }
 
             #[godot_api]
