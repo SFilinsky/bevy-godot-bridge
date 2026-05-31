@@ -419,6 +419,31 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         self.base_mut().queue_free();
                     }
                 }
+
+                #[func]
+                fn resolve(owner: Gd<Node>) -> Option<Gd<#initialization_node_ident>> {
+                    if !owner.is_instance_valid() {
+                        return None;
+                    }
+
+                    let Ok(app) = BevyApp::resolve(&owner) else {
+                        return None;
+                    };
+
+                    let mut found = collect_children::<#initialization_node_ident>(
+                        app.upcast::<Node>(),
+                        false,
+                    );
+
+                    if found.len() > 1 {
+                        panic!(
+                            "Multiple {} nodes found under the owner node; expected exactly one initialization node",
+                            stringify!(#initialization_node_ident)
+                        );
+                    }
+
+                    found.pop()
+                }
             }
 
             #[godot_api]
