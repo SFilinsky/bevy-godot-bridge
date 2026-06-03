@@ -10,6 +10,7 @@
 
 pub mod dto;
 pub mod layer;
+mod benchmark;
 mod ui;
 
 pub use layer::{get_sorted_metrics, init_performance_tracing, SystemMetricsEntry};
