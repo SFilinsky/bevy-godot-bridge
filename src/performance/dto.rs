@@ -1,5 +1,5 @@
 use godot::builtin::{Array, GString};
-use godot::classes::{Node, RefCounted};
+use godot::classes::{INode, Node, RefCounted};
 use godot::obj::{Base, Gd, NewGd};
 use godot::prelude::*;
 
@@ -69,8 +69,14 @@ impl From<SystemMetricsEntry> for Gd<SystemPerformanceEntryDto> {
 
 /// Godot-accessible entry point for querying Bevy system performance.
 #[derive(GodotClass)]
-#[class(init, base = Node)]
+#[class(base = Node)]
 pub struct PerformanceMetrics {
+    /// Refresh interval in seconds. Set to 0 or less to disable automatic signals.
+    #[export]
+    refresh_interval_sec: f64,
+
+    time_accum: f64,
+
     #[base]
     base: Base<Node>,
 }
@@ -86,6 +92,31 @@ impl PerformanceMetrics {
 }
 
 #[godot_api]
+impl INode for PerformanceMetrics {
+    fn init(base: Base<Node>) -> Self {
+        Self {
+            refresh_interval_sec: 0.25,
+            time_accum: 0.0,
+            base,
+        }
+    }
+
+    fn process(&mut self, delta_seconds: f64) {
+        if self.refresh_interval_sec <= 0.0 {
+            return;
+        }
+
+        self.time_accum += delta_seconds;
+        if self.time_accum < self.refresh_interval_sec {
+            return;
+        }
+
+        self.time_accum = 0.0;
+        self.emit_metrics_update();
+    }
+}
+
+#[godot_api]
 impl PerformanceMetrics {
     fn resolve_scope_id(&self) -> AppScopeId {
         let host = self.base().clone().upcast::<Node>();
@@ -96,15 +127,34 @@ impl PerformanceMetrics {
         app.bind().performance_scope_id()
     }
 
-    /// Returns an Array[SystemPerformanceEntryDto], with schedules first then systems.
-    #[func]
-    pub fn get_metrics(&self) -> Array<Gd<SystemPerformanceEntryDto>> {
+    fn build_metrics_snapshot(&self) -> Array<Gd<SystemPerformanceEntryDto>> {
         let scope_id = self.resolve_scope_id();
         let mut arr: Array<Gd<SystemPerformanceEntryDto>> = Array::new();
         for entry in get_sorted_metrics_for_scope(scope_id) {
             arr.push(&Gd::<SystemPerformanceEntryDto>::from(entry));
         }
         arr
+    }
+
+    /// Returns an Array[SystemPerformanceEntryDto], with schedules first then systems.
+    #[func]
+    pub fn get_metrics(&self) -> Array<Gd<SystemPerformanceEntryDto>> {
+        self.build_metrics_snapshot()
+    }
+
+    #[func]
+    pub fn refresh_now(&mut self) {
+        self.emit_metrics_update();
+    }
+
+    pub fn configure_refresh_interval_sec(&mut self, value: f64) {
+        self.refresh_interval_sec = value;
+        self.time_accum = 0.0;
+    }
+
+    fn emit_metrics_update(&mut self) {
+        let entries = self.build_metrics_snapshot();
+        self.signals().metrics_updated().emit(&entries);
     }
 
     /// Returns metrics that were collected outside a bound app scope.
@@ -121,4 +171,7 @@ impl PerformanceMetrics {
     pub fn resolve_or_null(host: Gd<Node>) -> Option<Gd<PerformanceMetrics>> {
         Self::resolve(&host)
     }
+
+    #[signal]
+    fn metrics_updated(entries: Array<Gd<SystemPerformanceEntryDto>>);
 }
