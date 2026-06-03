@@ -1,6 +1,6 @@
 use super::dto::{PerformanceMetrics, SystemPerformanceEntryDto};
 use godot::classes::{Control, INode, Label, Node};
-use godot::global::godot_error;
+use godot::global::{godot_error, Error};
 use godot::obj::{Base, Gd, NewAlloc};
 use godot::prelude::*;
 
@@ -10,7 +10,7 @@ use godot::prelude::*;
 /// - Add as a child somewhere in your debug UI scene
 /// - Assign `container_path` in the editor to any Control that should host the labels
 ///
-/// This Node will pull metrics and render labels as children of the referenced container.
+/// This node listens to `PerformanceMetrics` updates and renders labels as children of the referenced container.
 /// It uses typed arrays on the Godot side.
 ///
 /// Display logic:
@@ -25,6 +25,7 @@ pub struct PerformanceHud {
     container_path: NodePath,
 
     /// Refresh interval in seconds. (e.g. 0.25 = 4 times/sec)
+    /// This is forwarded to the resolved `PerformanceMetrics` source for compatibility with existing scenes.
     #[export]
     refresh_interval_sec: f64,
 
@@ -41,7 +42,8 @@ pub struct PerformanceHud {
     container: Option<Gd<Control>>,
 
     labels: Vec<Gd<Label>>,
-    time_accum: f64,
+    last_forwarded_refresh_interval_sec: f64,
+    is_metrics_connected: bool,
     is_enabled: bool,
     did_report_metrics_missing: bool,
     did_report_metrics_invalid: bool,
@@ -61,7 +63,8 @@ impl INode for PerformanceHud {
             metrics: None,
             container: None,
             labels: Vec::new(),
-            time_accum: 0.0,
+            last_forwarded_refresh_interval_sec: -1.0,
+            is_metrics_connected: false,
             is_enabled: true,
             did_report_metrics_missing: false,
             did_report_metrics_invalid: false,
@@ -85,21 +88,12 @@ impl INode for PerformanceHud {
 
     fn ready(&mut self) {
         self.container = self.resolve_container();
-        self.refresh();
+        self.connect_metrics_source();
+        self.refresh_now();
     }
 
-    fn process(&mut self, delta: f64) {
-        self.time_accum += delta;
-
-        if self.refresh_interval_sec <= 0.0 {
-            return;
-        }
-        if self.time_accum < self.refresh_interval_sec {
-            return;
-        }
-        self.time_accum = 0.0;
-
-        self.refresh_now();
+    fn process(&mut self, _delta: f64) {
+        self.forward_refresh_interval_if_changed();
     }
 }
 
@@ -111,11 +105,13 @@ impl PerformanceHud {
             return;
         }
 
-        if self.container.is_none() {
-            self.container = self.resolve_container();
-        }
+        self.ensure_initialized();
+        let Some(metrics) = self.valid_metrics_source() else {
+            return;
+        };
 
-        self.refresh();
+        self.forward_refresh_interval_to_source();
+        self.render_metrics(metrics.bind().get_metrics());
     }
 
     fn resolve_container(&mut self) -> Option<Gd<Control>> {
@@ -131,28 +127,67 @@ impl PerformanceHud {
         PerformanceMetrics::resolve(&host)
     }
 
-    fn refresh(&mut self) {
+    fn ensure_initialized(&mut self) {
+        if self.metrics.is_none() {
+            self.metrics = self.resolve_metrics();
+            if self.metrics.is_none() {
+                if !self.did_report_metrics_missing {
+                    godot_error!("PerformanceHud: failed to resolve PerformanceMetrics");
+                    self.did_report_metrics_missing = true;
+                }
+            }
+        }
+
+        if self.container.is_none() {
+            self.container = self.resolve_container();
+        }
+
+        self.connect_metrics_source();
+    }
+
+    fn connect_metrics_source(&mut self) {
         if !self.is_enabled {
-            self.show_single_line("PerformanceHud: disabled");
             return;
         }
 
-        let Some(mut container) = self.container.clone() else {
-            self.show_single_line("PerformanceHud: container_path not set or invalid");
+        if self.is_metrics_connected {
+            return;
+        }
+
+        let Some(metrics) = self.metrics.as_ref().cloned() else {
             return;
         };
 
+        self.forward_refresh_interval_to_source();
+
+        let callback = self.base().callable("_on_metrics_updated");
+        let mut metrics_node = metrics.clone().upcast::<Node>();
+        let error = metrics_node.connect("metrics_updated", &callback);
+        if error != Error::OK {
+            godot_error!(
+                "PerformanceHud: failed to connect metrics_updated signal: {:?}",
+                error
+            );
+            self.is_enabled = false;
+            self.show_single_line("PerformanceHud: signal connection failed");
+            return;
+        }
+
+        self.is_metrics_connected = true;
+    }
+
+    fn valid_metrics_source(&mut self) -> Option<Gd<PerformanceMetrics>> {
         let Some(metrics) = self.metrics.as_ref() else {
             if !self.did_report_metrics_missing {
                 godot_error!(
-                    "PerformanceHud: metrics were not resolved during ready(); skipping refresh"
+                    "PerformanceHud: metrics were not resolved during ready(); skipping update"
                 );
                 self.did_report_metrics_missing = true;
             }
             self.show_single_line(
                 "PerformanceHud: metrics unavailable (PerformanceMetrics not found)",
             );
-            return;
+            return None;
         };
 
         if !metrics.is_instance_valid() {
@@ -163,10 +198,58 @@ impl PerformanceHud {
                 self.did_report_metrics_invalid = true;
             }
             self.show_single_line("PerformanceHud: metrics node became invalid");
+            return None;
+        }
+
+        Some(metrics.clone())
+    }
+
+    #[func]
+    fn _on_metrics_updated(&mut self, entries: Array<Gd<SystemPerformanceEntryDto>>) {
+        if !self.is_enabled {
             return;
         }
 
-        let entries = metrics.bind().get_metrics();
+        if self.container.is_none() {
+            self.container = self.resolve_container();
+        }
+
+        self.render_metrics(entries);
+    }
+
+    fn forward_refresh_interval_if_changed(&mut self) {
+        self.ensure_initialized();
+
+        if (self.refresh_interval_sec - self.last_forwarded_refresh_interval_sec).abs()
+            <= f64::EPSILON
+        {
+            return;
+        }
+
+        self.forward_refresh_interval_to_source();
+    }
+
+    fn forward_refresh_interval_to_source(&mut self) {
+        let Some(mut metrics) = self.valid_metrics_source() else {
+            return;
+        };
+
+        metrics
+            .bind_mut()
+            .configure_refresh_interval_sec(self.refresh_interval_sec);
+        self.last_forwarded_refresh_interval_sec = self.refresh_interval_sec;
+    }
+
+    fn render_metrics(&mut self, entries: Array<Gd<SystemPerformanceEntryDto>>) {
+        if !self.is_enabled {
+            self.show_single_line("PerformanceHud: disabled");
+            return;
+        }
+
+        let Some(mut container) = self.container.clone() else {
+            self.show_single_line("PerformanceHud: container_path not set or invalid");
+            return;
+        };
 
         // Better schedule order based on the Bevy excerpt you pasted.
         // (Some items might not exist depending on enabled features/plugins; we show 0 in that case.)
