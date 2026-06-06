@@ -109,6 +109,23 @@ static CURRENT_APP_SCOPE_ID: AtomicU64 = AtomicU64::new(GLOBAL_APP_SCOPE_ID);
 /// Metrics keyed by `(app_scope_id, span_name)`.
 static METRICS: Lazy<DashMap<(AppScopeId, String), (SystemMetrics, SpanInfo)>> =
     Lazy::new(DashMap::new);
+static BENCHMARK_CAPTURE_STARTS: Lazy<DashMap<AppScopeId, Instant>> = Lazy::new(DashMap::new);
+static BENCHMARK_CAPTURED_SAMPLES: Lazy<
+    DashMap<(AppScopeId, String), (SpanInfo, Vec<BenchmarkInvocationSample>)>,
+> = Lazy::new(DashMap::new);
+
+#[derive(Debug, Clone)]
+pub struct BenchmarkInvocationSample {
+    pub at_seconds: f64,
+    pub duration_seconds: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct BenchmarkSystemSamples {
+    pub name: String,
+    pub is_system: bool,
+    pub sample_list: Vec<BenchmarkInvocationSample>,
+}
 
 pub fn allocate_app_scope_id() -> AppScopeId {
     NEXT_APP_SCOPE_ID.fetch_add(1, Ordering::Relaxed)
@@ -127,6 +144,56 @@ impl Drop for AppScopeGuard {
 pub fn enter_app_scope(scope_id: AppScopeId) -> AppScopeGuard {
     let prev_scope_id = CURRENT_APP_SCOPE_ID.swap(scope_id, Ordering::Relaxed);
     AppScopeGuard { prev_scope_id }
+}
+
+pub fn begin_benchmark_capture_for_scope(scope_id: AppScopeId) {
+    clear_benchmark_samples_for_scope(scope_id);
+    BENCHMARK_CAPTURE_STARTS.insert(scope_id, Instant::now());
+}
+
+pub fn drain_benchmark_capture_for_scope(scope_id: AppScopeId) -> Vec<BenchmarkSystemSamples> {
+    BENCHMARK_CAPTURE_STARTS.remove(&scope_id);
+
+    let key_list: Vec<(AppScopeId, String)> = BENCHMARK_CAPTURED_SAMPLES
+        .iter()
+        .filter_map(|entry| {
+            if entry.key().0 == scope_id {
+                Some(entry.key().clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    key_list
+        .into_iter()
+        .filter_map(|key| {
+            BENCHMARK_CAPTURED_SAMPLES
+                .remove(&key)
+                .map(|((_, name), (info, sample_list))| BenchmarkSystemSamples {
+                    name,
+                    is_system: info.is_system,
+                    sample_list,
+                })
+        })
+        .collect()
+}
+
+fn clear_benchmark_samples_for_scope(scope_id: AppScopeId) {
+    let key_list: Vec<(AppScopeId, String)> = BENCHMARK_CAPTURED_SAMPLES
+        .iter()
+        .filter_map(|entry| {
+            if entry.key().0 == scope_id {
+                Some(entry.key().clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for key in key_list {
+        BENCHMARK_CAPTURED_SAMPLES.remove(&key);
+    }
 }
 
 /// Install the performance tracing layer.
@@ -379,10 +446,10 @@ where
         };
 
         let mut entry = METRICS
-            .entry((scope_id, key))
+            .entry((scope_id, key.clone()))
             .or_insert_with(|| (SystemMetrics::default(), info.clone()));
 
-        entry.value_mut().1 = info;
+        entry.value_mut().1 = info.clone();
         let metrics = &mut entry.value_mut().0;
 
         metrics.last = elapsed;
@@ -391,5 +458,20 @@ where
         metrics.max = metrics.max.max(elapsed);
 
         Self::update_ewmas(metrics, elapsed, now);
+
+        if let Some(capture_start) = BENCHMARK_CAPTURE_STARTS.get(&scope_id) {
+            let at_seconds = now.duration_since(*capture_start).as_secs_f64();
+            let mut captured_entry = BENCHMARK_CAPTURED_SAMPLES
+                .entry((scope_id, key.clone()))
+                .or_insert_with(|| (info.clone(), Vec::new()));
+            captured_entry.value_mut().0 = info;
+            captured_entry
+                .value_mut()
+                .1
+                .push(BenchmarkInvocationSample {
+                    at_seconds,
+                    duration_seconds: elapsed,
+                });
+        }
     }
 }
