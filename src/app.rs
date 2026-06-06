@@ -28,6 +28,8 @@ use std::{
     sync::Mutex,
 };
 
+const VIRTUAL_TIME_MAX_DELTA_MS: f64 = 50.0;
+
 lazy_static::lazy_static! {
     #[doc(hidden)]
     pub static ref APP_BUILDER_FN: Mutex<Option<Box<dyn Fn(&mut App) + Send>>> = Mutex::new(None);
@@ -126,17 +128,24 @@ impl BevyApp {
 
         // Cap virtual time jumps to avoid huge dt after long stalls.
         // ~20 FPS cap for big spikes
-        virtual_time.set_max_delta(std::time::Duration::from_millis(50));
+        virtual_time.set_max_delta(std::time::Duration::from_millis(
+            VIRTUAL_TIME_MAX_DELTA_MS as u64,
+        ));
     }
 
     fn update_clock(app: &mut App) {
         let world = app.world_mut();
         let now_us = godot::classes::Time::singleton().get_ticks_usec();
+        let time_scale = scaled_godot_time_scale();
+        let mut virtual_time = world.resource_mut::<Time<Virtual>>();
+        virtual_time.set_max_delta(std::time::Duration::from_secs_f64(
+            VIRTUAL_TIME_MAX_DELTA_MS / 1_000.0 * time_scale.max(1.0),
+        ));
 
         let mut clock = world.resource_mut::<GodotClock>();
         let dt = if let Some(prev) = clock.last_usec {
             let du = (now_us - prev).max(0);
-            std::time::Duration::from_micros(du)
+            std::time::Duration::from_micros(du).mul_f64(time_scale)
         } else {
             std::time::Duration::ZERO
         };
@@ -239,6 +248,16 @@ impl BevyApp {
         }
     }
 
+}
+
+fn scaled_godot_time_scale() -> f64 {
+    let mut engine = godot::classes::Engine::singleton();
+    let time_scale = engine.get_time_scale();
+    if time_scale.is_finite() && time_scale >= 0.0 {
+        time_scale
+    } else {
+        0.0
+    }
 }
 
 #[godot_api]

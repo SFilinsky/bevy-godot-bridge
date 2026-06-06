@@ -30,6 +30,7 @@ fn build_yaml_report(report_data: &BenchmarkReport) -> String {
         "  configured_duration_seconds: {:.3}\n",
         report_data.configured_duration_seconds
     ));
+    report.push_str(&format!("  time_scale: {:.3}\n", report_data.time_scale));
     report.push_str(&format!("  frames_total: {}\n", report_data.frames_total));
     report.push_str(&format!(
         "  average_frame_ms: {:.6}\n",

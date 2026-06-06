@@ -5,7 +5,7 @@ use super::layer::{
     begin_benchmark_capture_for_scope, drain_benchmark_capture_for_scope,
 };
 use godot::builtin::{Array, GString};
-use godot::classes::{INode, Node, ProjectSettings};
+use godot::classes::{Engine, INode, Node, ProjectSettings};
 use godot::global::{Error, godot_error, godot_print};
 use godot::obj::{Base, Gd};
 use godot::prelude::*;
@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 const DEFAULT_REPORT_PATH: &str = "res://logs/benchmarks/benchmark_report.yml";
 const OUTPUT_FILE_ENV_VAR: &str = "EQUILIBRIA_BENCHMARK_OUTPUT_FILE";
+const TIME_SCALE_ENV_VAR: &str = "EQUILIBRIA_BENCHMARK_TIME_SCALE";
 const FRAME_BUDGET_60_FPS_MS: f64 = 16.67;
 const FRAME_BUDGET_30_FPS_MS: f64 = 33.33;
 const FRAME_BUDGET_SLOW_MS: f64 = 50.0;
@@ -115,6 +116,7 @@ pub(crate) struct BenchmarkReport {
     pub(crate) scene_id: String,
     pub(crate) duration_seconds: f64,
     pub(crate) configured_duration_seconds: f64,
+    pub(crate) time_scale: f64,
     pub(crate) frames_total: usize,
     pub(crate) frame_summary: MetricSummary,
     pub(crate) frames_over_budget: FramesOverBudget,
@@ -147,6 +149,9 @@ pub struct BenchmarkSceneDirector {
     #[export]
     quit_on_finish: bool,
 
+    #[export]
+    time_scale: f64,
+
     metrics: Option<Gd<PerformanceMetrics>>,
     elapsed_seconds: f64,
     frame_time_ms_list: Vec<f64>,
@@ -155,6 +160,7 @@ pub struct BenchmarkSceneDirector {
     is_finished: bool,
     is_metrics_connected: bool,
     performance_scope_id: AppScopeId,
+    previous_time_scale: Option<f64>,
     output_handler_list: Vec<Box<dyn BenchmarkOutputHandler>>,
 
     #[base]
@@ -180,6 +186,7 @@ impl INode for BenchmarkSceneDirector {
             refresh_interval_sec: 0.25,
             output_file_path: DEFAULT_REPORT_PATH.into(),
             quit_on_finish: false,
+            time_scale: 1.0,
             metrics: None,
             elapsed_seconds: 0.0,
             frame_time_ms_list: Vec::new(),
@@ -188,6 +195,7 @@ impl INode for BenchmarkSceneDirector {
             is_finished: false,
             is_metrics_connected: false,
             performance_scope_id: GLOBAL_APP_SCOPE_ID,
+            previous_time_scale: None,
             output_handler_list: vec![Box::new(YamlBenchmarkOutputHandler)],
             base,
         }
@@ -204,7 +212,8 @@ impl INode for BenchmarkSceneDirector {
         }
 
         self.elapsed_seconds += delta_seconds;
-        self.frame_time_ms_list.push(delta_seconds * 1_000.0);
+        self.frame_time_ms_list
+            .push(self.real_delta_seconds(delta_seconds) * 1_000.0);
         if self.elapsed_seconds >= self.duration_seconds {
             self.finish();
         }
@@ -215,6 +224,7 @@ impl INode for BenchmarkSceneDirector {
 impl BenchmarkSceneDirector {
     #[func]
     pub fn start(&mut self) {
+        self.apply_time_scale();
         self.metrics = self.resolve_metrics();
         self.connect_metrics_source();
         self.performance_scope_id = self.resolve_performance_scope_id();
@@ -276,15 +286,17 @@ impl BenchmarkSceneDirector {
     }
 
     fn apply_environment_overrides(&mut self) {
-        let Ok(output_file_path) = env::var(OUTPUT_FILE_ENV_VAR) else {
-            return;
-        };
-
-        if output_file_path.is_empty() {
-            return;
+        if let Ok(output_file_path) = env::var(OUTPUT_FILE_ENV_VAR) {
+            if !output_file_path.is_empty() {
+                self.output_file_path = output_file_path.as_str().into();
+            }
         }
 
-        self.output_file_path = output_file_path.as_str().into();
+        if let Ok(time_scale) = env::var(TIME_SCALE_ENV_VAR) {
+            if let Ok(parsed_time_scale) = time_scale.parse::<f64>() {
+                self.time_scale = parsed_time_scale;
+            }
+        }
     }
 
     fn connect_metrics_source(&mut self) {
@@ -316,6 +328,7 @@ impl BenchmarkSceneDirector {
     fn finish(&mut self) {
         self.is_running = false;
         self.is_finished = true;
+        self.restore_time_scale();
 
         let captured_system_sample_list =
             drain_benchmark_capture_for_scope(self.performance_scope_id);
@@ -401,6 +414,7 @@ impl BenchmarkSceneDirector {
             scene_id: self.scene_id.to_string(),
             duration_seconds: self.elapsed_seconds,
             configured_duration_seconds: self.duration_seconds,
+            time_scale: self.time_scale,
             frames_total: self.frame_time_ms_list.len(),
             frame_summary,
             frames_over_budget,
@@ -413,6 +427,40 @@ impl BenchmarkSceneDirector {
 
     #[signal]
     fn benchmark_finished(output_file_path: GString, success: bool);
+
+    fn apply_time_scale(&mut self) {
+        let mut engine = Engine::singleton();
+        if self.previous_time_scale.is_none() {
+            self.previous_time_scale = Some(engine.get_time_scale());
+        }
+
+        engine.set_time_scale(sanitized_time_scale(self.time_scale));
+    }
+
+    fn restore_time_scale(&mut self) {
+        let Some(previous_time_scale) = self.previous_time_scale.take() else {
+            return;
+        };
+
+        Engine::singleton().set_time_scale(previous_time_scale);
+    }
+
+    fn real_delta_seconds(&self, scaled_delta_seconds: f64) -> f64 {
+        let time_scale = sanitized_time_scale(self.time_scale);
+        if time_scale <= 0.0 {
+            return 0.0;
+        }
+
+        scaled_delta_seconds / time_scale
+    }
+}
+
+fn sanitized_time_scale(time_scale: f64) -> f64 {
+    if time_scale.is_finite() && time_scale > 0.0 {
+        time_scale
+    } else {
+        1.0
+    }
 }
 
 fn percentile_from_sorted_sample_list(sorted_sample_list: &[f64], percentile: f64) -> f64 {
