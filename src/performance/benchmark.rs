@@ -405,9 +405,16 @@ impl BenchmarkSceneDirector {
             .collect();
         system_stats_list.sort_by(|a, b| {
             b.summary
-                .total_ms
-                .partial_cmp(&a.summary.total_ms)
+                .p99_ms
+                .partial_cmp(&a.summary.p99_ms)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    b.summary
+                        .total_ms
+                        .partial_cmp(&a.summary.total_ms)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| a.name.cmp(&b.name))
         });
 
         BenchmarkReport {
