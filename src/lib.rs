@@ -51,6 +51,9 @@ pub mod prelude {
         position::plugins::PositionInitializationPlugin, sets::PostEntityInitSet,
         subsystems::IdentitySubsystem,
     };
+    pub use crate::performance::layer::{
+        set_benchmark_capture_phase_for_current_scope, set_benchmark_capture_phase_for_scope,
+    };
     pub use crate::tools::collect_children;
     pub use bevy_godot4_proc_macros::{
         ExportComponent, ExportComponentNew, ExportEntity, action_pipeline, bevy_app,

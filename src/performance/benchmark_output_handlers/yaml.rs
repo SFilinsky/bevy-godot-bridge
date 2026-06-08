@@ -1,5 +1,5 @@
 use super::BenchmarkOutputHandler;
-use crate::performance::benchmark::BenchmarkReport;
+use crate::performance::benchmark::{BenchmarkPhaseReport, BenchmarkReport, BenchmarkSystemReportStats};
 use std::fs;
 use std::path::Path;
 
@@ -89,41 +89,61 @@ fn build_yaml_report(report_data: &BenchmarkReport) -> String {
         "  refresh_interval_seconds: {:.3}\n",
         report_data.refresh_interval_seconds
     ));
-    report.push_str("systems:\n");
+    report.push_str("phases:\n");
 
-    for system in &report_data.system_stat_list {
-        report.push_str(&format!("  - name: \"{}\"\n", yaml_escape(&system.name)));
-        report.push_str(&format!("    calls: {}\n", system.calls));
-        report.push_str(&format!("    total_ms: {:.6}\n", system.summary.total_ms));
-        report.push_str(&format!(
-            "    average_ms: {:.6}\n",
-            system.summary.average_ms
-        ));
-        report.push_str(&format!("    min_ms: {:.6}\n", system.summary.min_ms));
-        report.push_str(&format!("    max_ms: {:.6}\n", system.summary.max_ms));
-        report.push_str(&format!("    p50_ms: {:.6}\n", system.summary.p50_ms));
-        report.push_str(&format!("    p90_ms: {:.6}\n", system.summary.p90_ms));
-        report.push_str(&format!("    p95_ms: {:.6}\n", system.summary.p95_ms));
-        report.push_str(&format!("    p99_ms: {:.6}\n", system.summary.p99_ms));
-        report.push_str(&format!(
-            "    max_1s_average_ms: {:.6}\n",
-            system.max_1s_average_ms
-        ));
-        report.push_str(&format!(
-            "    max_5s_average_ms: {:.6}\n",
-            system.max_5s_average_ms
-        ));
-        report.push_str(&format!(
-            "    max_10s_average_ms: {:.6}\n",
-            system.max_10s_average_ms
-        ));
-        report.push_str(&format!(
-            "    share_of_total_percent: {:.6}\n",
-            system.share_of_total_percent
-        ));
+    for phase_report in &report_data.phase_report_list {
+        write_phase_report(&mut report, phase_report);
     }
 
     report
+}
+
+fn write_phase_report(report: &mut String, phase_report: &BenchmarkPhaseReport) {
+    report.push_str(&format!(
+        "  - name: \"{}\"\n",
+        yaml_escape(&phase_report.phase_name)
+    ));
+    report.push_str(&format!(
+        "    cpu_time_total_ms: {:.6}\n",
+        phase_report.cpu_time_total_ms
+    ));
+    report.push_str("    systems:\n");
+
+    for system in &phase_report.system_stat_list {
+        write_system_report(report, system);
+    }
+}
+
+fn write_system_report(report: &mut String, system: &BenchmarkSystemReportStats) {
+    report.push_str(&format!("      - name: \"{}\"\n", yaml_escape(&system.name)));
+    report.push_str(&format!("        calls: {}\n", system.calls));
+    report.push_str(&format!("        total_ms: {:.6}\n", system.summary.total_ms));
+    report.push_str(&format!(
+        "        average_ms: {:.6}\n",
+        system.summary.average_ms
+    ));
+    report.push_str(&format!("        min_ms: {:.6}\n", system.summary.min_ms));
+    report.push_str(&format!("        max_ms: {:.6}\n", system.summary.max_ms));
+    report.push_str(&format!("        p50_ms: {:.6}\n", system.summary.p50_ms));
+    report.push_str(&format!("        p90_ms: {:.6}\n", system.summary.p90_ms));
+    report.push_str(&format!("        p95_ms: {:.6}\n", system.summary.p95_ms));
+    report.push_str(&format!("        p99_ms: {:.6}\n", system.summary.p99_ms));
+    report.push_str(&format!(
+        "        max_1s_average_ms: {:.6}\n",
+        system.max_1s_average_ms
+    ));
+    report.push_str(&format!(
+        "        max_5s_average_ms: {:.6}\n",
+        system.max_5s_average_ms
+    ));
+    report.push_str(&format!(
+        "        max_10s_average_ms: {:.6}\n",
+        system.max_10s_average_ms
+    ));
+    report.push_str(&format!(
+        "        share_of_total_percent: {:.6}\n",
+        system.share_of_total_percent
+    ));
 }
 
 fn yaml_escape(value: &impl ToString) -> String {

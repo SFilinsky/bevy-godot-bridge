@@ -109,9 +109,11 @@ static CURRENT_APP_SCOPE_ID: AtomicU64 = AtomicU64::new(GLOBAL_APP_SCOPE_ID);
 /// Metrics keyed by `(app_scope_id, span_name)`.
 static METRICS: Lazy<DashMap<(AppScopeId, String), (SystemMetrics, SpanInfo)>> =
     Lazy::new(DashMap::new);
-static BENCHMARK_CAPTURE_STARTS: Lazy<DashMap<AppScopeId, Instant>> = Lazy::new(DashMap::new);
+static BENCHMARK_CAPTURE_CLOCKS: Lazy<DashMap<AppScopeId, BenchmarkCaptureClock>> =
+    Lazy::new(DashMap::new);
+static BENCHMARK_CAPTURE_PHASE_BY_SCOPE: Lazy<DashMap<AppScopeId, String>> = Lazy::new(DashMap::new);
 static BENCHMARK_CAPTURED_SAMPLES: Lazy<
-    DashMap<(AppScopeId, String), (SpanInfo, Vec<BenchmarkInvocationSample>)>,
+    DashMap<(AppScopeId, String, String), (SpanInfo, Vec<BenchmarkInvocationSample>)>,
 > = Lazy::new(DashMap::new);
 
 #[derive(Debug, Clone)]
@@ -121,7 +123,15 @@ pub struct BenchmarkInvocationSample {
 }
 
 #[derive(Debug, Clone)]
+struct BenchmarkCaptureClock {
+    last_at: Instant,
+    elapsed_seconds: f64,
+    time_scale: f64,
+}
+
+#[derive(Debug, Clone)]
 pub struct BenchmarkSystemSamples {
+    pub phase_name: String,
     pub name: String,
     pub is_system: bool,
     pub sample_list: Vec<BenchmarkInvocationSample>,
@@ -146,15 +156,45 @@ pub fn enter_app_scope(scope_id: AppScopeId) -> AppScopeGuard {
     AppScopeGuard { prev_scope_id }
 }
 
-pub fn begin_benchmark_capture_for_scope(scope_id: AppScopeId) {
+pub fn begin_benchmark_capture_for_scope(scope_id: AppScopeId, time_scale: f64) {
     clear_benchmark_samples_for_scope(scope_id);
-    BENCHMARK_CAPTURE_STARTS.insert(scope_id, Instant::now());
+    BENCHMARK_CAPTURE_CLOCKS.insert(
+        scope_id,
+        BenchmarkCaptureClock {
+            last_at: Instant::now(),
+            elapsed_seconds: 0.0,
+            time_scale: sanitized_benchmark_time_scale(time_scale),
+        },
+    );
+}
+
+pub fn set_benchmark_capture_phase_for_current_scope(phase_name: impl Into<String>) {
+    let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
+    set_benchmark_capture_phase_for_scope(scope_id, phase_name);
+}
+
+pub fn set_benchmark_capture_phase_for_scope(
+    scope_id: AppScopeId,
+    phase_name: impl Into<String>,
+) {
+    BENCHMARK_CAPTURE_PHASE_BY_SCOPE.insert(scope_id, phase_name.into());
+}
+
+pub fn set_benchmark_capture_time_scale_for_scope(scope_id: AppScopeId, time_scale: f64) {
+    let Some(mut clock) = BENCHMARK_CAPTURE_CLOCKS.get_mut(&scope_id) else {
+        return;
+    };
+
+    let now = Instant::now();
+    advance_benchmark_capture_clock(&mut clock, now);
+    clock.time_scale = sanitized_benchmark_time_scale(time_scale);
 }
 
 pub fn drain_benchmark_capture_for_scope(scope_id: AppScopeId) -> Vec<BenchmarkSystemSamples> {
-    BENCHMARK_CAPTURE_STARTS.remove(&scope_id);
+    BENCHMARK_CAPTURE_CLOCKS.remove(&scope_id);
+    BENCHMARK_CAPTURE_PHASE_BY_SCOPE.remove(&scope_id);
 
-    let key_list: Vec<(AppScopeId, String)> = BENCHMARK_CAPTURED_SAMPLES
+    let key_list: Vec<(AppScopeId, String, String)> = BENCHMARK_CAPTURED_SAMPLES
         .iter()
         .filter_map(|entry| {
             if entry.key().0 == scope_id {
@@ -170,7 +210,8 @@ pub fn drain_benchmark_capture_for_scope(scope_id: AppScopeId) -> Vec<BenchmarkS
         .filter_map(|key| {
             BENCHMARK_CAPTURED_SAMPLES
                 .remove(&key)
-                .map(|((_, name), (info, sample_list))| BenchmarkSystemSamples {
+                .map(|((_, phase_name, name), (info, sample_list))| BenchmarkSystemSamples {
+                    phase_name,
                     name,
                     is_system: info.is_system,
                     sample_list,
@@ -180,7 +221,7 @@ pub fn drain_benchmark_capture_for_scope(scope_id: AppScopeId) -> Vec<BenchmarkS
 }
 
 fn clear_benchmark_samples_for_scope(scope_id: AppScopeId) {
-    let key_list: Vec<(AppScopeId, String)> = BENCHMARK_CAPTURED_SAMPLES
+    let key_list: Vec<(AppScopeId, String, String)> = BENCHMARK_CAPTURED_SAMPLES
         .iter()
         .filter_map(|entry| {
             if entry.key().0 == scope_id {
@@ -193,6 +234,25 @@ fn clear_benchmark_samples_for_scope(scope_id: AppScopeId) {
 
     for key in key_list {
         BENCHMARK_CAPTURED_SAMPLES.remove(&key);
+    }
+    BENCHMARK_CAPTURE_PHASE_BY_SCOPE.remove(&scope_id);
+}
+
+fn advance_benchmark_capture_clock(clock: &mut BenchmarkCaptureClock, now: Instant) -> f64 {
+    let delta_seconds = now
+        .checked_duration_since(clock.last_at)
+        .map(|duration| duration.as_secs_f64())
+        .unwrap_or_default();
+    clock.elapsed_seconds += delta_seconds * clock.time_scale;
+    clock.last_at = now;
+    clock.elapsed_seconds
+}
+
+fn sanitized_benchmark_time_scale(time_scale: f64) -> f64 {
+    if time_scale.is_finite() && time_scale > 0.0 {
+        time_scale
+    } else {
+        1.0
     }
 }
 
@@ -459,10 +519,14 @@ where
 
         Self::update_ewmas(metrics, elapsed, now);
 
-        if let Some(capture_start) = BENCHMARK_CAPTURE_STARTS.get(&scope_id) {
-            let at_seconds = now.duration_since(*capture_start).as_secs_f64();
+        if let Some(mut capture_clock) = BENCHMARK_CAPTURE_CLOCKS.get_mut(&scope_id) {
+            let at_seconds = advance_benchmark_capture_clock(&mut capture_clock, now);
+            let phase_name = BENCHMARK_CAPTURE_PHASE_BY_SCOPE
+                .get(&scope_id)
+                .map(|phase| phase.value().clone())
+                .unwrap_or_else(|| "Unassigned".to_string());
             let mut captured_entry = BENCHMARK_CAPTURED_SAMPLES
-                .entry((scope_id, key.clone()))
+                .entry((scope_id, phase_name, key.clone()))
                 .or_insert_with(|| (info.clone(), Vec::new()));
             captured_entry.value_mut().0 = info;
             captured_entry
