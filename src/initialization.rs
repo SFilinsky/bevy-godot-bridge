@@ -5,14 +5,42 @@ use godot::classes::{INode, Node};
 use godot::global::{godot_error, godot_print, godot_warn};
 use godot::obj::{Base, InstanceId, WithBaseField};
 use godot::prelude::*;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const INITIALIZE_METHOD: &str = "initialize";
 static DID_WARN_MISSING_COORDINATOR: AtomicBool = AtomicBool::new(false);
+static IS_INITIALIZING_SCENE: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    static PENDING_INITIALIZER_REGISTRATION_LIST:
+        RefCell<Vec<(InstanceId, InitializationPhase)>> = const { RefCell::new(Vec::new()) };
+}
+
+struct InitializerRegistrationBufferGuard;
+
+impl InitializerRegistrationBufferGuard {
+    fn new() -> Self {
+        IS_INITIALIZING_SCENE.store(true, Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Drop for InitializerRegistrationBufferGuard {
+    fn drop(&mut self) {
+        IS_INITIALIZING_SCENE.store(false, Ordering::Relaxed);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum InitializationPhase {
+    /// Godot-side setup that creates initializer nodes before import data is read.
+    ///
+    /// Examples: benchmark or level-design helpers that procedurally instantiate
+    /// authored entity scenes.
+    PreImport,
+
     /// Settings-like data that entity startup may depend on.
     ///
     /// Examples: action static data and entity settings resources.
@@ -107,6 +135,15 @@ impl InitializationCoordinator {
     }
 
     pub fn register_initializer_node(initializer: Gd<Node>, phase: InitializationPhase) {
+        if IS_INITIALIZING_SCENE.load(Ordering::Relaxed) {
+            PENDING_INITIALIZER_REGISTRATION_LIST.with(|registration_list| {
+                registration_list
+                    .borrow_mut()
+                    .push((initializer.instance_id(), phase));
+            });
+            return;
+        }
+
         let Some(mut coordinator_list) = Self::find_for(&initializer) else {
             Self::initialize_without_coordinator(initializer);
             return;
@@ -156,7 +193,7 @@ impl InitializationCoordinator {
         SceneRoot::resolve_as_parent(&host)
     }
 
-    fn collect_initializers(&self) -> Vec<Gd<Node>> {
+    fn collect_initializers_for_phase(&self, phase: InitializationPhase) -> Vec<Gd<Node>> {
         let Some(scene_root) = self.resolve_scene_root() else {
             let path = self.base().get_path();
             godot_error!(
@@ -167,37 +204,22 @@ impl InitializationCoordinator {
         };
 
         let initialize_method = StringName::from(INITIALIZE_METHOD);
-        // Walk the final scene tree instead of the registration order. Parent entity
-        // initializers must run before child component initializers within the
-        // Entity phase.
         let initializer_list = collect_children::<Node>(scene_root.upcast::<Node>(), true)
             .into_iter()
             .filter(|node| {
                 self.registered_initializer_id_set
                     .contains(&node.instance_id())
+                    && self
+                        .initializer_phase_by_id_map
+                        .get(&node.instance_id())
+                        .copied()
+                        .unwrap_or(InitializationPhase::Entity)
+                        == phase
                     && node.has_method(&initialize_method)
             })
             .collect::<Vec<_>>();
 
-        let mut indexed_initializer_list = initializer_list
-            .into_iter()
-            .enumerate()
-            .collect::<Vec<_>>();
-
-        indexed_initializer_list.sort_by_key(|(tree_index, node)| {
-            (
-                self.initializer_phase_by_id_map
-                    .get(&node.instance_id())
-                    .copied()
-                    .unwrap_or(InitializationPhase::Entity),
-                *tree_index,
-            )
-        });
-
-        indexed_initializer_list
-            .into_iter()
-            .map(|(_tree_index, node)| node)
-            .collect()
+        initializer_list
     }
 
     fn mark_scene_initialized(&self) {
@@ -207,6 +229,16 @@ impl InitializationCoordinator {
         };
 
         app.bind_mut().mark_scene_initialized();
+    }
+
+    fn drain_pending_initializer_registrations(&mut self) {
+        PENDING_INITIALIZER_REGISTRATION_LIST.with(|registration_list| {
+            for (initializer_id, phase) in registration_list.borrow_mut().drain(..) {
+                self.registered_initializer_id_set.insert(initializer_id);
+                self.initializer_phase_by_id_map
+                    .insert(initializer_id, phase);
+            }
+        });
     }
 
     fn initialize_scene(&mut self) {
@@ -222,20 +254,37 @@ impl InitializationCoordinator {
 
         let initialize_method = StringName::from(INITIALIZE_METHOD);
         let mut initialized_count = 0;
+        let _registration_buffer_guard = InitializerRegistrationBufferGuard::new();
         // Initialization is intentionally centralized here. Individual nodes only
         // register and expose initialize(); they do not decide startup timing.
         // After this loop finishes, queued imports exist but Bevy has not ticked
         // yet. BevyApp will drain those queues on its next process callback.
-        for mut node in self.collect_initializers() {
-            initialized_count += 1;
-            node.call(&initialize_method, &[]);
+        for phase in [
+            InitializationPhase::PreImport,
+            InitializationPhase::Configuration,
+            InitializationPhase::Entity,
+        ] {
+            self.drain_pending_initializer_registrations();
+            for mut node in self.collect_initializers_for_phase(phase) {
+                initialized_count += 1;
+                node.call(&initialize_method, &[]);
+            }
         }
+        self.drain_pending_initializer_registrations();
 
         godot_print!(
             "[InitializationCoordinator] initialized {} scene nodes",
             initialized_count
         );
         self.mark_scene_initialized();
+    }
+}
+
+#[godot_api]
+impl InitializationCoordinator {
+    #[func]
+    pub fn register_pre_import_initializer_node(initializer: Gd<Node>) {
+        Self::register_initializer_node(initializer, InitializationPhase::PreImport);
     }
 }
 
