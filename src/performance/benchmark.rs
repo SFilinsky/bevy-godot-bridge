@@ -152,6 +152,9 @@ pub struct BenchmarkSceneDirector {
     #[export]
     time_scale: f64,
 
+    #[export]
+    start_on_ready: bool,
+
     metrics: Option<Gd<PerformanceMetrics>>,
     elapsed_seconds: f64,
     frame_time_ms_list: Vec<f64>,
@@ -187,6 +190,7 @@ impl INode for BenchmarkSceneDirector {
             output_file_path: DEFAULT_REPORT_PATH.into(),
             quit_on_finish: false,
             time_scale: 1.0,
+            start_on_ready: false,
             metrics: None,
             elapsed_seconds: 0.0,
             frame_time_ms_list: Vec::new(),
@@ -203,7 +207,9 @@ impl INode for BenchmarkSceneDirector {
 
     fn ready(&mut self) {
         self.apply_environment_overrides();
-        self.start();
+        if self.start_on_ready {
+            self.start();
+        }
     }
 
     fn process(&mut self, delta_seconds: f64) {
