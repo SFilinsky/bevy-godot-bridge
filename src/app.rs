@@ -29,6 +29,7 @@ use std::{
 };
 
 const VIRTUAL_TIME_MAX_DELTA_MS: f64 = 50.0;
+const BEVY_FIXED_TIMESTEP_HZ: f64 = 8.0;
 
 lazy_static::lazy_static! {
     #[doc(hidden)]
@@ -122,7 +123,7 @@ impl BevyApp {
         app.insert_resource(TimeUpdateStrategy::ManualDuration(
             std::time::Duration::ZERO,
         ));
-        app.insert_resource(Time::<Fixed>::from_hz(60.0));
+        app.insert_resource(Time::<Fixed>::from_hz(BEVY_FIXED_TIMESTEP_HZ));
 
         let mut virtual_time = app.world_mut().resource_mut::<Time<Virtual>>();
 
