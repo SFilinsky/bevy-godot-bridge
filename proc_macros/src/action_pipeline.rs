@@ -28,6 +28,7 @@ struct Spec {
     execute_result_payload: Type,
     checks: Vec<CheckSpec>,
     execute_subsystem: Path,
+    action_set: Path,
 }
 
 impl Parse for Spec {
@@ -37,6 +38,7 @@ impl Parse for Spec {
         let mut execute_result_payload: Option<Type> = None;
         let mut checks: Option<Vec<CheckSpec>> = None;
         let mut execute_subsystem: Option<Path> = None;
+        let mut action_set: Option<Path> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -56,11 +58,12 @@ impl Parse for Spec {
                     checks = Some(list);
                 }
                 "execute_subsystem" => execute_subsystem = Some(input.parse()?),
+                "action_set" => action_set = Some(input.parse()?),
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
-                            "Unknown key `{other}`; expected `name`, `partial_params`, `execute_result_payload`, `checks`, `execute_subsystem`"
+                            "Unknown key `{other}`; expected `name`, `partial_params`, `execute_result_payload`, `checks`, `execute_subsystem`, `action_set`"
                         ),
                     ));
                 }
@@ -101,6 +104,12 @@ impl Parse for Spec {
                 "action_pipeline!: missing `execute_subsystem: path::ToSubsystem`",
             )
         })?;
+        let action_set = action_set.ok_or_else(|| {
+            syn::Error::new(
+                Span::call_site(),
+                "action_pipeline!: missing `action_set: path::ToSet`",
+            )
+        })?;
 
         Ok(Self {
             name,
@@ -108,6 +117,7 @@ impl Parse for Spec {
             execute_result_payload,
             checks,
             execute_subsystem,
+            action_set,
         })
     }
 }
@@ -133,6 +143,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let execute_result_payload = spec.execute_result_payload;
     let checks = spec.checks;
     let execute_subsystem = spec.execute_subsystem;
+    let action_set = spec.action_set;
 
     let check_aliases = checks
         .iter()
@@ -1216,10 +1227,16 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     app.init_resource::<ActionInstanceSeq>();
                     app.insert_non_send_resource(ApiRequestQueue::default());
                     app.insert_non_send_resource(ApiResponseQueue::default());
-                    app.add_systems(FixedPreUpdate, api_drain_system)
-                        .add_systems(FixedUpdate, push_checks_runner_system_driver)
-                        .add_systems(FixedUpdate, apply_exec_system_driver)
-                        .add_systems(FixedPostUpdate, publish_out_system);
+                    app.add_systems(FixedPreUpdate, api_drain_system.in_set(#action_set))
+                        .add_systems(
+                            FixedUpdate,
+                            (
+                                push_checks_runner_system_driver,
+                                apply_exec_system_driver,
+                            )
+                                .in_set(#action_set),
+                        )
+                        .add_systems(FixedPostUpdate, publish_out_system.in_set(#action_set));
                 }
             }
 

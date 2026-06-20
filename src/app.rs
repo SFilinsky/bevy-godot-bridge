@@ -86,6 +86,10 @@ pub struct BevyApp {
     // This is intentionally owned by BevyApp because BevyApp owns app.update().
     // The coordinator may mark readiness, but it must not drive the Bevy loop.
     scene_initialized: bool,
+    // The coordinator releases the gate from Godot process. Waiting one more
+    // BevyApp process lets deferred Godot listeners subscribe before startup
+    // state transitions are emitted.
+    startup_process_delay_remaining: u8,
 
     base: Base<Node>,
 }
@@ -104,6 +108,16 @@ impl BevyApp {
     /// and run the first Bevy update.
     pub fn mark_scene_initialized(&mut self) {
         self.scene_initialized = true;
+    }
+
+    /// Release the startup gate after one more Godot process callback.
+    ///
+    /// InitializationCoordinator calls this from its own process callback. The
+    /// delay gives deferred Godot listeners a chance to connect before Bevy
+    /// emits startup state transitions.
+    pub fn mark_scene_initialized_after_process_delay(&mut self) {
+        self.mark_scene_initialized();
+        self.startup_process_delay_remaining = 1;
     }
 }
 
@@ -271,6 +285,7 @@ impl INode for BevyApp {
             next_entity_id: Arc::new(AtomicI64::new(1)),
             performance_scope_id: allocate_app_scope_id(),
             scene_initialized: false,
+            startup_process_delay_remaining: 0,
             base,
         }
     }
@@ -323,6 +338,10 @@ impl INode for BevyApp {
         // BevyApp can tick before InitializationCoordinator has called scene
         // initializers, so gameplay systems can observe an empty startup world.
         if !self.scene_initialized {
+            return;
+        }
+        if self.startup_process_delay_remaining > 0 {
+            self.startup_process_delay_remaining -= 1;
             return;
         }
 

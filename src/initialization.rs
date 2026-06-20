@@ -228,7 +228,7 @@ impl InitializationCoordinator {
             return;
         };
 
-        app.bind_mut().mark_scene_initialized();
+        app.bind_mut().mark_scene_initialized_after_process_delay();
     }
 
     fn drain_pending_initializer_registrations(&mut self) {
