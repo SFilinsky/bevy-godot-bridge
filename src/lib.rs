@@ -15,6 +15,7 @@ mod erased_gd;
 mod import;
 mod initialization;
 mod performance;
+mod required_settings;
 mod scene;
 mod scene_tree;
 mod state;
@@ -32,6 +33,7 @@ pub mod prelude {
     pub use super::entity_registry::EntityRegistry;
     pub use super::erased_gd::{ErasedGd, ErasedGdResource};
     pub use super::initialization::{InitializationCoordinator, InitializationPhase};
+    pub use super::required_settings::RequiredSettings;
     pub use super::scene::GodotScene;
     pub use super::scene::root_scripts::RootScripts;
     pub use super::scene::scene_root::SceneRoot;
