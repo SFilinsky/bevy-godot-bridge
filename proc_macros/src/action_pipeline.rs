@@ -205,13 +205,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
     let check_allowance_terms = checks.iter().map(|c| {
         let name = &c.name;
-        quote! { && matches!(#name, ::bevy_godot4::action_framework::Criterion::Ok) }
+        quote! { && #name.is_ok() }
     });
 
     let check_default_inits = checks.iter().map(|c| {
         let name = &c.name;
         quote! {
-            #name: ::bevy_godot4::action_framework::Criterion::NotProvided,
+            #name: ::bevy_godot4::action_framework::Criterion::NotProvided { payload: None },
         }
     });
 
@@ -263,16 +263,20 @@ pub fn expand(input: TokenStream) -> TokenStream {
         let name = &c.name;
         quote! {
             let (status_code, payload_dto) = match &data.#name {
-                ::bevy_godot4::action_framework::Criterion::Ok => {
+                ::bevy_godot4::action_framework::Criterion::Ok { payload } => {
                     (
                         ::bevy_godot4::action_framework::ActionCheckStatus::Ok.as_i64(),
-                        None,
+                        payload
+                            .as_ref()
+                            .map(|p| <#alias as DataTransferConfig>::from_data(p, identity)),
                     )
                 }
-                ::bevy_godot4::action_framework::Criterion::NotProvided => {
+                ::bevy_godot4::action_framework::Criterion::NotProvided { payload } => {
                     (
                         ::bevy_godot4::action_framework::ActionCheckStatus::NotProvided.as_i64(),
-                        None,
+                        payload
+                            .as_ref()
+                            .map(|p| <#alias as DataTransferConfig>::from_data(p, identity)),
                     )
                 }
                 ::bevy_godot4::action_framework::Criterion::Fail { payload, .. } => {
