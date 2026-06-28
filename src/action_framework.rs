@@ -68,8 +68,8 @@ impl CheckReason {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Criterion<TFail> {
-    Ok,
-    NotProvided,
+    Ok { payload: Option<TFail> },
+    NotProvided { payload: Option<TFail> },
     Fail {
         code: &'static str,
         payload: Option<TFail>,
@@ -78,7 +78,7 @@ pub enum Criterion<TFail> {
 
 impl<TFail> Criterion<TFail> {
     pub fn is_ok(&self) -> bool {
-        matches!(self, Self::Ok)
+        matches!(self, Self::Ok { .. })
     }
 }
 
