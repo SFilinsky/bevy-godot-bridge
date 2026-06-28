@@ -111,15 +111,37 @@ static METRICS: Lazy<DashMap<(AppScopeId, String), (SystemMetrics, SpanInfo)>> =
     Lazy::new(DashMap::new);
 static BENCHMARK_CAPTURE_CLOCKS: Lazy<DashMap<AppScopeId, BenchmarkCaptureClock>> =
     Lazy::new(DashMap::new);
-static BENCHMARK_CAPTURE_PHASE_BY_SCOPE: Lazy<DashMap<AppScopeId, String>> = Lazy::new(DashMap::new);
+static BENCHMARK_CAPTURE_PHASE_BY_SCOPE: Lazy<DashMap<AppScopeId, BenchmarkPhaseKey>> =
+    Lazy::new(DashMap::new);
 static BENCHMARK_CAPTURED_SAMPLES: Lazy<
-    DashMap<(AppScopeId, String, String), (SpanInfo, Vec<BenchmarkInvocationSample>)>,
+    DashMap<(AppScopeId, BenchmarkPhaseKey, String), (SpanInfo, Vec<BenchmarkInvocationSample>)>,
 > = Lazy::new(DashMap::new);
+
+const UNASSIGNED_BENCHMARK_PHASE_NAME: &str = "Unassigned";
 
 #[derive(Debug, Clone)]
 pub struct BenchmarkInvocationSample {
     pub at_seconds: f64,
     pub duration_seconds: f64,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct BenchmarkPhaseKey {
+    pub lifecycle_phase_name: String,
+    pub gameplay_phase_name: Option<String>,
+}
+
+impl BenchmarkPhaseKey {
+    pub fn from_lifecycle_phase_name(phase_name: impl Into<String>) -> Self {
+        Self {
+            lifecycle_phase_name: phase_name.into(),
+            gameplay_phase_name: None,
+        }
+    }
+
+    fn unassigned() -> Self {
+        Self::from_lifecycle_phase_name(UNASSIGNED_BENCHMARK_PHASE_NAME)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -131,7 +153,7 @@ struct BenchmarkCaptureClock {
 
 #[derive(Debug, Clone)]
 pub struct BenchmarkSystemSamples {
-    pub phase_name: String,
+    pub phase_key: BenchmarkPhaseKey,
     pub name: String,
     pub is_system: bool,
     pub sample_list: Vec<BenchmarkInvocationSample>,
@@ -177,7 +199,44 @@ pub fn set_benchmark_capture_phase_for_scope(
     scope_id: AppScopeId,
     phase_name: impl Into<String>,
 ) {
-    BENCHMARK_CAPTURE_PHASE_BY_SCOPE.insert(scope_id, phase_name.into());
+    BENCHMARK_CAPTURE_PHASE_BY_SCOPE.insert(
+        scope_id,
+        BenchmarkPhaseKey::from_lifecycle_phase_name(phase_name),
+    );
+}
+
+pub fn set_benchmark_capture_gameplay_phase_for_current_scope(phase_name: impl Into<String>) {
+    let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
+    set_benchmark_capture_gameplay_phase_for_scope(scope_id, phase_name);
+}
+
+pub fn set_benchmark_capture_gameplay_phase_for_scope(
+    scope_id: AppScopeId,
+    phase_name: impl Into<String>,
+) {
+    let phase_name = phase_name.into();
+    BENCHMARK_CAPTURE_PHASE_BY_SCOPE
+        .entry(scope_id)
+        .and_modify(|phase_key| {
+            phase_key.gameplay_phase_name = Some(phase_name.clone());
+        })
+        .or_insert_with(|| BenchmarkPhaseKey {
+            lifecycle_phase_name: UNASSIGNED_BENCHMARK_PHASE_NAME.to_string(),
+            gameplay_phase_name: Some(phase_name),
+        });
+}
+
+pub fn clear_benchmark_capture_gameplay_phase_for_current_scope() {
+    let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
+    clear_benchmark_capture_gameplay_phase_for_scope(scope_id);
+}
+
+pub fn clear_benchmark_capture_gameplay_phase_for_scope(scope_id: AppScopeId) {
+    let Some(mut phase_key) = BENCHMARK_CAPTURE_PHASE_BY_SCOPE.get_mut(&scope_id) else {
+        return;
+    };
+
+    phase_key.gameplay_phase_name = None;
 }
 
 pub fn set_benchmark_capture_time_scale_for_scope(scope_id: AppScopeId, time_scale: f64) {
@@ -190,7 +249,7 @@ pub fn set_benchmark_capture_time_scale_for_scope(scope_id: AppScopeId, time_sca
     clock.time_scale = sanitized_benchmark_time_scale(time_scale);
 }
 
-pub fn benchmark_capture_phase_for_scope(scope_id: AppScopeId) -> Option<String> {
+pub fn benchmark_capture_phase_key_for_scope(scope_id: AppScopeId) -> Option<BenchmarkPhaseKey> {
     BENCHMARK_CAPTURE_PHASE_BY_SCOPE
         .get(&scope_id)
         .map(|phase| phase.value().clone())
@@ -200,7 +259,7 @@ pub fn drain_benchmark_capture_for_scope(scope_id: AppScopeId) -> Vec<BenchmarkS
     BENCHMARK_CAPTURE_CLOCKS.remove(&scope_id);
     BENCHMARK_CAPTURE_PHASE_BY_SCOPE.remove(&scope_id);
 
-    let key_list: Vec<(AppScopeId, String, String)> = BENCHMARK_CAPTURED_SAMPLES
+    let key_list: Vec<(AppScopeId, BenchmarkPhaseKey, String)> = BENCHMARK_CAPTURED_SAMPLES
         .iter()
         .filter_map(|entry| {
             if entry.key().0 == scope_id {
@@ -216,8 +275,8 @@ pub fn drain_benchmark_capture_for_scope(scope_id: AppScopeId) -> Vec<BenchmarkS
         .filter_map(|key| {
             BENCHMARK_CAPTURED_SAMPLES
                 .remove(&key)
-                .map(|((_, phase_name, name), (info, sample_list))| BenchmarkSystemSamples {
-                    phase_name,
+                .map(|((_, phase_key, name), (info, sample_list))| BenchmarkSystemSamples {
+                    phase_key,
                     name,
                     is_system: info.is_system,
                     sample_list,
@@ -227,7 +286,7 @@ pub fn drain_benchmark_capture_for_scope(scope_id: AppScopeId) -> Vec<BenchmarkS
 }
 
 fn clear_benchmark_samples_for_scope(scope_id: AppScopeId) {
-    let key_list: Vec<(AppScopeId, String, String)> = BENCHMARK_CAPTURED_SAMPLES
+    let key_list: Vec<(AppScopeId, BenchmarkPhaseKey, String)> = BENCHMARK_CAPTURED_SAMPLES
         .iter()
         .filter_map(|entry| {
             if entry.key().0 == scope_id {
@@ -527,12 +586,12 @@ where
 
         if let Some(mut capture_clock) = BENCHMARK_CAPTURE_CLOCKS.get_mut(&scope_id) {
             let at_seconds = advance_benchmark_capture_clock(&mut capture_clock, now);
-            let phase_name = BENCHMARK_CAPTURE_PHASE_BY_SCOPE
+            let phase_key = BENCHMARK_CAPTURE_PHASE_BY_SCOPE
                 .get(&scope_id)
                 .map(|phase| phase.value().clone())
-                .unwrap_or_else(|| "Unassigned".to_string());
+                .unwrap_or_else(BenchmarkPhaseKey::unassigned);
             let mut captured_entry = BENCHMARK_CAPTURED_SAMPLES
-                .entry((scope_id, phase_name, key.clone()))
+                .entry((scope_id, phase_key, key.clone()))
                 .or_insert_with(|| (info.clone(), Vec::new()));
             captured_entry.value_mut().0 = info;
             captured_entry

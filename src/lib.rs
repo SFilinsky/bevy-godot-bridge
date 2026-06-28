@@ -55,7 +55,9 @@ pub mod prelude {
         subsystems::IdentitySubsystem,
     };
     pub use crate::performance::layer::{
+        clear_benchmark_capture_gameplay_phase_for_current_scope,
         set_benchmark_capture_phase_for_current_scope, set_benchmark_capture_phase_for_scope,
+        set_benchmark_capture_gameplay_phase_for_current_scope,
     };
     pub use crate::state::{BevyLifecyclePlugin, BevyLifecycleState};
     pub use crate::tools::collect_children;
