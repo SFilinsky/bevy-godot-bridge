@@ -1,8 +1,8 @@
 use super::benchmark_output_handlers::{BenchmarkOutputHandler, YamlBenchmarkOutputHandler};
 use super::dto::{PerformanceMetrics, SystemPerformanceEntryDto};
 use super::layer::{
-    AppScopeId, BenchmarkInvocationSample, BenchmarkSystemSamples, GLOBAL_APP_SCOPE_ID,
-    begin_benchmark_capture_for_scope, benchmark_capture_phase_for_scope,
+    AppScopeId, BenchmarkInvocationSample, BenchmarkPhaseKey, BenchmarkSystemSamples,
+    GLOBAL_APP_SCOPE_ID, begin_benchmark_capture_for_scope, benchmark_capture_phase_key_for_scope,
     drain_benchmark_capture_for_scope, set_benchmark_capture_phase_for_scope,
     set_benchmark_capture_time_scale_for_scope,
 };
@@ -91,7 +91,7 @@ pub(crate) struct BenchmarkSystemReportStats {
 }
 
 impl BenchmarkSystemReportStats {
-    fn from_samples(samples: BenchmarkSystemSamples, cpu_time_total_ms: f64) -> Self {
+    fn from_samples(samples: &BenchmarkSystemSamples, cpu_time_total_ms: f64) -> Self {
         let duration_ms_list: Vec<f64> = samples
             .sample_list
             .iter()
@@ -105,7 +105,7 @@ impl BenchmarkSystemReportStats {
         };
 
         Self {
-            name: samples.name,
+            name: samples.name.clone(),
             calls: samples.sample_list.len(),
             summary,
             max_1s_average_ms: max_average_in_window_ms(&samples.sample_list, 1.0),
@@ -117,7 +117,7 @@ impl BenchmarkSystemReportStats {
 }
 
 struct BenchmarkPhaseFrameSample {
-    phase_name: String,
+    phase_key: BenchmarkPhaseKey,
     duration_seconds: f64,
     duration_ms: f64,
 }
@@ -142,14 +142,24 @@ pub(crate) struct BenchmarkReport {
     pub(crate) phase_report_list: Vec<BenchmarkPhaseReport>,
 }
 
-pub(crate) struct BenchmarkPhaseReport {
-    pub(crate) phase_name: String,
+pub(crate) struct BenchmarkAggregateReport {
     pub(crate) duration_seconds: f64,
     pub(crate) frames_total: usize,
     pub(crate) frame_summary: MetricSummary,
     pub(crate) frames_over_budget: FramesOverBudget,
     pub(crate) cpu_time_total_ms: f64,
     pub(crate) system_stat_list: Vec<BenchmarkSystemReportStats>,
+}
+
+pub(crate) struct BenchmarkPhaseReport {
+    pub(crate) phase_name: String,
+    pub(crate) aggregate: BenchmarkAggregateReport,
+    pub(crate) gameplay_state_report_list: Vec<BenchmarkGameplayStateReport>,
+}
+
+pub(crate) struct BenchmarkGameplayStateReport {
+    pub(crate) phase_name: String,
+    pub(crate) aggregate: BenchmarkAggregateReport,
 }
 
 /// Godot node that records Bevy system metrics and writes a benchmark report.
@@ -255,11 +265,11 @@ impl INode for BenchmarkSceneDirector {
         self.elapsed_seconds += delta_seconds;
         let real_delta_seconds = self.real_delta_seconds(delta_seconds);
         let frame_time_ms = real_delta_seconds * 1_000.0;
-        let phase_name = self.current_phase_name();
+        let phase_key = self.current_phase_key();
         self.frame_time_ms_list.push(frame_time_ms);
         self.phase_frame_sample_list
             .push(BenchmarkPhaseFrameSample {
-                phase_name,
+                phase_key,
                 duration_seconds: real_delta_seconds,
                 duration_ms: frame_time_ms,
             });
@@ -531,9 +541,10 @@ impl BenchmarkSceneDirector {
         self.start_capture();
     }
 
-    fn current_phase_name(&self) -> String {
-        benchmark_capture_phase_for_scope(self.performance_scope_id)
-            .unwrap_or_else(|| self.initial_phase_name.to_string())
+    fn current_phase_key(&self) -> BenchmarkPhaseKey {
+        benchmark_capture_phase_key_for_scope(self.performance_scope_id).unwrap_or_else(|| {
+            BenchmarkPhaseKey::from_lifecycle_phase_name(self.initial_phase_name.to_string())
+        })
     }
 }
 
@@ -541,33 +552,56 @@ fn build_phase_report_list(
     captured_system_sample_list: Vec<BenchmarkSystemSamples>,
     phase_frame_sample_list: &[BenchmarkPhaseFrameSample],
 ) -> Vec<BenchmarkPhaseReport> {
-    let mut sample_list_by_phase_name_map: HashMap<String, Vec<BenchmarkSystemSamples>> =
-        HashMap::new();
-    for samples in captured_system_sample_list
+    let system_sample_list = captured_system_sample_list
         .into_iter()
         .filter(|samples| samples.is_system)
-    {
-        sample_list_by_phase_name_map
-            .entry(samples.phase_name.clone())
-            .or_default()
-            .push(samples);
-    }
+        .collect::<Vec<_>>();
 
-    let mut frame_stats_by_phase_name_map: HashMap<String, BenchmarkPhaseFrameStatsBuilder> =
+    let mut sample_index_list_by_lifecycle_phase_name_map: HashMap<String, Vec<usize>> =
         HashMap::new();
-    for frame_sample in phase_frame_sample_list {
-        let frame_stats = frame_stats_by_phase_name_map
-            .entry(frame_sample.phase_name.clone())
-            .or_default();
-        frame_stats.duration_seconds += frame_sample.duration_seconds;
-        frame_stats
-            .frame_time_ms_list
-            .push(frame_sample.duration_ms);
+    let mut sample_index_list_by_gameplay_state_key_map: HashMap<(String, String), Vec<usize>> =
+        HashMap::new();
+    for (sample_index, samples) in system_sample_list.iter().enumerate() {
+        let lifecycle_phase_name = samples.phase_key.lifecycle_phase_name.clone();
+        sample_index_list_by_lifecycle_phase_name_map
+            .entry(lifecycle_phase_name.clone())
+            .or_default()
+            .push(sample_index);
+
+        if let Some(gameplay_phase_name) = samples.phase_key.gameplay_phase_name.as_ref() {
+            sample_index_list_by_gameplay_state_key_map
+                .entry((lifecycle_phase_name, gameplay_phase_name.clone()))
+                .or_default()
+                .push(sample_index);
+        }
     }
 
-    let mut phase_name_list = sample_list_by_phase_name_map
+    let mut frame_stats_by_lifecycle_phase_name_map: HashMap<
+        String,
+        BenchmarkPhaseFrameStatsBuilder,
+    > = HashMap::new();
+    let mut frame_stats_by_gameplay_state_key_map: HashMap<
+        (String, String),
+        BenchmarkPhaseFrameStatsBuilder,
+    > = HashMap::new();
+    for frame_sample in phase_frame_sample_list {
+        let lifecycle_phase_name = frame_sample.phase_key.lifecycle_phase_name.clone();
+        let frame_stats = frame_stats_by_lifecycle_phase_name_map
+            .entry(lifecycle_phase_name.clone())
+            .or_default();
+        record_frame_sample(frame_stats, frame_sample);
+
+        if let Some(gameplay_phase_name) = frame_sample.phase_key.gameplay_phase_name.as_ref() {
+            let gameplay_frame_stats = frame_stats_by_gameplay_state_key_map
+                .entry((lifecycle_phase_name, gameplay_phase_name.clone()))
+                .or_default();
+            record_frame_sample(gameplay_frame_stats, frame_sample);
+        }
+    }
+
+    let mut phase_name_list = sample_index_list_by_lifecycle_phase_name_map
         .keys()
-        .chain(frame_stats_by_phase_name_map.keys())
+        .chain(frame_stats_by_lifecycle_phase_name_map.keys())
         .cloned()
         .collect::<Vec<_>>();
     phase_name_list.sort();
@@ -576,34 +610,25 @@ fn build_phase_report_list(
     let mut phase_report_list = phase_name_list
         .into_iter()
         .map(|phase_name| {
-            let sample_list = sample_list_by_phase_name_map
+            let sample_index_list = sample_index_list_by_lifecycle_phase_name_map
                 .remove(&phase_name)
                 .unwrap_or_default();
-            let frame_stats = frame_stats_by_phase_name_map
+            let frame_stats = frame_stats_by_lifecycle_phase_name_map
                 .remove(&phase_name)
                 .unwrap_or_default();
-            let frame_summary = MetricSummary::from_sample_list(&frame_stats.frame_time_ms_list);
-            let frames_over_budget =
-                FramesOverBudget::from_frame_time_list(&frame_stats.frame_time_ms_list);
-            let cpu_time_total_ms = sample_list
-                .iter()
-                .flat_map(|samples| samples.sample_list.iter())
-                .map(|sample| sample.duration_seconds * 1_000.0)
-                .sum::<f64>();
-            let mut system_stat_list = sample_list
-                .into_iter()
-                .map(|samples| BenchmarkSystemReportStats::from_samples(samples, cpu_time_total_ms))
-                .collect::<Vec<_>>();
-            sort_system_stat_list(&mut system_stat_list);
+            let aggregate =
+                build_aggregate_report(&system_sample_list, &sample_index_list, frame_stats);
+            let gameplay_state_report_list = build_gameplay_state_report_list(
+                &phase_name,
+                &system_sample_list,
+                &mut sample_index_list_by_gameplay_state_key_map,
+                &mut frame_stats_by_gameplay_state_key_map,
+            );
 
             BenchmarkPhaseReport {
                 phase_name,
-                duration_seconds: frame_stats.duration_seconds,
-                frames_total: frame_stats.frame_time_ms_list.len(),
-                frame_summary,
-                frames_over_budget,
-                cpu_time_total_ms,
-                system_stat_list,
+                aggregate,
+                gameplay_state_report_list,
             }
         })
         .collect::<Vec<_>>();
@@ -615,6 +640,111 @@ fn build_phase_report_list(
     });
 
     phase_report_list
+}
+
+fn record_frame_sample(
+    frame_stats: &mut BenchmarkPhaseFrameStatsBuilder,
+    frame_sample: &BenchmarkPhaseFrameSample,
+) {
+    frame_stats.duration_seconds += frame_sample.duration_seconds;
+    frame_stats.frame_time_ms_list.push(frame_sample.duration_ms);
+}
+
+fn build_gameplay_state_report_list(
+    lifecycle_phase_name: &str,
+    system_sample_list: &[BenchmarkSystemSamples],
+    sample_index_list_by_gameplay_state_key_map: &mut HashMap<(String, String), Vec<usize>>,
+    frame_stats_by_gameplay_state_key_map: &mut HashMap<
+        (String, String),
+        BenchmarkPhaseFrameStatsBuilder,
+    >,
+) -> Vec<BenchmarkGameplayStateReport> {
+    let mut gameplay_phase_name_list = sample_index_list_by_gameplay_state_key_map
+        .keys()
+        .filter_map(|(key_lifecycle_phase_name, gameplay_phase_name)| {
+            if key_lifecycle_phase_name == lifecycle_phase_name {
+                Some(gameplay_phase_name.clone())
+            } else {
+                None
+            }
+        })
+        .chain(
+            frame_stats_by_gameplay_state_key_map.keys().filter_map(
+                |(key_lifecycle_phase_name, gameplay_phase_name)| {
+                    if key_lifecycle_phase_name == lifecycle_phase_name {
+                        Some(gameplay_phase_name.clone())
+                    } else {
+                        None
+                    }
+                },
+            ),
+        )
+        .collect::<Vec<_>>();
+    gameplay_phase_name_list.sort();
+    gameplay_phase_name_list.dedup();
+
+    let lifecycle_phase_name = lifecycle_phase_name.to_string();
+    let mut gameplay_state_report_list = gameplay_phase_name_list
+        .into_iter()
+        .map(|gameplay_phase_name| {
+            let key = (lifecycle_phase_name.clone(), gameplay_phase_name.clone());
+            let sample_index_list = sample_index_list_by_gameplay_state_key_map
+                .remove(&key)
+                .unwrap_or_default();
+            let frame_stats = frame_stats_by_gameplay_state_key_map
+                .remove(&key)
+                .unwrap_or_default();
+            let aggregate =
+                build_aggregate_report(system_sample_list, &sample_index_list, frame_stats);
+
+            BenchmarkGameplayStateReport {
+                phase_name: gameplay_phase_name,
+                aggregate,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    gameplay_state_report_list.sort_by(|a, b| {
+        benchmark_gameplay_state_report_order(&a.phase_name)
+            .cmp(&benchmark_gameplay_state_report_order(&b.phase_name))
+            .then_with(|| a.phase_name.cmp(&b.phase_name))
+    });
+
+    gameplay_state_report_list
+}
+
+fn build_aggregate_report(
+    system_sample_list: &[BenchmarkSystemSamples],
+    sample_index_list: &[usize],
+    frame_stats: BenchmarkPhaseFrameStatsBuilder,
+) -> BenchmarkAggregateReport {
+    let frame_summary = MetricSummary::from_sample_list(&frame_stats.frame_time_ms_list);
+    let frames_over_budget =
+        FramesOverBudget::from_frame_time_list(&frame_stats.frame_time_ms_list);
+    let cpu_time_total_ms = sample_index_list
+        .iter()
+        .flat_map(|sample_index| system_sample_list[*sample_index].sample_list.iter())
+        .map(|sample| sample.duration_seconds * 1_000.0)
+        .sum::<f64>();
+    let mut system_stat_list = sample_index_list
+        .iter()
+        .map(|sample_index| {
+            BenchmarkSystemReportStats::from_samples(
+                &system_sample_list[*sample_index],
+                cpu_time_total_ms,
+            )
+        })
+        .collect::<Vec<_>>();
+    sort_system_stat_list(&mut system_stat_list);
+
+    BenchmarkAggregateReport {
+        duration_seconds: frame_stats.duration_seconds,
+        frames_total: frame_stats.frame_time_ms_list.len(),
+        frame_summary,
+        frames_over_budget,
+        cpu_time_total_ms,
+        system_stat_list,
+    }
 }
 
 fn sort_system_stat_list(system_stat_list: &mut [BenchmarkSystemReportStats]) {
@@ -635,10 +765,18 @@ fn sort_system_stat_list(system_stat_list: &mut [BenchmarkSystemReportStats]) {
 
 fn benchmark_phase_report_order(phase_name: &str) -> usize {
     match phase_name {
-        "Playing" => 0,
-        "Paused" => 1,
-        "Loading" => 2,
+        "Loading" => 0,
+        "Initialization" => 1,
+        "Playing" => 2,
         _ => 3,
+    }
+}
+
+fn benchmark_gameplay_state_report_order(phase_name: &str) -> usize {
+    match phase_name {
+        "Paused" => 0,
+        "Running" => 1,
+        _ => 2,
     }
 }
 
