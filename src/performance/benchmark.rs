@@ -10,8 +10,9 @@ use godot::classes::{Engine, INode, Node, ProjectSettings};
 use godot::global::{Error, godot_error, godot_print};
 use godot::obj::{Base, Gd};
 use godot::prelude::*;
-use std::env;
 use std::collections::HashMap;
+use std::env;
+use std::fs;
 use std::path::PathBuf;
 
 const DEFAULT_REPORT_PATH: &str = "res://logs/benchmarks/benchmark_report.yml";
@@ -239,6 +240,14 @@ impl INode for BenchmarkSceneDirector {
             self.finish();
         }
     }
+
+    fn exit_tree(&mut self) {
+        if !self.is_running || self.is_finished {
+            return;
+        }
+
+        self.finish();
+    }
 }
 
 #[godot_api]
@@ -249,7 +258,7 @@ impl BenchmarkSceneDirector {
         self.metrics = self.resolve_metrics();
         self.connect_metrics_source();
         self.performance_scope_id = self.resolve_performance_scope_id();
-        self.start_capture();
+        self.restart_capture();
         set_benchmark_capture_time_scale_for_scope(
             self.performance_scope_id,
             sanitized_time_scale(self.time_scale),
@@ -405,6 +414,10 @@ impl BenchmarkSceneDirector {
     }
 
     fn write_report(&self, output_path: &PathBuf, report: &BenchmarkReport) -> std::io::Result<()> {
+        if let Some(parent_path) = output_path.parent() {
+            fs::create_dir_all(parent_path)?;
+        }
+
         for output_handler in &self.output_handler_list {
             output_handler.write_report(output_path, report)?;
         }
@@ -482,6 +495,11 @@ impl BenchmarkSceneDirector {
             self.initial_phase_name.to_string(),
         );
         self.is_capture_running = true;
+    }
+
+    fn restart_capture(&mut self) {
+        self.is_capture_running = false;
+        self.start_capture();
     }
 }
 
