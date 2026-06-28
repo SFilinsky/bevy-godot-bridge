@@ -190,6 +190,12 @@ pub fn set_benchmark_capture_time_scale_for_scope(scope_id: AppScopeId, time_sca
     clock.time_scale = sanitized_benchmark_time_scale(time_scale);
 }
 
+pub fn benchmark_capture_phase_for_scope(scope_id: AppScopeId) -> Option<String> {
+    BENCHMARK_CAPTURE_PHASE_BY_SCOPE
+        .get(&scope_id)
+        .map(|phase| phase.value().clone())
+}
+
 pub fn drain_benchmark_capture_for_scope(scope_id: AppScopeId) -> Vec<BenchmarkSystemSamples> {
     BENCHMARK_CAPTURE_CLOCKS.remove(&scope_id);
     BENCHMARK_CAPTURE_PHASE_BY_SCOPE.remove(&scope_id);
