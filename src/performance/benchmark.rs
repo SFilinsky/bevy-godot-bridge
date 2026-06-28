@@ -2,8 +2,9 @@ use super::benchmark_output_handlers::{BenchmarkOutputHandler, YamlBenchmarkOutp
 use super::dto::{PerformanceMetrics, SystemPerformanceEntryDto};
 use super::layer::{
     AppScopeId, BenchmarkInvocationSample, BenchmarkSystemSamples, GLOBAL_APP_SCOPE_ID,
-    begin_benchmark_capture_for_scope, drain_benchmark_capture_for_scope,
-    set_benchmark_capture_phase_for_scope, set_benchmark_capture_time_scale_for_scope,
+    begin_benchmark_capture_for_scope, benchmark_capture_phase_for_scope,
+    drain_benchmark_capture_for_scope, set_benchmark_capture_phase_for_scope,
+    set_benchmark_capture_time_scale_for_scope,
 };
 use godot::builtin::{Array, GString};
 use godot::classes::{Engine, INode, Node, ProjectSettings};
@@ -115,6 +116,18 @@ impl BenchmarkSystemReportStats {
     }
 }
 
+struct BenchmarkPhaseFrameSample {
+    phase_name: String,
+    duration_seconds: f64,
+    duration_ms: f64,
+}
+
+#[derive(Default)]
+struct BenchmarkPhaseFrameStatsBuilder {
+    duration_seconds: f64,
+    frame_time_ms_list: Vec<f64>,
+}
+
 pub(crate) struct BenchmarkReport {
     pub(crate) scene_id: String,
     pub(crate) duration_seconds: f64,
@@ -131,6 +144,10 @@ pub(crate) struct BenchmarkReport {
 
 pub(crate) struct BenchmarkPhaseReport {
     pub(crate) phase_name: String,
+    pub(crate) duration_seconds: f64,
+    pub(crate) frames_total: usize,
+    pub(crate) frame_summary: MetricSummary,
+    pub(crate) frames_over_budget: FramesOverBudget,
     pub(crate) cpu_time_total_ms: f64,
     pub(crate) system_stat_list: Vec<BenchmarkSystemReportStats>,
 }
@@ -170,6 +187,7 @@ pub struct BenchmarkSceneDirector {
     metrics: Option<Gd<PerformanceMetrics>>,
     elapsed_seconds: f64,
     frame_time_ms_list: Vec<f64>,
+    phase_frame_sample_list: Vec<BenchmarkPhaseFrameSample>,
     metrics_refresh_count: u64,
     is_running: bool,
     is_capture_running: bool,
@@ -208,6 +226,7 @@ impl INode for BenchmarkSceneDirector {
             metrics: None,
             elapsed_seconds: 0.0,
             frame_time_ms_list: Vec::new(),
+            phase_frame_sample_list: Vec::new(),
             metrics_refresh_count: 0,
             is_running: false,
             is_capture_running: false,
@@ -234,8 +253,16 @@ impl INode for BenchmarkSceneDirector {
         }
 
         self.elapsed_seconds += delta_seconds;
-        self.frame_time_ms_list
-            .push(self.real_delta_seconds(delta_seconds) * 1_000.0);
+        let real_delta_seconds = self.real_delta_seconds(delta_seconds);
+        let frame_time_ms = real_delta_seconds * 1_000.0;
+        let phase_name = self.current_phase_name();
+        self.frame_time_ms_list.push(frame_time_ms);
+        self.phase_frame_sample_list
+            .push(BenchmarkPhaseFrameSample {
+                phase_name,
+                duration_seconds: real_delta_seconds,
+                duration_ms: frame_time_ms,
+            });
         if self.elapsed_seconds >= self.duration_seconds {
             self.finish();
         }
@@ -272,6 +299,7 @@ impl BenchmarkSceneDirector {
 
         self.elapsed_seconds = 0.0;
         self.frame_time_ms_list.clear();
+        self.phase_frame_sample_list.clear();
         self.metrics_refresh_count = 0;
         self.is_running = true;
         self.is_finished = false;
@@ -437,7 +465,8 @@ impl BenchmarkSceneDirector {
             .flat_map(|samples| samples.sample_list.iter())
             .map(|sample| sample.duration_seconds * 1_000.0)
             .sum::<f64>();
-        let phase_report_list = build_phase_report_list(captured_system_sample_list);
+        let phase_report_list =
+            build_phase_report_list(captured_system_sample_list, &self.phase_frame_sample_list);
 
         BenchmarkReport {
             scene_id: self.scene_id.to_string(),
@@ -501,10 +530,16 @@ impl BenchmarkSceneDirector {
         self.is_capture_running = false;
         self.start_capture();
     }
+
+    fn current_phase_name(&self) -> String {
+        benchmark_capture_phase_for_scope(self.performance_scope_id)
+            .unwrap_or_else(|| self.initial_phase_name.to_string())
+    }
 }
 
 fn build_phase_report_list(
     captured_system_sample_list: Vec<BenchmarkSystemSamples>,
+    phase_frame_sample_list: &[BenchmarkPhaseFrameSample],
 ) -> Vec<BenchmarkPhaseReport> {
     let mut sample_list_by_phase_name_map: HashMap<String, Vec<BenchmarkSystemSamples>> =
         HashMap::new();
@@ -518,9 +553,38 @@ fn build_phase_report_list(
             .push(samples);
     }
 
-    let mut phase_report_list = sample_list_by_phase_name_map
+    let mut frame_stats_by_phase_name_map: HashMap<String, BenchmarkPhaseFrameStatsBuilder> =
+        HashMap::new();
+    for frame_sample in phase_frame_sample_list {
+        let frame_stats = frame_stats_by_phase_name_map
+            .entry(frame_sample.phase_name.clone())
+            .or_default();
+        frame_stats.duration_seconds += frame_sample.duration_seconds;
+        frame_stats
+            .frame_time_ms_list
+            .push(frame_sample.duration_ms);
+    }
+
+    let mut phase_name_list = sample_list_by_phase_name_map
+        .keys()
+        .chain(frame_stats_by_phase_name_map.keys())
+        .cloned()
+        .collect::<Vec<_>>();
+    phase_name_list.sort();
+    phase_name_list.dedup();
+
+    let mut phase_report_list = phase_name_list
         .into_iter()
-        .map(|(phase_name, sample_list)| {
+        .map(|phase_name| {
+            let sample_list = sample_list_by_phase_name_map
+                .remove(&phase_name)
+                .unwrap_or_default();
+            let frame_stats = frame_stats_by_phase_name_map
+                .remove(&phase_name)
+                .unwrap_or_default();
+            let frame_summary = MetricSummary::from_sample_list(&frame_stats.frame_time_ms_list);
+            let frames_over_budget =
+                FramesOverBudget::from_frame_time_list(&frame_stats.frame_time_ms_list);
             let cpu_time_total_ms = sample_list
                 .iter()
                 .flat_map(|samples| samples.sample_list.iter())
@@ -534,6 +598,10 @@ fn build_phase_report_list(
 
             BenchmarkPhaseReport {
                 phase_name,
+                duration_seconds: frame_stats.duration_seconds,
+                frames_total: frame_stats.frame_time_ms_list.len(),
+                frame_summary,
+                frames_over_budget,
                 cpu_time_total_ms,
                 system_stat_list,
             }

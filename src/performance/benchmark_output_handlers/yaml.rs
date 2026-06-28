@@ -104,6 +104,59 @@ fn write_phase_report(report: &mut String, phase_report: &BenchmarkPhaseReport) 
         yaml_escape(&phase_report.phase_name)
     ));
     report.push_str(&format!(
+        "    duration_seconds: {:.3}\n",
+        phase_report.duration_seconds
+    ));
+    report.push_str(&format!(
+        "    frames_total: {}\n",
+        phase_report.frames_total
+    ));
+    report.push_str(&format!(
+        "    average_frame_ms: {:.6}\n",
+        phase_report.frame_summary.average_ms
+    ));
+    report.push_str(&format!(
+        "    min_frame_ms: {:.6}\n",
+        phase_report.frame_summary.min_ms
+    ));
+    report.push_str(&format!(
+        "    max_frame_ms: {:.6}\n",
+        phase_report.frame_summary.max_ms
+    ));
+    report.push_str(&format!(
+        "    p50_frame_ms: {:.6}\n",
+        phase_report.frame_summary.p50_ms
+    ));
+    report.push_str(&format!(
+        "    p90_frame_ms: {:.6}\n",
+        phase_report.frame_summary.p90_ms
+    ));
+    report.push_str(&format!(
+        "    p95_frame_ms: {:.6}\n",
+        phase_report.frame_summary.p95_ms
+    ));
+    report.push_str(&format!(
+        "    p99_frame_ms: {:.6}\n",
+        phase_report.frame_summary.p99_ms
+    ));
+    report.push_str("    frames_over_budget:\n");
+    report.push_str(&format!(
+        "      over_16_67_ms: {}\n",
+        phase_report.frames_over_budget.over_16_67_ms
+    ));
+    report.push_str(&format!(
+        "      over_33_33_ms: {}\n",
+        phase_report.frames_over_budget.over_33_33_ms
+    ));
+    report.push_str(&format!(
+        "      over_50_ms: {}\n",
+        phase_report.frames_over_budget.over_50_ms
+    ));
+    report.push_str(&format!(
+        "      over_100_ms: {}\n",
+        phase_report.frames_over_budget.over_100_ms
+    ));
+    report.push_str(&format!(
         "    cpu_time_total_ms: {:.6}\n",
         phase_report.cpu_time_total_ms
     ));
