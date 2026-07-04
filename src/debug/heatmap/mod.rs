@@ -93,6 +93,10 @@ pub mod resources {
 
     pub struct HeatmapNode {
         pub mesh: Gd<MeshInstance3D>,
+        #[expect(
+            dead_code,
+            reason = "Godot material reference is retained so the mesh override stays alive."
+        )]
         pub material: Gd<StandardMaterial3D>,
         pub texture: Gd<ImageTexture>,
         pub last_texture_signature: Option<u64>,

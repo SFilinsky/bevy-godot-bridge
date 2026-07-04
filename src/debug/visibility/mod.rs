@@ -45,7 +45,7 @@ impl INode for DebugVisibilityGroup {
         let host = self.base().clone().upcast::<Node>();
         self.debug_manager = DebugManager::resolve(&host);
 
-        let Some(mut manager) = self.debug_manager.as_ref().cloned() else {
+        let Some(manager) = self.debug_manager.as_ref().cloned() else {
             self.apply_visibility(EDebugState::Off);
             self.last_state = Some(EDebugState::Off);
             return;
@@ -91,7 +91,7 @@ impl DebugVisibilityGroup {
             EDebugState::Navmesh => self.visible_state_mask & STATE_NAVMESH_BIT != 0,
         };
 
-        let mut host_node = self.base().clone();
+        let host_node = self.base().clone();
         for path in self.target_node_list.iter_shared() {
             if let Some(mut node) = host_node.get_node_or_null(&path) {
                 node.set("visible", &is_visible.to_variant());
