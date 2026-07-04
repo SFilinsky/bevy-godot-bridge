@@ -14,4 +14,4 @@ mod benchmark;
 mod benchmark_output_handlers;
 mod ui;
 
-pub use layer::{get_sorted_metrics, init_performance_tracing, SystemMetricsEntry};
+pub use layer::init_performance_tracing;
