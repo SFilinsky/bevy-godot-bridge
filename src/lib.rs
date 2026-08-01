@@ -48,7 +48,9 @@ pub mod prelude {
         Criterion, ExecuteAction, ExecuteResult, ExecutionId,
     };
     pub use crate::app::{BevyApp, BevyAppSubsystem};
-    pub use crate::dto::{BuildsDto, DataTransferConfig, WithGatherer, WithStateNode};
+    pub use crate::dto::{
+        BuildsDto, DataTransferConfig, IncrementalExportConfig, WithGatherer, WithStateNode,
+    };
     pub use crate::import::{
         importers::EntityImporter, plugins::EntityInitializationPlugin,
         position::plugins::PositionInitializationPlugin, sets::PostEntityInitSet,

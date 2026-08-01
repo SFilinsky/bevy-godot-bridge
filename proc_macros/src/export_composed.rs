@@ -12,10 +12,14 @@ use syn::{
 #[derive(Clone)]
 struct ComponentSpec {
     cfg_ty: Type,
+    is_incremental: bool,
     binding_ident: Ident,
     state_alias_ident: Ident,
     state_store_var_ident: Ident,
     state_store_bind_ident: Ident,
+    pending_resource_ident: Ident,
+    pending_resource_type_ident: Ident,
+    capture_system_ident: Ident,
 }
 
 struct Spec {
@@ -37,6 +41,7 @@ impl Parse for Spec {
         let mut name_lit: Option<LitStr> = None;
         let mut tag: Option<Path> = None;
         let mut items: Option<Vec<Type>> = None;
+        let mut incremental_items: Vec<Type> = Vec::new();
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -60,10 +65,25 @@ impl Parse for Spec {
                     }
                     items = Some(out);
                 }
+                "incremental_components" => {
+                    let list;
+                    bracketed!(list in input);
+
+                    while !list.is_empty() {
+                        incremental_items.push(list.parse::<Type>()?);
+                        if list.peek(Token![,]) {
+                            list.parse::<Token![,]>()?;
+                        } else {
+                            break;
+                        }
+                    }
+                }
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!("unknown key `{other}`; expected `name`, `tag`, `components`"),
+                        format!(
+                            "unknown key `{other}`; expected `name`, `tag`, `components`, `incremental_components`"
+                        ),
                     ));
                 }
             }
@@ -103,11 +123,23 @@ impl Parse for Spec {
         let mut optional: Vec<ComponentSpec> = Vec::new();
         let mut all: Vec<ComponentSpec> = Vec::new();
         let mut seen_fields: HashSet<String> = HashSet::new();
+        let mut unmatched_incremental_item_set: HashSet<String> = incremental_items
+            .iter()
+            .map(type_key)
+            .collect();
 
         for item in items {
             let is_optional = is_option_type(&item);
             let cfg_ty = strip_option(&item);
             let field_ident = dto_field_ident_from_cfg(&cfg_ty);
+            let is_incremental = unmatched_incremental_item_set.remove(&type_key(&cfg_ty));
+
+            if is_incremental && is_optional {
+                return Err(syn::Error::new(
+                    field_ident.span(),
+                    "incremental components must be required components",
+                ));
+            }
 
             let field_key = field_ident.to_string();
             if !seen_fields.insert(field_key.clone()) {
@@ -122,13 +154,22 @@ impl Parse for Spec {
                 format_ident!("{}{}StateNode", name_camel, field_key.to_upper_camel_case());
             let state_store_var_ident = format_ident!("{}_state_store", field_ident);
             let state_store_bind_ident = format_ident!("{}_state_store_bind", field_ident);
+            let pending_resource_ident = format_ident!("{}_pending_changes", field_ident);
+            let pending_resource_type_ident =
+                format_ident!("{}{}PendingChanges", name_camel, field_key.to_upper_camel_case());
+            let capture_system_ident =
+                format_ident!("capture_{}_incremental_changes", field_ident);
 
             let component = ComponentSpec {
                 cfg_ty,
+                is_incremental,
                 binding_ident,
                 state_alias_ident,
                 state_store_var_ident,
                 state_store_bind_ident,
+                pending_resource_ident,
+                pending_resource_type_ident,
+                capture_system_ident,
             };
 
             if is_optional {
@@ -138,6 +179,13 @@ impl Parse for Spec {
             }
 
             all.push(component);
+        }
+
+        if let Some(unmatched_item) = unmatched_incremental_item_set.into_iter().next() {
+            return Err(syn::Error::new(
+                Span::call_site(),
+                format!("incremental component `{unmatched_item}` is not listed in `components`"),
+            ));
         }
 
         Ok(Self {
@@ -154,6 +202,10 @@ impl Parse for Spec {
             all,
         })
     }
+}
+
+fn type_key(ty: &Type) -> String {
+    quote!(#ty).to_string()
 }
 
 fn is_option_type(ty: &Type) -> bool {
@@ -220,6 +272,16 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let req_cfg_tys: Vec<Type> = spec.required.iter().map(|c| c.cfg_ty.clone()).collect();
     let opt_cfg_tys: Vec<Type> = spec.optional.iter().map(|c| c.cfg_ty.clone()).collect();
     let all_cfg_tys: Vec<Type> = spec.all.iter().map(|c| c.cfg_ty.clone()).collect();
+    let incremental_components: Vec<ComponentSpec> = spec
+        .required
+        .iter()
+        .filter(|component| component.is_incremental)
+        .cloned()
+        .collect();
+    let incremental_cfg_tys: Vec<Type> = incremental_components
+        .iter()
+        .map(|component| component.cfg_ty.clone())
+        .collect();
 
     let req_bindings: Vec<Ident> = spec
         .required
@@ -288,6 +350,50 @@ pub fn expand(input: TokenStream) -> TokenStream {
             let binding = &component.binding_ident;
             let state_store_bind = &component.state_store_bind_ident;
 
+            if component.is_incremental {
+                let pending_resource = &component.pending_resource_ident;
+
+                return quote! {
+                    let mut pending_changes = #pending_resource.pending_by_entity_map.remove(&entity);
+                    // Promote the current full state before consuming older incremental changes.
+                    // This makes initial lifecycle updates independent of capture/export schedule order.
+                    if #cfg_ty::data_is_full_snapshot(&*#binding) {
+                        let pending_changes = pending_changes.get_or_insert_with(Default::default);
+                        #cfg_ty::accumulate_pending_changes(pending_changes, &*#binding);
+                    }
+                    let did_change = if let Some(pending_changes) = pending_changes {
+                        match #state_store_bind.upsert_from_pending_changes::<#cfg_ty>(
+                            eid_i64,
+                            &pending_changes,
+                            &mut identity,
+                            next_revision,
+                        ) {
+                            Some(did_change) => did_change,
+                            None => {
+                                #pending_resource
+                                    .pending_by_entity_map
+                                    .insert(entity, pending_changes);
+                                false
+                            }
+                        }
+                    } else if #cfg_ty::data_is_full_snapshot(&*#binding) {
+                        #state_store_bind
+                            .upsert_from_data::<#cfg_ty>(
+                                eid_i64,
+                                &*#binding,
+                                &mut identity,
+                                next_revision,
+                            )
+                    } else {
+                        false
+                    };
+
+                    if did_change {
+                        changed_candidate = true;
+                    }
+                };
+            }
+
             quote! {
                 if is_created || #binding.is_changed() {
                     let did_change = #state_store_bind
@@ -298,6 +404,61 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
         })
+        .collect();
+
+    let incremental_pending_resource_defs: Vec<TokenStream2> = incremental_components
+        .iter()
+        .map(|component| {
+            let cfg_ty = &component.cfg_ty;
+            let pending_resource_type = &component.pending_resource_type_ident;
+
+            quote! {
+                #[derive(Resource, Default)]
+                struct #pending_resource_type {
+                    pending_by_entity_map: HashMap<Entity, <#cfg_ty as IncrementalExportConfig>::PendingChanges>,
+                }
+            }
+        })
+        .collect();
+
+    let incremental_capture_system_defs: Vec<TokenStream2> = incremental_components
+        .iter()
+        .map(|component| {
+            let cfg_ty = &component.cfg_ty;
+            let pending_resource_type = &component.pending_resource_type_ident;
+            let capture_system = &component.capture_system_ident;
+
+            quote! {
+                fn #capture_system(
+                    changed_query: Query<
+                        (Entity, &<#cfg_ty as DataTransferConfig>::DataType),
+                        (With<#tag_ty>, Changed<<#cfg_ty as DataTransferConfig>::DataType>),
+                    >,
+                    mut pending_changes: ResMut<#pending_resource_type>,
+                ) {
+                    for (entity, data) in &changed_query {
+                        let pending_changes = pending_changes
+                            .pending_by_entity_map
+                            .entry(entity)
+                            .or_default();
+                        #cfg_ty::accumulate_pending_changes(pending_changes, data);
+                    }
+                }
+            }
+        })
+        .collect();
+
+    let incremental_pending_resource_idents: Vec<Ident> = incremental_components
+        .iter()
+        .map(|component| component.pending_resource_ident.clone())
+        .collect();
+    let incremental_pending_resource_types: Vec<Ident> = incremental_components
+        .iter()
+        .map(|component| component.pending_resource_type_ident.clone())
+        .collect();
+    let incremental_capture_system_idents: Vec<Ident> = incremental_components
+        .iter()
+        .map(|component| component.capture_system_ident.clone())
         .collect();
 
     let opt_apply_blocks: Vec<TokenStream2> = spec
@@ -371,6 +532,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .map(|component| {
             let state_store = &component.state_store_var_ident;
 
+            if component.is_incremental {
+                let pending_resource = &component.pending_resource_ident;
+
+                return quote! {
+                    #state_store.bind_mut().remove_entity(entity_id);
+                    #pending_resource.pending_by_entity_map.remove(&entity);
+                };
+            }
+
             quote! {
                 #state_store.bind_mut().remove_entity(entity_id);
             }
@@ -437,7 +607,20 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #( assert_cfg::<#all_cfg_tys>(); )*
             }
 
+            #[allow(dead_code)]
+            fn __export_composed_requires_incremental_configs() {
+                fn assert_cfg<C>()
+                where
+                    C: IncrementalExportConfig,
+                {
+                }
+
+                #( assert_cfg::<#incremental_cfg_tys>(); )*
+            }
+
             #( pub type #state_alias_idents = <<#all_cfg_tys as DataTransferConfig>::DtoType as WithStateNode>::StateNode; )*
+            #( #incremental_pending_resource_defs )*
+            #( #incremental_capture_system_defs )*
             #[derive(GodotClass)]
             #[class(base=Node)]
             pub struct #exporter_ident {
@@ -849,6 +1032,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 mut identity: IdentitySubsystem,
                 mut app: BevyAppSubsystem,
                 mut exporter_accessor: #exporter_accessor_ident,
+                #( mut #incremental_pending_resource_idents: ResMut<#incremental_pending_resource_types>, )*
             ) {
                 let any_created = !created.is_empty();
                 let any_updated = !updated.is_empty();
@@ -940,8 +1124,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             impl Plugin for #plugin_ident {
                 fn build(&self, app: &mut App) {
-                    app.init_non_send_resource::<#exporter_accessor_impl_ident>();
-                    app.add_systems(PostUpdate, #system_ident);
+                    app.init_non_send_resource::<#exporter_accessor_impl_ident>()
+                        #( .init_resource::<#incremental_pending_resource_types>() )*
+                        #( .add_systems(bevy::app::FixedPostUpdate, #incremental_capture_system_idents) )*
+                        .add_systems(PostUpdate, #system_ident);
                 }
             }
         }

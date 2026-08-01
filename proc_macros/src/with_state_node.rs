@@ -107,6 +107,57 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 true
             }
 
+            pub fn upsert_from_pending_changes<C>(
+                &mut self,
+                entity_id: i64,
+                pending_changes: &C::PendingChanges,
+                identity: &mut bevy_godot4::prelude::IdentitySubsystem,
+                revision: i64,
+            ) -> Option<bool>
+            where
+                C: bevy_godot4::prelude::IncrementalExportConfig<DtoType = #dto>,
+                #dto: PartialEq,
+            {
+                if entity_id < 0 {
+                    return None;
+                }
+
+                let entry = self.entries.entry(entity_id).or_insert_with(|| {
+                    (#dto::new_gd(), #dto::new_gd(), #dto::new_gd(), -1)
+                });
+
+                let (curr, prev, spare, updated_revision) = entry;
+
+                if *updated_revision < 0 {
+                    if !C::pending_changes_are_full_snapshot(pending_changes) {
+                        return None;
+                    }
+
+                    C::update_dto_from_pending_changes(curr, pending_changes, identity);
+                    C::update_dto_from_pending_changes(prev, pending_changes, identity);
+                    C::update_dto_from_pending_changes(spare, pending_changes, identity);
+                    *updated_revision = revision;
+                    return Some(true);
+                }
+
+                C::update_dto_from_pending_changes(spare, pending_changes, identity);
+
+                let same_value = {
+                    let curr_bound = curr.bind();
+                    let spare_bound = spare.bind();
+                    *curr_bound == *spare_bound
+                };
+
+                if same_value {
+                    return Some(false);
+                }
+
+                std::mem::swap(prev, curr);
+                std::mem::swap(curr, spare);
+                *updated_revision = revision;
+                Some(true)
+            }
+
             pub fn remove_entity(&mut self, entity_id: i64) {
                 self.entries.remove(&entity_id);
             }

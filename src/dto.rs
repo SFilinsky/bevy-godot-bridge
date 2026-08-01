@@ -40,6 +40,34 @@ pub trait DataTransferConfig {
     }
 }
 
+/// Describes an export whose small changes can be merged before a visual-frame flush.
+///
+/// The bridge owns when pending changes are captured and sent. Implementations own only
+/// the data-specific merge and DTO conversion rules, so gameplay does not depend on export timing.
+pub trait IncrementalExportConfig: DataTransferConfig {
+    type PendingChanges: Default + Send + Sync + 'static;
+
+    /// Merges one changed source value into the bridge-owned pending buffer.
+    /// A full snapshot replaces every older pending change.
+    fn accumulate_pending_changes(
+        pending_changes: &mut Self::PendingChanges,
+        data: &Self::DataType,
+    );
+
+    /// Returns whether the pending buffer can initialize a consumer from scratch.
+    fn pending_changes_are_full_snapshot(pending_changes: &Self::PendingChanges) -> bool;
+
+    /// Writes the pending full snapshot or coalesced delta into an existing DTO.
+    fn update_dto_from_pending_changes(
+        dto: &mut Gd<Self::DtoType>,
+        pending_changes: &Self::PendingChanges,
+        identity: &mut IdentitySubsystem,
+    );
+
+    /// Returns whether the current source value can initialize a consumer without pending changes.
+    fn data_is_full_snapshot(data: &Self::DataType) -> bool;
+}
+
 pub trait BuildsDto<Dto>
 where
     Dto: GodotClass,
