@@ -99,6 +99,7 @@ pub mod resources {
         )]
         pub material: Gd<StandardMaterial3D>,
         pub texture: Gd<ImageTexture>,
+        pub texture_size: Option<(i32, i32)>,
         pub last_texture_signature: Option<u64>,
         pub last_geometry_signature: Option<u64>,
     }
@@ -307,6 +308,11 @@ pub mod systems {
             mesh.set_visible(status.is_visible);
         }
 
+        // Keep only the newest requests while the debug view is hidden, then apply them when it is shown.
+        if !status.is_visible {
+            return;
+        }
+
         let pending = std::mem::take(&mut reqs.pending);
 
         for (key, request) in pending {
@@ -338,6 +344,7 @@ pub mod systems {
                         mesh: mesh_instance,
                         material,
                         texture,
+                        texture_size: None,
                         last_texture_signature: None,
                         last_geometry_signature: None,
                     })
@@ -432,7 +439,13 @@ pub mod systems {
             }
 
             let mut tex = entry.texture.clone();
-            tex.set_image(&image);
+            let texture_size = (src_cols * upscale, src_rows * upscale);
+            if entry.texture_size == Some(texture_size) {
+                tex.update(&image);
+            } else {
+                tex.set_image(&image);
+                entry.texture_size = Some(texture_size);
+            }
             entry.last_texture_signature = Some(texture_signature);
         }
     }

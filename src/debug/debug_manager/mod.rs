@@ -31,6 +31,10 @@ pub struct DebugRenderGateSubsystem<'w, 's> {
 }
 
 impl<'w, 's> DebugRenderGateSubsystem<'w, 's> {
+    pub fn is_visible(&self, state: EDebugState) -> bool {
+        self.debug.current_state == state
+    }
+
     pub fn get_status(
         &mut self,
         state: EDebugState,
