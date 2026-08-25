@@ -89,6 +89,9 @@ impl DebugVisibilityGroup {
             EDebugState::Off => self.visible_state_mask & STATE_OFF_BIT != 0,
             EDebugState::Colliders => self.visible_state_mask & STATE_COLLIDERS_BIT != 0,
             EDebugState::Navmesh => self.visible_state_mask & STATE_NAVMESH_BIT != 0,
+            EDebugState::CaptureFlow
+            | EDebugState::EnemyBuildingFlow
+            | EDebugState::NavigationIslands => false,
         };
 
         let host_node = self.base().clone();
