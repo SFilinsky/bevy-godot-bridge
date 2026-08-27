@@ -9,6 +9,10 @@ use godot::prelude::{godot_api, Gd, GodotClass};
 const STATE_OFF_BIT: i64 = 1 << 0;
 const STATE_COLLIDERS_BIT: i64 = 1 << 1;
 const STATE_NAVMESH_BIT: i64 = 1 << 2;
+const STATE_CAPTURE_FLOW_BIT: i64 = 1 << 3;
+const STATE_ENEMY_BUILDING_FLOW_BIT: i64 = 1 << 4;
+const DEFAULT_VISIBLE_STATE_MASK: i64 =
+    STATE_OFF_BIT | STATE_CAPTURE_FLOW_BIT | STATE_ENEMY_BUILDING_FLOW_BIT;
 
 #[derive(GodotClass)]
 #[class(base=Node)]
@@ -17,7 +21,7 @@ pub struct DebugVisibilityGroup {
     target_node_list: Array<NodePath>,
 
     #[var(rename = visible_in_debug_modes)]
-    #[export(flags = (Off = 1, Colliders = 2, Navmesh = 4))]
+    #[export(flags = (Off = 1, Colliders = 2, Navmesh = 4, CaptureFlow = 8, EnemyBuildingFlow = 16))]
     visible_state_mask: i64,
 
     debug_manager: Option<Gd<DebugManager>>,
@@ -32,7 +36,7 @@ impl INode for DebugVisibilityGroup {
     fn init(base: Base<Node>) -> Self {
         Self {
             target_node_list: Array::new(),
-            visible_state_mask: STATE_OFF_BIT,
+            visible_state_mask: DEFAULT_VISIBLE_STATE_MASK,
             debug_manager: None,
             last_state: None,
             base,
@@ -85,14 +89,7 @@ impl DebugVisibilityGroup {
 
 impl DebugVisibilityGroup {
     fn apply_visibility(&mut self, current_state: EDebugState) {
-        let is_visible = match current_state {
-            EDebugState::Off => self.visible_state_mask & STATE_OFF_BIT != 0,
-            EDebugState::Colliders => self.visible_state_mask & STATE_COLLIDERS_BIT != 0,
-            EDebugState::Navmesh => self.visible_state_mask & STATE_NAVMESH_BIT != 0,
-            EDebugState::CaptureFlow
-            | EDebugState::EnemyBuildingFlow
-            | EDebugState::NavigationIslands => false,
-        };
+        let is_visible = is_visible_in_debug_state(self.visible_state_mask, current_state);
 
         let host_node = self.base().clone();
         for path in self.target_node_list.iter_shared() {
@@ -100,5 +97,33 @@ impl DebugVisibilityGroup {
                 node.set("visible", &is_visible.to_variant());
             }
         }
+    }
+}
+
+fn is_visible_in_debug_state(visible_state_mask: i64, current_state: EDebugState) -> bool {
+    match current_state {
+        EDebugState::Off => visible_state_mask & STATE_OFF_BIT != 0,
+        EDebugState::Colliders => visible_state_mask & STATE_COLLIDERS_BIT != 0,
+        EDebugState::Navmesh => visible_state_mask & STATE_NAVMESH_BIT != 0,
+        EDebugState::CaptureFlow => visible_state_mask & STATE_CAPTURE_FLOW_BIT != 0,
+        EDebugState::EnemyBuildingFlow => visible_state_mask & STATE_ENEMY_BUILDING_FLOW_BIT != 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_visible_in_debug_state, DEFAULT_VISIBLE_STATE_MASK};
+    use crate::debug::debug_manager::EDebugState;
+
+    #[test]
+    fn default_visibility_should_keep_scene_targets_visible_in_flow_modes() {
+        assert!(is_visible_in_debug_state(
+            DEFAULT_VISIBLE_STATE_MASK,
+            EDebugState::CaptureFlow
+        ));
+        assert!(is_visible_in_debug_state(
+            DEFAULT_VISIBLE_STATE_MASK,
+            EDebugState::EnemyBuildingFlow
+        ));
     }
 }

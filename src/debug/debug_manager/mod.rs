@@ -93,7 +93,6 @@ pub enum EDebugState {
     Navmesh,
     CaptureFlow,
     EnemyBuildingFlow,
-    NavigationIslands,
 }
 
 impl Into<i32> for EDebugState {
@@ -104,7 +103,6 @@ impl Into<i32> for EDebugState {
             EDebugState::Navmesh => 2,
             EDebugState::CaptureFlow => 3,
             EDebugState::EnemyBuildingFlow => 4,
-            EDebugState::NavigationIslands => 5,
         }
     }
 }
@@ -117,7 +115,6 @@ impl From<i32> for EDebugState {
             2 => EDebugState::Navmesh,
             3 => EDebugState::CaptureFlow,
             4 => EDebugState::EnemyBuildingFlow,
-            5 => EDebugState::NavigationIslands,
             _ => panic!("Invalid EDebugManagerState value: {}", value),
         }
     }
@@ -131,7 +128,6 @@ impl From<EDebugState> for GString {
             EDebugState::Navmesh => GString::from("Navmesh"),
             EDebugState::CaptureFlow => GString::from("CaptureFlow"),
             EDebugState::EnemyBuildingFlow => GString::from("EnemyBuildingFlow"),
-            EDebugState::NavigationIslands => GString::from("NavigationIslands"),
         }
     }
 }
@@ -227,11 +223,6 @@ impl DebugManager {
     }
 
     #[func]
-    pub fn set_debug_navigation_islands(&mut self) {
-        self.set_debug_state(EDebugState::NavigationIslands);
-    }
-
-    #[func]
     pub fn next_debug_state(&mut self) {
         match self.current_debug_state {
             EDebugState::Off => self.set_debug_state(EDebugState::Colliders),
@@ -239,7 +230,6 @@ impl DebugManager {
             EDebugState::Navmesh => self.set_debug_state(EDebugState::CaptureFlow),
             EDebugState::CaptureFlow => self.set_debug_state(EDebugState::EnemyBuildingFlow),
             EDebugState::EnemyBuildingFlow => self.set_debug_state(EDebugState::Off),
-            EDebugState::NavigationIslands => self.set_debug_state(EDebugState::Off),
         }
     }
 
@@ -279,11 +269,6 @@ impl DebugManager {
     #[func]
     pub fn is_debug_enemy_building_flow(&self) -> bool {
         self.current_debug_state == EDebugState::EnemyBuildingFlow
-    }
-
-    #[func]
-    pub fn is_debug_navigation_islands(&self) -> bool {
-        self.current_debug_state == EDebugState::NavigationIslands
     }
 
     #[signal]
