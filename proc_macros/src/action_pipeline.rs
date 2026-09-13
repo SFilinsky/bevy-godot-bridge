@@ -223,8 +223,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
         let mapper = &c.mapper_type;
         let var = format_ident!("{}_check_subsystem", c.name);
         let p_method = format_ident!("p{}", index + 1);
+        let span_name = format!("action check: {action_name}::{name}");
         quote! {
             let #name = {
+                // Measure the criterion independently from report assembly.
+                let _span = ::bevy::log::info_span!("system", name = #span_name).entered();
                 let mut #var = self.subsystems.#p_method();
                 <#mapper as ::bevy_godot4::action_framework::CheckAdapter>::map_and_check(
                     pp,
