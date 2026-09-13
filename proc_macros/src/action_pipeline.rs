@@ -370,11 +370,23 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
-            /// A tracked action's check report changed since its previous fixed update.
+            /// A Rust-registered action changed between allowed and blocked.
             #[derive(::bevy::prelude::Message, Debug, Clone)]
             pub struct #check_change_name {
                 pub action_instance_id: ActionInstanceId,
                 pub report: #check_report_name,
+            }
+
+            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+            pub enum ActionInstanceOrigin {
+                Godot,
+                Rust,
+            }
+
+            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+            pub enum CheckReportDelivery {
+                Godot,
+                Rust,
             }
 
             #[derive(GodotClass)]
@@ -614,7 +626,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
             pub struct Entry {
                 pub params: #partial_params,
                 pub dirty: bool,
-                last_report: Option<#check_report_name>,
+                origin: ActionInstanceOrigin,
+                last_godot_report: Option<#check_report_name>,
+                last_rust_allowance: Option<::bevy_godot4::action_framework::AllowanceSummary>,
             }
 
             #[derive(Resource, Default)]
@@ -638,12 +652,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let entry = self.entries.entry(action_instance_id).or_insert(Entry {
                         params: #partial_params::default(),
                         dirty: false,
-                        last_report: None,
+                        origin: ActionInstanceOrigin::Godot,
+                        last_godot_report: None,
+                        last_rust_allowance: None,
                     });
                     ::bevy_godot4::action_framework::ActionParams::merge_from(&mut entry.params, &incoming);
                 }
 
-                pub fn register_instance(
+                pub fn register_rust_instance(
                     &mut self,
                     action_instance_id: ActionInstanceId,
                     params: FullParams,
@@ -653,7 +669,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         Entry {
                             params: ::bevy_godot4::action_framework::ActionParams::from_full(&params),
                             dirty: true,
-                            last_report: None,
+                            origin: ActionInstanceOrigin::Rust,
+                            last_godot_report: None,
+                            last_rust_allowance: None,
                         },
                     );
                 }
@@ -722,19 +740,32 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     was_registered
                 }
 
-                pub fn record_check_report(
+                /// Records an update and returns the owning delivery path when it changed.
+                pub fn record_check_update(
                     &mut self,
                     action_instance_id: ActionInstanceId,
                     report: &#check_report_name,
-                ) -> bool {
+                ) -> Option<CheckReportDelivery> {
                     let Some(entry) = self.entries.get_mut(&action_instance_id) else {
-                        return false;
+                        return None;
                     };
-                    if entry.last_report.as_ref() == Some(report) {
-                        return false;
+
+                    match entry.origin {
+                        ActionInstanceOrigin::Godot => {
+                            if entry.last_godot_report.as_ref() == Some(report) {
+                                return None;
+                            }
+                            entry.last_godot_report = Some(report.clone());
+                            Some(CheckReportDelivery::Godot)
+                        }
+                        ActionInstanceOrigin::Rust => {
+                            if entry.last_rust_allowance == Some(report.allowance) {
+                                return None;
+                            }
+                            entry.last_rust_allowance = Some(report.allowance);
+                            Some(CheckReportDelivery::Rust)
+                        }
                     }
-                    entry.last_report = Some(report.clone());
-                    true
                 }
             }
 
@@ -746,13 +777,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             impl<'w, 's> #subsystem_name<'w, 's> {
-                /// Registers fixed parameters for continuous action checking.
+                /// Registers a Rust-triggered action for continuous checking without Godot output.
                 pub fn register_potential_action(
                     &mut self,
                     params: FullParams,
                 ) -> ActionInstanceId {
                     let action_instance_id = self.sequence.next();
-                    self.manager.register_instance(action_instance_id, params);
+                    self.manager.register_rust_instance(action_instance_id, params);
                     action_instance_id
                 }
 
@@ -909,14 +940,18 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     if let Some(params) = params_opt {
                         let report = action.check_partial(&params);
-                        if action.manager.record_check_report(action_instance_id, &report) {
-                            check_changes.write(#check_change_name {
-                                action_instance_id,
-                                report: report.clone(),
-                            });
-                            action
+                        // Deliver changed reports only to the side that registered the action.
+                        match action.manager.record_check_update(action_instance_id, &report) {
+                            Some(CheckReportDelivery::Godot) => action
                                 .manager
-                                .push_out(OutResponse::Check(action_instance_id, report, reason));
+                                .push_out(OutResponse::Check(action_instance_id, report, reason)),
+                            Some(CheckReportDelivery::Rust) => {
+                                check_changes.write(#check_change_name {
+                                    action_instance_id,
+                                    report,
+                                });
+                            }
+                            None => {}
                         }
                     }
                 }
