@@ -134,6 +134,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let node_name = format_ident!("{}ActionNode", action_name_ident);
     let check_report_name = format_ident!("{}ActionCheckReport", action_name_ident);
     let check_report_dto_name = format_ident!("{}ActionCheckReportDto", action_name_ident);
+    let check_change_name = format_ident!("{}ActionCheckChange", action_name_ident);
+    let check_changes_subsystem_name =
+        format_ident!("{}ActionCheckChangeSubsystem", action_name_ident);
     let status_codes_dto_name =
         format_ident!("{}ActionCheckReportStatusCodesDto", action_name_ident);
     let report_transfer_config_name =
@@ -329,7 +332,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             type ExecutePayloadDto = <ExecutePayload as DataTransferConfig>::DtoType;
             type StaticDataDto = <StaticData as DataTransferConfig>::DtoType;
 
-            #[derive(Debug, Clone)]
+            #[derive(Debug, Clone, PartialEq)]
             pub struct #check_report_name {
                 pub allowance: ::bevy_godot4::action_framework::AllowanceSummary,
                 #( #check_field_defs )*
@@ -365,6 +368,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 fn allowance(&self) -> ::bevy_godot4::action_framework::AllowanceSummary {
                     self.allowance
                 }
+            }
+
+            /// A tracked action's check report changed since its previous fixed update.
+            #[derive(::bevy::prelude::Message, Debug, Clone)]
+            pub struct #check_change_name {
+                pub action_instance_id: ActionInstanceId,
+                pub report: #check_report_name,
             }
 
             #[derive(GodotClass)]
@@ -523,6 +533,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 next: ActionInstanceId,
             }
 
+            impl ActionInstanceSeq {
+                fn next(&mut self) -> ActionInstanceId {
+                    self.next = self.next.wrapping_add(1);
+                    self.next
+                }
+            }
+
             #[derive(SystemParam)]
             struct ActionIoSubsystem<'w, 's> {
                 requests: NonSendMut<'w, ApiRequestQueue>,
@@ -549,8 +566,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 fn next(&mut self) -> ActionInstanceId {
-                    self.seq.next = self.seq.next.wrapping_add(1);
-                    self.seq.next
+                    self.seq.next()
                 }
             }
 
@@ -598,6 +614,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             pub struct Entry {
                 pub params: #partial_params,
                 pub dirty: bool,
+                last_report: Option<#check_report_name>,
             }
 
             #[derive(Resource, Default)]
@@ -621,8 +638,40 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     let entry = self.entries.entry(action_instance_id).or_insert(Entry {
                         params: #partial_params::default(),
                         dirty: false,
+                        last_report: None,
                     });
                     ::bevy_godot4::action_framework::ActionParams::merge_from(&mut entry.params, &incoming);
+                }
+
+                pub fn register_instance(
+                    &mut self,
+                    action_instance_id: ActionInstanceId,
+                    params: FullParams,
+                ) {
+                    self.entries.insert(
+                        action_instance_id,
+                        Entry {
+                            params: ::bevy_godot4::action_framework::ActionParams::from_full(&params),
+                            dirty: true,
+                            last_report: None,
+                        },
+                    );
+                }
+
+                pub fn update_registered_params(
+                    &mut self,
+                    action_instance_id: ActionInstanceId,
+                    incoming: #partial_params,
+                ) -> bool {
+                    let Some(entry) = self.entries.get_mut(&action_instance_id) else {
+                        return false;
+                    };
+                    ::bevy_godot4::action_framework::ActionParams::merge_from(
+                        &mut entry.params,
+                        &incoming,
+                    );
+                    entry.dirty = true;
+                    true
                 }
 
                 pub fn mark_dirty(&mut self, action_instance_id: ActionInstanceId) {
@@ -667,19 +716,64 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     self.out_results.drain(..).collect()
                 }
 
-                pub fn remove_action_instance(&mut self, action_instance_id: ActionInstanceId) {
-                    self.entries.remove(&action_instance_id);
+                pub fn remove_action_instance(&mut self, action_instance_id: ActionInstanceId) -> bool {
+                    let was_registered = self.entries.remove(&action_instance_id).is_some();
                     self.pending_exec.retain(|(_, req)| *req != action_instance_id);
+                    was_registered
+                }
+
+                pub fn record_check_report(
+                    &mut self,
+                    action_instance_id: ActionInstanceId,
+                    report: &#check_report_name,
+                ) -> bool {
+                    let Some(entry) = self.entries.get_mut(&action_instance_id) else {
+                        return false;
+                    };
+                    if entry.last_report.as_ref() == Some(report) {
+                        return false;
+                    }
+                    entry.last_report = Some(report.clone());
+                    true
                 }
             }
 
             #[derive(SystemParam)]
             pub struct #subsystem_name<'w, 's> {
                 pub manager: ResMut<'w, Manager>,
+                sequence: ResMut<'w, ActionInstanceSeq>,
                 subsystems: ParamSet<'w, 's, ( #( #subsystem_paramset_types, )* )>,
             }
 
             impl<'w, 's> #subsystem_name<'w, 's> {
+                /// Registers fixed parameters for continuous action checking.
+                pub fn register_potential_action(
+                    &mut self,
+                    params: FullParams,
+                ) -> ActionInstanceId {
+                    let action_instance_id = self.sequence.next();
+                    self.manager.register_instance(action_instance_id, params);
+                    action_instance_id
+                }
+
+                /// Updates a registered action's parameters before its next fixed check.
+                pub fn update_potential_action_params(
+                    &mut self,
+                    action_instance_id: ActionInstanceId,
+                    params: #partial_params,
+                ) -> bool {
+                    self.manager
+                        .update_registered_params(action_instance_id, params)
+                }
+
+                /// Stops continuous checking for an action registered by this caller.
+                pub fn unregister_potential_action(
+                    &mut self,
+                    action_instance_id: ActionInstanceId,
+                ) -> bool {
+                    self.manager.remove_action_instance(action_instance_id)
+                }
+
                 pub(crate) fn check_partial(
                     &mut self,
                     pp: &#partial_params,
@@ -731,6 +825,18 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
+            #[derive(SystemParam)]
+            pub struct #check_changes_subsystem_name<'w, 's> {
+                check_changes: MessageReader<'w, 's, #check_change_name>,
+            }
+
+            impl #check_changes_subsystem_name<'_, '_> {
+                /// Returns each initial or changed report published since this system last read it.
+                pub fn flush_active_changes(&mut self) -> Vec<#check_change_name> {
+                    self.check_changes.read().cloned().collect()
+                }
+            }
+
             pub fn api_drain_system<'w, 's>(
                 mut manager: ResMut<Manager>,
                 mut io: ActionIoSubsystem,
@@ -779,7 +885,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
             }
 
-            pub fn push_checks_runner_system<'w, 's>(mut action: #subsystem_name<'w, 's>) {
+            pub fn push_checks_runner_system<'w, 's>(
+                mut action: #subsystem_name<'w, 's>,
+                mut check_changes: MessageWriter<#check_change_name>,
+            ) {
                 let ids: Vec<ActionInstanceId> = action.manager.iter_entries().map(|(id, _)| *id).collect();
 
                 for action_instance_id in ids {
@@ -800,9 +909,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     if let Some(params) = params_opt {
                         let report = action.check_partial(&params);
-                        action
-                            .manager
-                            .push_out(OutResponse::Check(action_instance_id, report, reason));
+                        if action.manager.record_check_report(action_instance_id, &report) {
+                            check_changes.write(#check_change_name {
+                                action_instance_id,
+                                report: report.clone(),
+                            });
+                            action
+                                .manager
+                                .push_out(OutResponse::Check(action_instance_id, report, reason));
+                        }
                     }
                 }
             }
@@ -836,11 +951,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             pub fn push_checks_runner_system_driver(world: &mut ::bevy::prelude::World) {
-                let mut state: ::bevy::ecs::system::SystemState<#subsystem_name<'_, '_>> =
-                    ::bevy::ecs::system::SystemState::new(world);
+                let mut state: ::bevy::ecs::system::SystemState<(
+                    #subsystem_name<'_, '_>,
+                    MessageWriter<#check_change_name>,
+                )> = ::bevy::ecs::system::SystemState::new(world);
 
-                let action = state.get_mut(world);
-                push_checks_runner_system(action);
+                let (action, check_changes) = state.get_mut(world);
+                push_checks_runner_system(action, check_changes);
                 state.apply(world);
             }
 
@@ -1231,6 +1348,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     app.init_resource::<ActionInstanceSeq>();
                     app.insert_non_send_resource(ApiRequestQueue::default());
                     app.insert_non_send_resource(ApiResponseQueue::default());
+                    app.add_message::<#check_change_name>();
                     app.add_systems(FixedPreUpdate, api_drain_system.in_set(#action_set))
                         .add_systems(
                             FixedUpdate,
@@ -1245,6 +1363,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             pub(crate) use #subsystem_name as ActionSubsystem;
+            pub(crate) use #check_changes_subsystem_name as ActionCheckChangeSubsystem;
             pub(crate) use #plugin_name as ActionPlugin;
         }
     }
