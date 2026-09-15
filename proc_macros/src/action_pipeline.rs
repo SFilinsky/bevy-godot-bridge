@@ -124,12 +124,20 @@ impl Parse for Spec {
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let spec = parse_macro_input!(input as Spec);
+    expand_spec(spec).into()
+}
+
+fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
 
     let action_name_ident = spec.name;
     let action_name = action_name_ident.to_string();
     let module_name = format_ident!("{}_action_pipeline", action_name.to_snake_case());
     let plugin_name = format_ident!("{}ActionPlugin", action_name_ident);
     let subsystem_name = format_ident!("{}ActionSubsystem", action_name_ident);
+    let check_subsystem_name = format_ident!("{}ActionCheckSubsystem", action_name_ident);
+    let check_runner_subsystem_name =
+        format_ident!("{}ActionCheckRunnerSubsystem", action_name_ident);
+    let check_refresh_timing_name = format_ident!("{}ActionCheckRefreshTiming", action_name_ident);
     let instance_name = format_ident!("{}ActionInstanceDto", action_name_ident);
     let node_name = format_ident!("{}ActionNode", action_name_ident);
     let check_report_name = format_ident!("{}ActionCheckReport", action_name_ident);
@@ -145,6 +153,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let partial_params = spec.partial_params;
     let execute_result_payload = spec.execute_result_payload;
     let checks = spec.checks;
+    if checks.len() > 64 {
+        return syn::Error::new(
+            Span::call_site(),
+            "action_pipeline!: at most 64 checks are supported by the cached check mask",
+        )
+        .to_compile_error();
+    }
     let execute_subsystem = spec.execute_subsystem;
     let action_set = spec.action_set;
 
@@ -179,12 +194,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
         },
     );
 
-    let subsystem_paramset_types = std::iter::once(quote! { #execute_subsystem<'w, 's> })
-        .chain(
-            check_subsystem_aliases
-                .iter()
-                .map(|alias| quote! { #alias<'w, 's> }),
-        )
+    let check_paramset_types = check_subsystem_aliases
+        .iter()
+        .map(|alias| quote! { #alias<'w, 's> })
+        .collect::<Vec<_>>();
+    let action_subsystem_paramset_types = std::iter::once(quote! { #execute_subsystem<'w, 's> })
+        .chain(std::iter::once(quote! { #check_subsystem_name<'w, 's> }))
         .collect::<Vec<_>>();
 
     let check_field_defs = checks.iter().zip(check_aliases.iter()).map(|(c, alias)| {
@@ -218,30 +233,112 @@ pub fn expand(input: TokenStream) -> TokenStream {
         }
     });
 
-    let check_eval_inits = checks.iter().enumerate().map(|(index, c)| {
+    let check_mask_constants = checks.iter().enumerate().map(|(index, c)| {
+        let constant = format_ident!("CHECK_MASK_{}", c.name.to_string().to_upper_camel_case());
+        let bit = 1_u64 << index;
+        quote! { const #constant: u64 = #bit; }
+    }).collect::<Vec<_>>();
+    let all_check_mask = if checks.is_empty() {
+        0
+    } else {
+        (1_u64 << checks.len()) - 1
+    };
+    let check_refresh_inits = checks.iter().enumerate().map(|(index, c)| {
         let name = &c.name;
         let mapper = &c.mapper_type;
         let var = format_ident!("{}_check_subsystem", c.name);
-        let p_method = format_ident!("p{}", index + 1);
-        let span_name = format!("action check: {action_name}::{name}");
+        let p_method = format_ident!("p{}", index);
+        let constant = format_ident!("CHECK_MASK_{}", c.name.to_string().to_upper_camel_case());
         quote! {
-            let #name = {
-                // Measure the criterion independently from report assembly.
-                let _span = ::bevy::log::info_span!("system", name = #span_name).entered();
+            if check_mask & #constant != 0 {
+                let check_started_at = ::std::time::Instant::now();
                 let mut #var = self.subsystems.#p_method();
-                <#mapper as ::bevy_godot4::action_framework::CheckAdapter>::map_and_check(
+                report.#name = <#mapper as ::bevy_godot4::action_framework::CheckAdapter>::map_and_check(
                     pp,
                     static_data,
                     &mut #var,
-                )
-            };
+                );
+                if let Some(check_timing) = check_timing.as_deref_mut() {
+                    check_timing.#name += check_started_at.elapsed();
+                }
+            }
         }
+    }).collect::<Vec<_>>();
+
+    let check_refresh_timing_field_defs = checks.iter().map(|c| {
+        let name = &c.name;
+        quote! { #name: ::std::time::Duration, }
     });
 
-    let check_call_args = checks.iter().map(|c| {
+    let runner_metric_prefix = format!("{action_name} action check runner");
+    let action_change_drain_metric_name =
+        format!("{runner_metric_prefix}: tracked action change drain");
+    let scheduling_metric_name = format!("{runner_metric_prefix}: candidate scheduling");
+    let preparation_metric_name = format!("{runner_metric_prefix}: candidate preparation");
+    let evaluation_metric_name = format!("{runner_metric_prefix}: candidate evaluation");
+    let delivery_metric_name = format!("{runner_metric_prefix}: cached report update and delivery");
+    let continuous_check_metric_names = checks.iter().map(|c| {
+        let check_name = c.name.to_string();
+        format!("{runner_metric_prefix}: {check_name} continuous maintenance")
+    }).collect::<Vec<_>>();
+    let check_evaluation_metric_names = checks.iter().map(|c| {
+        let check_name = c.name.to_string();
+        format!("{runner_metric_prefix}: {check_name} evaluation")
+    }).collect::<Vec<_>>();
+
+    let check_refresh_timing_metric_records = checks
+        .iter()
+        .zip(check_evaluation_metric_names.iter())
+        .map(|(c, metric_name)| {
+            let name = &c.name;
+            quote! {
+                ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+                    #metric_name,
+                    check_timing.#name,
+                );
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let report_allowance_terms = checks.iter().map(|c| {
         let name = &c.name;
-        quote! { #name, }
-    });
+        quote! { && report.#name.is_ok() }
+    }).collect::<Vec<_>>();
+
+    let continuous_check_refreshes = checks.iter().enumerate().zip(continuous_check_metric_names.iter()).map(|((index, c), metric_name)| {
+        let p_method = format_ident!("p{}", index);
+        let constant = format_ident!("CHECK_MASK_{}", c.name.to_string().to_upper_camel_case());
+        quote! {
+            let continuous_check_started_at = ::std::time::Instant::now();
+            {
+                let mut check_subsystem = action.checks.subsystems.#p_method();
+                if let Some(continuous_check) = ::bevy_godot4::action_framework::Check::continuous_check(&mut check_subsystem) {
+                    continuous_check_mask |= #constant;
+                    for action_change in action_change_list.iter() {
+                        let partial_params = (!action_change.is_removed)
+                            .then(|| action.manager.get_entry(&action_change.action_instance_id))
+                            .flatten()
+                            .map(|entry| &entry.params as &dyn ::std::any::Any);
+                        continuous_check.apply_action_change(
+                            action_change.action_instance_id,
+                            partial_params,
+                        );
+                    }
+                    if static_data_change_pending {
+                        continuous_check.apply_static_data_change(&action.manager.static_data);
+                    }
+                    let dirty_action_id_list = continuous_check.flush_dirty_action_id_list();
+                    action
+                        .manager
+                        .mark_check_mask_dirty(&dirty_action_id_list, #constant);
+                }
+            }
+            ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+                #metric_name,
+                continuous_check_started_at.elapsed(),
+            );
+        }
+    }).collect::<Vec<_>>();
 
     let status_field_defs = checks.iter().map(|c| {
         let name = &c.name;
@@ -357,6 +454,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
             }
+
+            #( #check_mask_constants )*
+            const ALL_CHECK_MASK: u64 = #all_check_mask;
 
             impl Default for #check_report_name {
                 fn default() -> Self {
@@ -628,17 +728,49 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[derive(Debug, Clone)]
             pub struct Entry {
                 pub params: #partial_params,
-                pub dirty: bool,
+                dirty_check_mask: u64,
+                is_report_refresh_pending: bool,
+                report: #check_report_name,
                 origin: ActionInstanceOrigin,
                 last_godot_report: Option<#check_report_name>,
                 last_rust_allowance: Option<::bevy_godot4::action_framework::AllowanceSummary>,
             }
 
+            impl Entry {
+                fn record_check_update(&mut self) -> Option<CheckReportDelivery> {
+                    match self.origin {
+                        ActionInstanceOrigin::Godot => {
+                            if self.last_godot_report.as_ref() == Some(&self.report) {
+                                return None;
+                            }
+                            self.last_godot_report = Some(self.report.clone());
+                            Some(CheckReportDelivery::Godot)
+                        }
+                        ActionInstanceOrigin::Rust => {
+                            if self.last_rust_allowance == Some(self.report.allowance) {
+                                return None;
+                            }
+                            self.last_rust_allowance = Some(self.report.allowance);
+                            Some(CheckReportDelivery::Rust)
+                        }
+                    }
+                }
+            }
+
+            #[derive(Debug)]
+            struct ContinuousActionChange {
+                action_instance_id: ActionInstanceId,
+                is_removed: bool,
+            }
+
             #[derive(Resource, Default)]
             pub struct Manager {
                 pub static_data: StaticData,
+                static_data_change_pending: bool,
                 next_execution_id: ExecutionId,
                 entries: HashMap<ActionInstanceId, Entry>,
+                dirty_action_id_list: ::bevy_godot4::action_framework::DirtyActionIdList,
+                continuous_action_change_list: Vec<ContinuousActionChange>,
                 pending_exec: VecDeque<(ExecutionId, ActionInstanceId)>,
                 out_results: VecDeque<OutResponse>,
             }
@@ -652,14 +784,23 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 }
 
                 pub fn update_params(&mut self, action_instance_id: ActionInstanceId, incoming: #partial_params) {
-                    let entry = self.entries.entry(action_instance_id).or_insert(Entry {
+                    {
+                        let entry = self.entries.entry(action_instance_id).or_insert(Entry {
                         params: #partial_params::default(),
-                        dirty: false,
+                        dirty_check_mask: ALL_CHECK_MASK,
+                        is_report_refresh_pending: true,
+                        report: #check_report_name::default(),
                         origin: ActionInstanceOrigin::Godot,
                         last_godot_report: None,
                         last_rust_allowance: None,
+                        });
+                        ::bevy_godot4::action_framework::ActionParams::merge_from(&mut entry.params, &incoming);
+                    }
+                    self.continuous_action_change_list.push(ContinuousActionChange {
+                        action_instance_id,
+                        is_removed: false,
                     });
-                    ::bevy_godot4::action_framework::ActionParams::merge_from(&mut entry.params, &incoming);
+                    self.mark_dirty(action_instance_id);
                 }
 
                 pub fn register_rust_instance(
@@ -667,16 +808,24 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     action_instance_id: ActionInstanceId,
                     params: FullParams,
                 ) {
+                    let partial_params = ::bevy_godot4::action_framework::ActionParams::from_full(&params);
                     self.entries.insert(
                         action_instance_id,
                         Entry {
-                            params: ::bevy_godot4::action_framework::ActionParams::from_full(&params),
-                            dirty: true,
+                            params: partial_params,
+                            dirty_check_mask: ALL_CHECK_MASK,
+                            is_report_refresh_pending: true,
+                            report: #check_report_name::default(),
                             origin: ActionInstanceOrigin::Rust,
                             last_godot_report: None,
                             last_rust_allowance: None,
                         },
                     );
+                    self.continuous_action_change_list.push(ContinuousActionChange {
+                        action_instance_id,
+                        is_removed: false,
+                    });
+                    self.mark_dirty(action_instance_id);
                 }
 
                 pub fn update_registered_params(
@@ -684,21 +833,110 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     action_instance_id: ActionInstanceId,
                     incoming: #partial_params,
                 ) -> bool {
-                    let Some(entry) = self.entries.get_mut(&action_instance_id) else {
+                    let Some(()) = self.entries.get_mut(&action_instance_id).map(|entry| {
+                        ::bevy_godot4::action_framework::ActionParams::merge_from(
+                            &mut entry.params,
+                            &incoming,
+                        );
+                    }) else {
                         return false;
                     };
-                    ::bevy_godot4::action_framework::ActionParams::merge_from(
-                        &mut entry.params,
-                        &incoming,
-                    );
-                    entry.dirty = true;
+                    self.continuous_action_change_list.push(ContinuousActionChange {
+                        action_instance_id,
+                        is_removed: false,
+                    });
+                    self.mark_dirty(action_instance_id);
                     true
                 }
 
                 pub fn mark_dirty(&mut self, action_instance_id: ActionInstanceId) {
-                    if let Some(e) = self.entries.get_mut(&action_instance_id) {
-                        e.dirty = true;
+                    self.mark_check_mask_dirty(&[action_instance_id], ALL_CHECK_MASK);
+                }
+
+                fn mark_check_mask_dirty(
+                    &mut self,
+                    action_instance_id_list: &[ActionInstanceId],
+                    check_mask: u64,
+                ) {
+                    for action_instance_id in action_instance_id_list.iter().copied() {
+                        let Some(entry) = self.entries.get_mut(&action_instance_id) else {
+                            continue;
+                        };
+                        entry.dirty_check_mask |= check_mask;
+                        entry.is_report_refresh_pending = true;
+                        self.dirty_action_id_list.mark(action_instance_id);
                     }
+                }
+
+                fn mark_polling_checks_dirty(&mut self, polling_check_mask: u64) {
+                    if polling_check_mask == 0 {
+                        return;
+                    }
+                    let action_instance_id_list = self
+                        .entries
+                        .iter()
+                        .filter_map(|(action_instance_id, entry)| {
+                            (entry.origin == ActionInstanceOrigin::Rust).then_some(*action_instance_id)
+                        })
+                        .collect::<Vec<_>>();
+                    self.mark_check_mask_dirty(&action_instance_id_list, polling_check_mask);
+                }
+
+                fn mark_godot_checks_dirty(&mut self) {
+                    if ALL_CHECK_MASK == 0 {
+                        return;
+                    }
+                    let action_instance_id_list = self
+                        .entries
+                        .iter()
+                        .filter_map(|(action_instance_id, entry)| {
+                            (entry.origin == ActionInstanceOrigin::Godot).then_some(*action_instance_id)
+                        })
+                        .collect::<Vec<_>>();
+                    self.mark_check_mask_dirty(&action_instance_id_list, ALL_CHECK_MASK);
+                }
+
+                fn drain_continuous_action_change_list(&mut self) -> Vec<ContinuousActionChange> {
+                    self.continuous_action_change_list.drain(..).collect()
+                }
+
+                fn set_static_data(&mut self, static_data: StaticData) {
+                    self.static_data = static_data;
+                    self.static_data_change_pending = true;
+                }
+
+                fn take_static_data_change_pending(&mut self) -> bool {
+                    ::std::mem::take(&mut self.static_data_change_pending)
+                }
+
+                fn drain_dirty_check_entry_list(&mut self) -> Vec<(ActionInstanceId, u64)> {
+                    let action_instance_id_list = self.dirty_action_id_list.drain();
+                    action_instance_id_list
+                        .into_iter()
+                        .filter_map(|action_instance_id| {
+                            let entry = self.entries.get_mut(&action_instance_id)?;
+                            let check_mask = ::std::mem::replace(&mut entry.dirty_check_mask, 0);
+                            let is_report_refresh_pending = ::std::mem::replace(
+                                &mut entry.is_report_refresh_pending,
+                                false,
+                            );
+                            is_report_refresh_pending.then_some((action_instance_id, check_mask))
+                        })
+                        .collect()
+                }
+
+                /// Borrows static configuration and one cached candidate without cloning either.
+                fn static_data_and_entry_mut(
+                    &mut self,
+                    action_instance_id: ActionInstanceId,
+                ) -> Option<(&StaticData, &mut Entry)> {
+                    let Self {
+                        static_data,
+                        entries,
+                        ..
+                    } = self;
+                    let entry = entries.get_mut(&action_instance_id)?;
+                    Some((static_data, entry))
                 }
 
                 pub fn resolve_full_params(&self, action_instance_id: ActionInstanceId) -> Option<FullParams> {
@@ -739,6 +977,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 pub fn remove_action_instance(&mut self, action_instance_id: ActionInstanceId) -> bool {
                     let was_registered = self.entries.remove(&action_instance_id).is_some();
+                    if was_registered {
+                        self.continuous_action_change_list.push(ContinuousActionChange {
+                            action_instance_id,
+                            is_removed: true,
+                        });
+                    }
                     self.pending_exec.retain(|(_, req)| *req != action_instance_id);
                     was_registered
                 }
@@ -749,34 +993,63 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     action_instance_id: ActionInstanceId,
                     report: &#check_report_name,
                 ) -> Option<CheckReportDelivery> {
-                    let Some(entry) = self.entries.get_mut(&action_instance_id) else {
-                        return None;
-                    };
-
-                    match entry.origin {
-                        ActionInstanceOrigin::Godot => {
-                            if entry.last_godot_report.as_ref() == Some(report) {
-                                return None;
-                            }
-                            entry.last_godot_report = Some(report.clone());
-                            Some(CheckReportDelivery::Godot)
-                        }
-                        ActionInstanceOrigin::Rust => {
-                            if entry.last_rust_allowance == Some(report.allowance) {
-                                return None;
-                            }
-                            entry.last_rust_allowance = Some(report.allowance);
-                            Some(CheckReportDelivery::Rust)
-                        }
-                    }
+                    let entry = self.entries.get_mut(&action_instance_id)?;
+                    entry.report = report.clone();
+                    entry.record_check_update()
                 }
+            }
+
+            // Keeps recurring feasibility checks independent from action execution dependencies.
+            #[derive(SystemParam)]
+            struct #check_subsystem_name<'w, 's> {
+                subsystems: ParamSet<'w, 's, ( #( #check_paramset_types, )* )>,
+            }
+
+            #[derive(Default)]
+            struct #check_refresh_timing_name {
+                #( #check_refresh_timing_field_defs )*
+            }
+
+            impl<'w, 's> #check_subsystem_name<'w, 's> {
+                fn check_partial(
+                    &mut self,
+                    pp: &#partial_params,
+                    static_data: &StaticData,
+                ) -> #check_report_name {
+                    let mut report = #check_report_name::default();
+                    self.refresh_report(pp, static_data, &mut report, ALL_CHECK_MASK, None);
+                    report
+                }
+
+                fn refresh_report(
+                    &mut self,
+                    pp: &#partial_params,
+                    static_data: &StaticData,
+                    report: &mut #check_report_name,
+                    check_mask: u64,
+                    mut check_timing: Option<&mut #check_refresh_timing_name>,
+                ) {
+                    #( #check_refresh_inits )*
+                    report.allowance = if true #( #report_allowance_terms )* {
+                        ::bevy_godot4::action_framework::AllowanceSummary::Ok
+                    } else {
+                        ::bevy_godot4::action_framework::AllowanceSummary::NotAllowed
+                    };
+                }
+            }
+
+            // The continuous runner receives only the state needed to refresh check reports.
+            #[derive(SystemParam)]
+            struct #check_runner_subsystem_name<'w, 's> {
+                manager: ResMut<'w, Manager>,
+                checks: #check_subsystem_name<'w, 's>,
             }
 
             #[derive(SystemParam)]
             pub struct #subsystem_name<'w, 's> {
                 pub manager: ResMut<'w, Manager>,
                 sequence: ResMut<'w, ActionInstanceSeq>,
-                subsystems: ParamSet<'w, 's, ( #( #subsystem_paramset_types, )* )>,
+                subsystems: ParamSet<'w, 's, ( #( #action_subsystem_paramset_types, )* )>,
             }
 
             impl<'w, 's> #subsystem_name<'w, 's> {
@@ -813,10 +1086,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     pp: &#partial_params,
                 ) -> #check_report_name {
                     let static_data = &self.manager.static_data;
-                    #( #check_eval_inits )*
-                    #check_report_name::new(
-                        #( #check_call_args )*
-                    )
+                    let mut checks = self.subsystems.p1();
+                    checks.check_partial(pp, static_data)
                 }
 
                 pub(crate) fn check(
@@ -902,10 +1173,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             });
                         }
                         ApiRequestKind::SetStaticData(data) => {
-                            manager.static_data = <StaticData as DataTransferConfig>::from_dto(
+                            let static_data = <StaticData as DataTransferConfig>::from_dto(
                                 &data,
                                 &mut identity,
                             );
+                            manager.set_static_data(static_data);
                         }
                         ApiRequestKind::Done => {
                             let Some(action_instance_id) = req.action_instance_id else {
@@ -920,44 +1192,111 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             pub fn push_checks_runner_system<'w, 's>(
-                mut action: #subsystem_name<'w, 's>,
+                mut action: #check_runner_subsystem_name<'w, 's>,
                 mut check_changes: MessageWriter<#check_change_name>,
             ) {
-                let ids: Vec<ActionInstanceId> = action.manager.iter_entries().map(|(id, _)| *id).collect();
+                // Gather lifecycle updates once before continuous checks consume them.
+                let action_change_drain_started_at = ::std::time::Instant::now();
+                let action_change_list = action.manager.drain_continuous_action_change_list();
+                let static_data_change_pending = action.manager.take_static_data_change_pending();
+                ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+                    #action_change_drain_metric_name,
+                    action_change_drain_started_at.elapsed(),
+                );
 
-                for action_instance_id in ids {
-                    let (params_opt, reason) = {
-                        if let Some(entry) = action.manager.get_entry_mut(&action_instance_id) {
-                            let params = entry.params.clone();
-                            let reason = if entry.dirty {
-                                entry.dirty = false;
-                                CheckReason::UpdatedParamsCheck
-                            } else {
-                                CheckReason::AsyncCheck
-                            };
-                            (Some(params), reason)
-                        } else {
-                            (None, CheckReason::AsyncCheck)
-                        }
+                // Let each check maintain its own source index and emit affected candidates.
+                let mut continuous_check_mask = 0;
+                #( #continuous_check_refreshes )*
+
+                // Schedule only candidate fields that still require polling or player preview updates.
+                let scheduling_started_at = ::std::time::Instant::now();
+                // Rust candidates poll only checks without a continuous implementation.
+                action
+                    .manager
+                    .mark_polling_checks_dirty(ALL_CHECK_MASK & !continuous_check_mask);
+                // Godot-created actions retain detailed live preview updates.
+                action.manager.mark_godot_checks_dirty();
+                ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+                    #scheduling_metric_name,
+                    scheduling_started_at.elapsed(),
+                );
+
+                // Drain only IDs and masks so cached parameters and reports remain in place.
+                let preparation_started_at = ::std::time::Instant::now();
+                let dirty_check_entry_list = action.manager.drain_dirty_check_entry_list();
+                ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+                    #preparation_metric_name,
+                    preparation_started_at.elapsed(),
+                );
+
+                let mut check_timing = #check_refresh_timing_name::default();
+                let mut candidate_evaluation_duration = ::std::time::Duration::ZERO;
+                let mut report_delivery_duration = ::std::time::Duration::ZERO;
+                for (action_instance_id, check_mask) in dirty_check_entry_list {
+                    let candidate_evaluation_started_at = ::std::time::Instant::now();
+                    let delivery = {
+                        let Some((static_data, entry)) = action
+                            .manager
+                            .static_data_and_entry_mut(action_instance_id)
+                        else {
+                            continue;
+                        };
+                        action.checks.refresh_report(
+                            &entry.params,
+                            static_data,
+                            &mut entry.report,
+                            check_mask,
+                            Some(&mut check_timing),
+                        );
+                        entry.record_check_update()
                     };
+                    candidate_evaluation_duration += candidate_evaluation_started_at.elapsed();
 
-                    if let Some(params) = params_opt {
-                        let report = action.check_partial(&params);
-                        // Deliver changed reports only to the side that registered the action.
-                        match action.manager.record_check_update(action_instance_id, &report) {
-                            Some(CheckReportDelivery::Godot) => action
+                    // Deliver changed reports only to the side that registered the action.
+                    let report_delivery_started_at = ::std::time::Instant::now();
+                    match delivery {
+                        Some(CheckReportDelivery::Godot) => {
+                            let Some(report) = action
                                 .manager
-                                .push_out(OutResponse::Check(action_instance_id, report, reason)),
-                            Some(CheckReportDelivery::Rust) => {
-                                check_changes.write(#check_change_name {
-                                    action_instance_id,
-                                    report,
-                                });
-                            }
-                            None => {}
+                                .entries
+                                .get(&action_instance_id)
+                                .map(|entry| entry.report.clone())
+                            else {
+                                continue;
+                            };
+                            action.manager.push_out(OutResponse::Check(
+                                action_instance_id,
+                                report,
+                                CheckReason::AsyncCheck,
+                            ));
                         }
+                        Some(CheckReportDelivery::Rust) => {
+                            let Some(report) = action
+                                .manager
+                                .entries
+                                .get(&action_instance_id)
+                                .map(|entry| entry.report.clone())
+                            else {
+                                continue;
+                            };
+                            check_changes.write(#check_change_name {
+                                action_instance_id,
+                                report,
+                            });
+                        }
+                        None => {}
                     }
+                    report_delivery_duration += report_delivery_started_at.elapsed();
                 }
+                ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+                    #evaluation_metric_name,
+                    candidate_evaluation_duration,
+                );
+                #( #check_refresh_timing_metric_records )*
+                ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+                    #delivery_metric_name,
+                    report_delivery_duration,
+                );
             }
 
             pub fn apply_exec_system<'w, 's>(mut action: #subsystem_name<'w, 's>) {
@@ -986,26 +1325,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         });
                     }
                 }
-            }
-
-            pub fn push_checks_runner_system_driver(world: &mut ::bevy::prelude::World) {
-                let mut state: ::bevy::ecs::system::SystemState<(
-                    #subsystem_name<'_, '_>,
-                    MessageWriter<#check_change_name>,
-                )> = ::bevy::ecs::system::SystemState::new(world);
-
-                let (action, check_changes) = state.get_mut(world);
-                push_checks_runner_system(action, check_changes);
-                state.apply(world);
-            }
-
-            pub fn apply_exec_system_driver(world: &mut ::bevy::prelude::World) {
-                let mut state: ::bevy::ecs::system::SystemState<#subsystem_name<'_, '_>> =
-                    ::bevy::ecs::system::SystemState::new(world);
-
-                let action = state.get_mut(world);
-                apply_exec_system(action);
-                state.apply(world);
             }
 
             pub fn publish_out_system<'w, 's>(
@@ -1391,8 +1710,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         .add_systems(
                             FixedUpdate,
                             (
-                                push_checks_runner_system_driver,
-                                apply_exec_system_driver,
+                                push_checks_runner_system,
+                                apply_exec_system,
                             )
                                 .in_set(#action_set),
                         )
@@ -1405,5 +1724,29 @@ pub fn expand(input: TokenStream) -> TokenStream {
             pub(crate) use #plugin_name as ActionPlugin;
         }
     }
-    .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{expand_spec, Spec};
+    use quote::quote;
+
+    #[test]
+    fn zero_check_pipeline_should_schedule_its_initial_report_refresh() {
+        let spec = syn::parse2::<Spec>(quote! {
+            name: ZeroCheck,
+            partial_params: PartialParams,
+            execute_result_payload: ExecutePayload,
+            checks: [],
+            execute_subsystem: ExecuteSubsystem,
+            action_set: ActionSet,
+        })
+        .unwrap();
+
+        let generated = expand_spec(spec).to_string();
+
+        assert!(generated.contains("const ALL_CHECK_MASK : u64 = 0"));
+        assert!(generated.contains("is_report_refresh_pending"));
+        assert!(generated.contains("is_report_refresh_pending . then_some"));
+    }
 }

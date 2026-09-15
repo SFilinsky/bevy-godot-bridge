@@ -56,6 +56,7 @@ pub mod prelude {
     };
     pub use crate::performance::layer::{
         clear_benchmark_capture_gameplay_phase_for_current_scope,
+        record_system_duration_for_current_scope,
         set_benchmark_capture_phase_for_current_scope, set_benchmark_capture_phase_for_scope,
         set_benchmark_capture_gameplay_phase_for_current_scope,
     };

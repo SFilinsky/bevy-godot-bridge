@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
@@ -118,6 +118,25 @@ static BENCHMARK_CAPTURED_SAMPLES: Lazy<
 > = Lazy::new(DashMap::new);
 
 const UNASSIGNED_BENCHMARK_PHASE_NAME: &str = "Unassigned";
+
+/// Adds one manually aggregated system-duration sample to the active app scope.
+///
+/// Use this for hot inner work that is measured across many calls before being
+/// reported once, so diagnostic tracing does not change the workload shape.
+pub fn record_system_duration_for_current_scope(name: &str, duration: Duration) {
+    let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
+    record_system_duration(
+        scope_id,
+        name.to_string(),
+        SpanInfo {
+            name: Some(name.to_string()),
+            is_system: true,
+            is_schedule: false,
+        },
+        duration.as_secs_f64(),
+        Instant::now(),
+    );
+}
 
 #[derive(Debug, Clone)]
 pub struct BenchmarkInvocationSample {
@@ -491,6 +510,47 @@ impl SystemPerformanceLayer {
     }
 }
 
+fn record_system_duration(
+    scope_id: AppScopeId,
+    key: String,
+    info: SpanInfo,
+    elapsed: f64,
+    now: Instant,
+) {
+    let mut entry = METRICS
+        .entry((scope_id, key.clone()))
+        .or_insert_with(|| (SystemMetrics::default(), info.clone()));
+
+    entry.value_mut().1 = info.clone();
+    let metrics = &mut entry.value_mut().0;
+
+    metrics.last = elapsed;
+    metrics.total += elapsed;
+    metrics.calls += 1;
+    metrics.max = metrics.max.max(elapsed);
+
+    SystemPerformanceLayer::update_ewmas(metrics, elapsed, now);
+
+    if let Some(mut capture_clock) = BENCHMARK_CAPTURE_CLOCKS.get_mut(&scope_id) {
+        let at_seconds = advance_benchmark_capture_clock(&mut capture_clock, now);
+        let phase_key = BENCHMARK_CAPTURE_PHASE_BY_SCOPE
+            .get(&scope_id)
+            .map(|phase| phase.value().clone())
+            .unwrap_or_else(BenchmarkPhaseKey::unassigned);
+        let mut captured_entry = BENCHMARK_CAPTURED_SAMPLES
+            .entry((scope_id, phase_key, key.clone()))
+            .or_insert_with(|| (info.clone(), Vec::new()));
+        captured_entry.value_mut().0 = info;
+        captured_entry
+            .value_mut()
+            .1
+            .push(BenchmarkInvocationSample {
+                at_seconds,
+                duration_seconds: elapsed,
+            });
+    }
+}
+
 impl<S> Layer<S> for SystemPerformanceLayer
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
@@ -570,37 +630,6 @@ where
             (start.elapsed().as_secs_f64(), now, scope_id)
         };
 
-        let mut entry = METRICS
-            .entry((scope_id, key.clone()))
-            .or_insert_with(|| (SystemMetrics::default(), info.clone()));
-
-        entry.value_mut().1 = info.clone();
-        let metrics = &mut entry.value_mut().0;
-
-        metrics.last = elapsed;
-        metrics.total += elapsed;
-        metrics.calls += 1;
-        metrics.max = metrics.max.max(elapsed);
-
-        Self::update_ewmas(metrics, elapsed, now);
-
-        if let Some(mut capture_clock) = BENCHMARK_CAPTURE_CLOCKS.get_mut(&scope_id) {
-            let at_seconds = advance_benchmark_capture_clock(&mut capture_clock, now);
-            let phase_key = BENCHMARK_CAPTURE_PHASE_BY_SCOPE
-                .get(&scope_id)
-                .map(|phase| phase.value().clone())
-                .unwrap_or_else(BenchmarkPhaseKey::unassigned);
-            let mut captured_entry = BENCHMARK_CAPTURED_SAMPLES
-                .entry((scope_id, phase_key, key.clone()))
-                .or_insert_with(|| (info.clone(), Vec::new()));
-            captured_entry.value_mut().0 = info;
-            captured_entry
-                .value_mut()
-                .1
-                .push(BenchmarkInvocationSample {
-                    at_seconds,
-                    duration_seconds: elapsed,
-                });
-        }
+        record_system_duration(scope_id, key, info, elapsed, now);
     }
 }
