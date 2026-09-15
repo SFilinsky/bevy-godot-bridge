@@ -49,6 +49,26 @@ pub trait ActionParams: Clone + Default {
 pub type ActionInstanceId = u64;
 pub type ExecutionId = u64;
 
+/// Coalesces action identifiers that need one refresh until a consumer drains them.
+#[derive(Default)]
+pub struct DirtyActionIdList {
+    action_id_list: Vec<ActionInstanceId>,
+    action_id_set: std::collections::HashSet<ActionInstanceId>,
+}
+
+impl DirtyActionIdList {
+    pub fn mark(&mut self, action_instance_id: ActionInstanceId) {
+        if self.action_id_set.insert(action_instance_id) {
+            self.action_id_list.push(action_instance_id);
+        }
+    }
+
+    pub fn drain(&mut self) -> Vec<ActionInstanceId> {
+        self.action_id_set.clear();
+        std::mem::take(&mut self.action_id_list)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckReason {
     AsyncCheck,
@@ -118,6 +138,33 @@ impl ActionStatusCodes {
 
 pub trait Check {
     type Fail;
+
+    /// Returns continuous scheduling behavior when this check can identify stale actions itself.
+    fn continuous_check(&mut self) -> Option<&mut dyn ContinuousCheck> {
+        None
+    }
+}
+
+/// Lets a check subsystem request refreshes only for action instances whose answer may have changed.
+///
+/// The generated action pipeline owns cached reports and reevaluation. A continuous check owns only
+/// its registration-derived state and the decision about which action identifiers became stale.
+pub trait ContinuousCheck {
+    /// Applies one action lifecycle change. `None` means that the action was removed.
+    fn apply_action_change(
+        &mut self,
+        action_instance_id: ActionInstanceId,
+        partial_params: Option<&dyn Any>,
+    );
+
+    /// Applies an action-level static-data change when this check depends on that configuration.
+    ///
+    /// Checks can ignore this default notification or downcast the data and refresh only their
+    /// own affected candidates.
+    fn apply_static_data_change(&mut self, _static_data: &dyn Any) {}
+
+    /// Returns each action that needs this check field reevaluated since the previous refresh.
+    fn flush_dirty_action_id_list(&mut self) -> Vec<ActionInstanceId>;
 }
 
 pub trait CheckAdapter {
@@ -152,3 +199,4 @@ pub trait ExecuteAction<FullParams, ExecuteResult> {
 use godot::classes::RefCounted;
 use godot::obj::Base;
 use godot::prelude::{godot_api, GodotClass};
+use std::any::Any;
