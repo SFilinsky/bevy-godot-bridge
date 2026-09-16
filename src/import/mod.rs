@@ -1,3 +1,8 @@
+//! Code for creating Bevy entities from Godot scene data.
+//!
+//! Importer nodes read values from Godot, send them to Bevy, and Bevy creates
+//! the matching entity in startup order.
+
 pub mod position;
 pub mod components {
     use bevy::prelude::Component;
@@ -22,6 +27,10 @@ pub mod subsystems {
         by_id: HashMap<i64, Entity>,
     }
 
+    /// Connects Godot entity IDs to Bevy entities.
+    ///
+    /// This mapping belongs to one `BevyApp`. The bridge uses it when data needs
+    /// to refer to the same entity on both sides. It is not a game rule system.
     #[derive(SystemParam)]
     pub struct IdentitySubsystem<'w, 's> {
         identities: Query<'w, 's, (Entity, &'static GodotIdentity)>,
@@ -32,6 +41,7 @@ pub mod subsystems {
     }
 
     impl<'w, 's> IdentitySubsystem<'w, 's> {
+        /// Connects a Godot ID to an entity and replaces an older connection.
         pub fn bind_identity(&mut self, entity: Entity, godot_id: i64) {
             if let Some(old_id) = self.registry.by_entity.insert(entity, godot_id) {
                 self.registry.by_id.remove(&old_id);
@@ -52,6 +62,7 @@ pub mod subsystems {
                 .insert(GodotIdentity { godot_id });
         }
 
+        /// Returns an entity ID, making one when needed.
         pub fn get_identity(&mut self, entity: Entity) -> i64 {
             if let Some(id) = self.registry.by_entity.get(&entity).copied() {
                 return id;
@@ -69,6 +80,7 @@ pub mod subsystems {
             id
         }
 
+        /// Returns an existing entity ID without making a new one.
         pub fn try_get_identity(&mut self, entity: Entity) -> Option<i64> {
             if let Some(id) = self.registry.by_entity.get(&entity).copied() {
                 return Some(id);
@@ -84,6 +96,7 @@ pub mod subsystems {
             None
         }
 
+        /// Finds a live Bevy entity from its Godot ID.
         pub fn resolve_entity(&mut self, godot_id: i64) -> Option<Entity> {
             if let Some(entity) = self.registry.by_id.get(&godot_id).copied() {
                 if self.entities.contains(entity) {
@@ -116,13 +129,14 @@ pub mod intentions {
     use godot::obj::Base;
     use godot::prelude::*;
 
+    /// One-time request to create a Bevy entity for an authored Godot node.
     #[derive(Message, Debug, Clone, Default)]
     pub struct InitializeEntityIntention {
         pub godot_id: i64,
         pub name: String,
     }
 
-    /// Godot DTO for InitializeEntityIntention (Godot-friendly types)
+    /// Godot-facing DTO for [`InitializeEntityIntention`].
     #[derive(GodotClass, Debug)]
     #[class(init, base=RefCounted)]
     pub struct InitializeEntityIntentionDto {
@@ -136,6 +150,7 @@ pub mod intentions {
         base: Base<RefCounted>,
     }
 
+    /// DTO mapping used by the generated entity-initialization import queue.
     pub struct InitializeEntityIntentionTransferConfig;
     impl DataTransferConfig for InitializeEntityIntentionTransferConfig {
         type DataType = InitializeEntityIntention;
@@ -189,9 +204,11 @@ mod systems {
 pub mod sets {
     use bevy::prelude::SystemSet;
 
+    /// Bevy initialization stage that creates entities from imported Godot data.
     #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
     pub struct EntityInitSet;
 
+    /// Stage after entity creation for dependent imported components.
     #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
     pub struct PostEntityInitSet;
 }
@@ -204,6 +221,7 @@ pub mod importers {
     use godot::obj::Base;
     use godot::prelude::*;
 
+    /// Authored Godot node that submits one scene entity for Bevy initialization.
     #[derive(GodotClass)]
     #[class(base=Node)]
     pub struct EntityImporter {
@@ -252,6 +270,7 @@ pub mod importers {
             self.queue.bind_mut().enqueue(dto);
         }
 
+        /// Enqueues this entity's authored identity and name for Bevy.
         #[func]
         pub fn initialize(&mut self) {
             self.enqueue_init();
@@ -311,6 +330,7 @@ pub mod plugins {
         }
     }
 
+    /// Installs entity-import handling and its ordered initialization stage.
     pub struct EntityInitializationPlugin;
 
     impl Plugin for EntityInitializationPlugin {
@@ -320,4 +340,4 @@ pub mod plugins {
                 .add_systems(FixedUpdate, handle_initialize_entity.in_set(EntityInitSet));
         }
     }
-}
+    }

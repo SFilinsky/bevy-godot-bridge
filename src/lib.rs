@@ -1,6 +1,14 @@
+//! Tools for using Bevy inside a Godot scene.
+//!
+//! The bridge helps Godot and Bevy share data without either side reaching into
+//! the other. It can import data from Godot, show Bevy state in Godot, and run
+//! actions started by Godot. See the README first when you are new to the
+//! library.
+
 pub extern crate self as bevy_godot4;
 pub use godot;
 
+/// Types used by actions that Godot starts and Bevy performs.
 pub mod action_framework;
 mod app;
 mod app_action_queue;
@@ -22,6 +30,10 @@ mod state;
 mod tools;
 mod utils;
 
+/// The normal imports for game code using this bridge.
+///
+/// Start with this module instead of importing private bridge files. Its macros
+/// and traits are the supported ways to extend the bridge.
 pub mod prelude {
     pub use super::app_action_queue::AppAction;
     pub use super::debug::cuboids::subsystem::{CuboidConfig, DebugCuboidSubsystem};

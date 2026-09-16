@@ -1,3 +1,5 @@
+//! Godot objects for reading Bevy system timings.
+
 use godot::builtin::{Array, GString};
 use godot::classes::{INode, Node, RefCounted};
 use godot::obj::{Base, Gd, NewGd};
@@ -8,7 +10,7 @@ use crate::performance::layer::{
     GLOBAL_APP_SCOPE_ID,
 };
 
-/// Godot-facing DTO for a single system's performance metrics.
+/// One system's timings, ready for Godot.
 #[derive(GodotClass)]
 #[class(init, base = RefCounted)]
 pub struct SystemPerformanceEntryDto {
@@ -157,7 +159,7 @@ impl PerformanceMetrics {
         self.signals().metrics_updated().emit(&entries);
     }
 
-    /// Returns metrics that were collected outside a bound app scope.
+    /// Returns timings not linked to a particular Godot-hosted Bevy app.
     #[func]
     pub fn get_global_metrics(&self) -> Array<Gd<SystemPerformanceEntryDto>> {
         let mut arr: Array<Gd<SystemPerformanceEntryDto>> = Array::new();

@@ -1,3 +1,5 @@
+//! The code that collects system timings for each Bevy app.
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -13,7 +15,7 @@ use tracing_subscriber::{
 
 #[derive(Clone, Debug, Default)]
 struct SpanInfo {
-    /// The `name` field recorded on the span (what we use for display / key).
+    /// The recorded name, used to show and group this timing.
     name: Option<String>,
     /// True if this span represents an individual system execution.
     is_system: bool,
@@ -43,10 +45,10 @@ impl Visit for KindVisitor {
     }
 }
 
-/// Runtime statistics for a single item (schedule or system).
+/// Timings collected for one Bevy schedule or system.
 #[derive(Debug, Clone)]
 pub struct SystemMetrics {
-    /// Duration of the most recent invocation (seconds).
+    /// How long the most recent run took (seconds).
     pub last: f64,
     /// Total accumulated time (seconds).
     pub total: f64,
@@ -55,7 +57,7 @@ pub struct SystemMetrics {
     /// Number of times the item has run.
     pub calls: u64,
 
-    /// EWMA estimates of "recent average" (seconds).
+    /// Recent averages (seconds). Newer samples affect these more than older ones.
     pub ewma_1s: f64,
     pub ewma_5s: f64,
     pub ewma_30s: f64,
@@ -79,7 +81,7 @@ impl Default for SystemMetrics {
     }
 }
 
-/// Snapshot entry returned to consumers.
+/// Timings in a form that a UI can display.
 #[derive(Debug, Clone)]
 pub struct SystemMetricsEntry {
     pub name: String,
@@ -99,14 +101,15 @@ pub struct SystemMetricsEntry {
     pub is_schedule: bool,
 }
 
-/// Global storage for all metrics, keyed by name.
+/// Identifies the timings that belong to one Bevy app in a Godot scene.
 pub type AppScopeId = u64;
+/// Timings recorded when there is no active Godot-hosted Bevy app.
 pub const GLOBAL_APP_SCOPE_ID: AppScopeId = 0;
 
 static NEXT_APP_SCOPE_ID: AtomicU64 = AtomicU64::new(1);
 static CURRENT_APP_SCOPE_ID: AtomicU64 = AtomicU64::new(GLOBAL_APP_SCOPE_ID);
 
-/// Metrics keyed by `(app_scope_id, span_name)`.
+/// Collected timings, grouped by Bevy app and recorded name.
 static METRICS: Lazy<DashMap<(AppScopeId, String), (SystemMetrics, SpanInfo)>> =
     Lazy::new(DashMap::new);
 static BENCHMARK_CAPTURE_CLOCKS: Lazy<DashMap<AppScopeId, BenchmarkCaptureClock>> =
@@ -119,10 +122,12 @@ static BENCHMARK_CAPTURED_SAMPLES: Lazy<
 
 const UNASSIGNED_BENCHMARK_PHASE_NAME: &str = "Unassigned";
 
-/// Adds one manually aggregated system-duration sample to the active app scope.
+/// Adds one timing measured by game code to the active Bevy app.
 ///
-/// Use this for hot inner work that is measured across many calls before being
-/// reported once, so diagnostic tracing does not change the workload shape.
+/// When no Bevy app is active, the timing goes into the global timing list.
+/// Use this when a small piece of work runs many times. Measure those calls in
+/// your code, add one combined result here, and avoid making the measurement
+/// noticeably change the work being measured.
 pub fn record_system_duration_for_current_scope(name: &str, duration: Duration) {
     let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
     record_system_duration(
@@ -138,12 +143,14 @@ pub fn record_system_duration_for_current_scope(name: &str, duration: Duration) 
     );
 }
 
+/// One timing sample captured while a benchmark recording is active.
 #[derive(Debug, Clone)]
 pub struct BenchmarkInvocationSample {
     pub at_seconds: f64,
     pub duration_seconds: f64,
 }
 
+/// Labels a benchmark sample with the current bridge step and optional game step.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct BenchmarkPhaseKey {
     pub lifecycle_phase_name: String,
@@ -151,6 +158,7 @@ pub struct BenchmarkPhaseKey {
 }
 
 impl BenchmarkPhaseKey {
+    /// Creates labels with only the current bridge step.
     pub fn from_lifecycle_phase_name(phase_name: impl Into<String>) -> Self {
         Self {
             lifecycle_phase_name: phase_name.into(),
@@ -170,6 +178,7 @@ struct BenchmarkCaptureClock {
     time_scale: f64,
 }
 
+/// Captured timing samples for one system within one benchmark phase.
 #[derive(Debug, Clone)]
 pub struct BenchmarkSystemSamples {
     pub phase_key: BenchmarkPhaseKey,
@@ -178,10 +187,12 @@ pub struct BenchmarkSystemSamples {
     pub sample_list: Vec<BenchmarkInvocationSample>,
 }
 
+/// Creates a new timing group for a Bevy app hosted by Godot.
 pub fn allocate_app_scope_id() -> AppScopeId {
     NEXT_APP_SCOPE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Restores the previously active global timing group when dropped.
 pub struct AppScopeGuard {
     prev_scope_id: AppScopeId,
 }
@@ -192,11 +203,14 @@ impl Drop for AppScopeGuard {
     }
 }
 
+/// Makes one timing group active for all recorded timings until the returned
+/// value is dropped. Do not overlap these guards from different threads.
 pub fn enter_app_scope(scope_id: AppScopeId) -> AppScopeGuard {
     let prev_scope_id = CURRENT_APP_SCOPE_ID.swap(scope_id, Ordering::Relaxed);
     AppScopeGuard { prev_scope_id }
 }
 
+/// Removes older samples and starts recording a benchmark for one Bevy app.
 pub fn begin_benchmark_capture_for_scope(scope_id: AppScopeId, time_scale: f64) {
     clear_benchmark_samples_for_scope(scope_id);
     BENCHMARK_CAPTURE_CLOCKS.insert(
@@ -209,11 +223,13 @@ pub fn begin_benchmark_capture_for_scope(scope_id: AppScopeId, time_scale: f64) 
     );
 }
 
+/// Labels new benchmark samples with the current bridge step.
 pub fn set_benchmark_capture_phase_for_current_scope(phase_name: impl Into<String>) {
     let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
     set_benchmark_capture_phase_for_scope(scope_id, phase_name);
 }
 
+/// Labels new benchmark samples for one Bevy app with the current bridge step.
 pub fn set_benchmark_capture_phase_for_scope(
     scope_id: AppScopeId,
     phase_name: impl Into<String>,
@@ -224,11 +240,13 @@ pub fn set_benchmark_capture_phase_for_scope(
     );
 }
 
+/// Labels new benchmark samples with the current game step.
 pub fn set_benchmark_capture_gameplay_phase_for_current_scope(phase_name: impl Into<String>) {
     let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
     set_benchmark_capture_gameplay_phase_for_scope(scope_id, phase_name);
 }
 
+/// Labels new benchmark samples for one Bevy app with the current game step.
 pub fn set_benchmark_capture_gameplay_phase_for_scope(
     scope_id: AppScopeId,
     phase_name: impl Into<String>,
@@ -245,11 +263,13 @@ pub fn set_benchmark_capture_gameplay_phase_for_scope(
         });
 }
 
+/// Removes the game-step label from new benchmark samples.
 pub fn clear_benchmark_capture_gameplay_phase_for_current_scope() {
     let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
     clear_benchmark_capture_gameplay_phase_for_scope(scope_id);
 }
 
+/// Removes the game-step label from new samples for one Bevy app.
 pub fn clear_benchmark_capture_gameplay_phase_for_scope(scope_id: AppScopeId) {
     let Some(mut phase_key) = BENCHMARK_CAPTURE_PHASE_BY_SCOPE.get_mut(&scope_id) else {
         return;
@@ -258,6 +278,7 @@ pub fn clear_benchmark_capture_gameplay_phase_for_scope(scope_id: AppScopeId) {
     phase_key.gameplay_phase_name = None;
 }
 
+/// Changes the elapsed-time scale used while recording one Bevy app.
 pub fn set_benchmark_capture_time_scale_for_scope(scope_id: AppScopeId, time_scale: f64) {
     let Some(mut clock) = BENCHMARK_CAPTURE_CLOCKS.get_mut(&scope_id) else {
         return;
@@ -268,12 +289,14 @@ pub fn set_benchmark_capture_time_scale_for_scope(scope_id: AppScopeId, time_sca
     clock.time_scale = sanitized_benchmark_time_scale(time_scale);
 }
 
+/// Returns the labels currently used for one Bevy app's benchmark samples.
 pub fn benchmark_capture_phase_key_for_scope(scope_id: AppScopeId) -> Option<BenchmarkPhaseKey> {
     BENCHMARK_CAPTURE_PHASE_BY_SCOPE
         .get(&scope_id)
         .map(|phase| phase.value().clone())
 }
 
+/// Returns and clears all benchmark samples for one Bevy app.
 pub fn drain_benchmark_capture_for_scope(scope_id: AppScopeId) -> Vec<BenchmarkSystemSamples> {
     BENCHMARK_CAPTURE_CLOCKS.remove(&scope_id);
     BENCHMARK_CAPTURE_PHASE_BY_SCOPE.remove(&scope_id);
@@ -340,10 +363,10 @@ fn sanitized_benchmark_time_scale(time_scale: f64) -> f64 {
     }
 }
 
-/// Install the performance tracing layer.
+/// Starts collecting Bevy system timings.
 ///
-/// Call this **once**, before constructing or running the Bevy `App`.
-/// Safe to call multiple times (subsequent calls are ignored).
+/// Call this before creating or running a Bevy [`App`]. Calling it again does
+/// nothing.
 pub fn init_performance_tracing() {
     static INSTALLED: Lazy<()> = Lazy::new(|| {
         let subscriber = tracing_subscriber::registry().with(SystemPerformanceLayer);
@@ -361,10 +384,10 @@ pub fn init_performance_tracing() {
     Lazy::force(&INSTALLED);
 }
 
-/// Returns a snapshot of schedule entries (in execution order) and system entries (sorted by last time desc).
+/// Returns timings ready for a UI.
 ///
-/// - Schedules are returned in a pre-defined order.
-/// - Systems are returned sorted slowest -> fastest by last execution time.
+/// Schedules keep a fixed order. Systems are listed from slowest to fastest,
+/// using their most recent run.
 pub fn get_grouped_metrics_for_scope(
     scope_id: AppScopeId,
 ) -> (Vec<SystemMetricsEntry>, Vec<SystemMetricsEntry>) {
@@ -409,28 +432,23 @@ pub fn get_grouped_metrics_for_scope(
     (schedules, systems)
 }
 
-/// Backwards compatible: schedules first, then systems.
+/// Returns timings not linked to a Godot-hosted Bevy app.
 pub fn get_sorted_metrics() -> Vec<SystemMetricsEntry> {
     get_sorted_metrics_for_scope(GLOBAL_APP_SCOPE_ID)
 }
 
+/// Returns one Bevy app's timings, with schedules before systems.
 pub fn get_sorted_metrics_for_scope(scope_id: AppScopeId) -> Vec<SystemMetricsEntry> {
     let (mut schedules, mut systems) = get_grouped_metrics_for_scope(scope_id);
     schedules.append(&mut systems);
     schedules
 }
 
-/// Tracing layer that records execution time of Bevy spans.
+/// Internal tracing hook that records Bevy system timings.
 ///
-/// We only keep spans that are either:
-/// - "system" spans (and key them by `name` field)
-/// - "schedule" spans (and key them by `name` field)
-///
-/// Everything else is ignored.
-///
-/// Additionally:
-/// - we filter out "schedule facilitator" systems (Main::run_main, FixedMain::run_fixed_main, etc.)
-///   because they are not actionable "real systems" to optimize.
+/// It keeps timings for systems and schedules, using their recorded names. It
+/// ignores everything else, including Bevy's internal scheduler helpers: those
+/// helpers do not identify a useful piece of game code to improve.
 pub struct SystemPerformanceLayer;
 
 impl SystemPerformanceLayer {
@@ -457,8 +475,7 @@ impl SystemPerformanceLayer {
         metrics.last_seen = Some(now);
     }
 
-    /// Returns true if this "system name" is actually an internal scheduler / facilitator
-    /// and should not be shown as an actionable system.
+    /// Returns whether this is a Bevy scheduler helper, not a useful system to show.
     #[inline]
     fn is_internal_schedule_facilitator_system(name: &str) -> bool {
         // Known schedule labels (if a "system" is named exactly like a schedule, ignore it).

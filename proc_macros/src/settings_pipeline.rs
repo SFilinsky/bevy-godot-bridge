@@ -1,6 +1,7 @@
-//! proc-macro: settings_pipeline!{ config: SomeTransferConfig }
+//! Code used by `settings_pipeline!`.
 //!
-//! Generates a singleton Godot initialization node that sends one settings DTO into Bevy.
+//! This macro makes one Godot node that sends its settings to Bevy when the
+//! scene starts.
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};

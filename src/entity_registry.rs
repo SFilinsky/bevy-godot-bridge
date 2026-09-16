@@ -3,6 +3,10 @@ use crate::prelude::BevyApp;
 use godot::prelude::*;
 use std::collections::HashMap;
 
+/// Finds Godot entity information from a bridge entity ID.
+///
+/// When Bevy creates an entity scene, it registers its `EntityMeta` here. Godot
+/// can then find that node without searching the whole scene tree.
 #[derive(GodotClass)]
 #[class(base=Node)]
 pub struct EntityRegistry {
@@ -13,6 +17,7 @@ pub struct EntityRegistry {
 
 #[godot_api]
 impl EntityRegistry {
+    /// Finds the registry for the nearest `BevyApp`.
     // NOTE:
     // Registry entries are currently managed by Bevy-driven spawners only.
     // Scene-authored EntityMeta nodes that are not spawned by Bevy are not
@@ -25,11 +30,13 @@ impl EntityRegistry {
         app.try_get_node_as::<EntityRegistry>("EntityRegistry")
     }
 
+    /// Finds the nearest registry or returns nothing when the scene has none.
     #[func]
     pub fn resolve_or_null(host: Gd<Node>) -> Option<Gd<EntityRegistry>> {
         Self::resolve(&host)
     }
 
+    /// Stores the Godot metadata node for one bridge entity ID.
     #[func]
     pub fn register_entity_meta(&mut self, entity_id: i64, meta: Gd<EntityMeta>) {
         if entity_id < 0 || !meta.is_instance_valid() {
@@ -39,11 +46,13 @@ impl EntityRegistry {
         self.metas.insert(entity_id, meta);
     }
 
+    /// Removes the metadata node for one bridge entity ID.
     #[func]
     pub fn unregister_entity_meta(&mut self, entity_id: i64) {
         self.metas.remove(&entity_id);
     }
 
+    /// Returns metadata for one ID and removes it if Godot already freed it.
     #[func]
     pub fn get_entity_meta_or_null(&mut self, entity_id: i64) -> Option<Gd<EntityMeta>> {
         let Some(meta) = self.metas.get(&entity_id).cloned() else {
@@ -58,6 +67,7 @@ impl EntityRegistry {
         }
     }
 
+    /// Returns all valid metadata nodes and removes entries Godot has freed.
     #[func]
     pub fn get_entity_meta_list(&mut self) -> Array<Gd<EntityMeta>> {
         let mut out: Array<Gd<EntityMeta>> = Array::new();

@@ -1,3 +1,9 @@
+//! Code used by `export_composed!`.
+//!
+//! This macro keeps Godot up to date with the current state of a Bevy entity.
+//! For example, Godot can read its current health or faction. It does not keep
+//! every change in history, so it is not the right tool for one-time events.
+
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};

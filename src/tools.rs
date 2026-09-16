@@ -1,8 +1,11 @@
+//! Small helpers for finding Godot nodes.
+
 use godot::prelude::{Gd, GodotClass, Inherits, Node};
 
-/**
- * Collect all descendants of `root` that are (or inherit) `T`.
- */
+/// Collects child nodes of one Rust type below `root`.
+///
+/// When `is_recursive` is false, it checks only direct children. The result is
+/// in the same order as the Godot scene tree.
 pub fn collect_children<T>(root: Gd<Node>, is_recursive: bool) -> Vec<Gd<T>>
 where
     T: GodotClass + Inherits<Node>,

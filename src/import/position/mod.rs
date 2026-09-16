@@ -1,3 +1,5 @@
+//! Position import layered on top of bridge entity initialization.
+
 pub mod intentions {
     use crate::dto::DataTransferConfig;
     use crate::import::subsystems::IdentitySubsystem;
@@ -6,14 +8,14 @@ pub mod intentions {
     use godot::obj::Base;
     use godot::prelude::*;
 
-    /// Request to set/update position of an existing Bevy entity identified by `godot_id`.
+    /// Request to set an imported entity's initial Bevy transform from Godot.
     #[derive(Message, Debug, Clone, Copy, Default)]
     pub struct InitializePositionIntention {
         pub godot_id: i64,
         pub position: Vec3,
     }
 
-    /// Godot DTO (Godot-friendly types)
+    /// Godot-facing DTO for [`InitializePositionIntention`].
     #[derive(GodotClass, Debug)]
     #[class(init, base=RefCounted)]
     pub struct InitializePositionIntentionDto {
@@ -27,6 +29,7 @@ pub mod intentions {
         base: Base<RefCounted>,
     }
 
+    /// DTO mapping used by the generated position-initialization import queue.
     pub struct InitializePositionIntentionTransferConfig;
     impl DataTransferConfig for InitializePositionIntentionTransferConfig {
         type DataType = InitializePositionIntention;
@@ -110,6 +113,10 @@ pub mod importers {
     use godot::obj::Base;
     use godot::prelude::*;
 
+    /// Authored Godot node that imports a `Node3D` world position for its entity.
+    ///
+    /// It must be a child of `EntityImporter` so both imports use the same
+    /// bridge entity ID.
     #[derive(GodotClass)]
     #[class(base=Node)]
     pub struct PositionImporter {
@@ -175,6 +182,7 @@ pub mod importers {
             self.queue.bind_mut().enqueue(dto);
         }
 
+        /// Enqueues the authored target node's current world position.
         #[func]
         pub fn initialize(&mut self) {
             self.register_internal();
@@ -216,6 +224,7 @@ pub mod importers {
 pub mod sets {
     use bevy::prelude::SystemSet;
 
+    /// Bevy initialization stage that applies imported positions after entity creation.
     #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
     pub struct PositionInitSet;
 }
@@ -227,6 +236,7 @@ pub mod plugins {
     use bevy_godot4::import::sets::EntityInitSet;
     use bevy_godot4::prelude::PostEntityInitSet;
 
+    /// Installs position import after the entity-initialization stage.
     pub struct PositionInitializationPlugin;
 
     impl Plugin for PositionInitializationPlugin {

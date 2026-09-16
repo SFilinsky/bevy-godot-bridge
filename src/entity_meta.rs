@@ -1,6 +1,10 @@
 use godot::global::godot_error;
 use godot::prelude::*;
 
+/// Basic bridge information for one Godot entity scene.
+///
+/// Exporters set the entity ID and revision. Nodes made by `with_state_node!`
+/// use this information to find the data for the entity.
 #[derive(GodotClass)]
 #[class(base=Node)]
 pub struct EntityMeta {
@@ -22,20 +26,27 @@ impl EntityMeta {
     #[signal]
     pub fn on_despawning(entity_id: i64);
 
+    /// Lets this scene handle its own cleanup when Bevy removes the entity.
     #[func]
     pub fn set_custom_cleanup(&mut self, enabled: bool) {
         self.custom_cleanup_enabled = enabled;
     }
 
+    /// Returns whether this scene handles its own cleanup.
     pub fn is_custom_cleanup_enabled(&self) -> bool {
         self.custom_cleanup_enabled
     }
 
+    /// Assigns the stable ID shared with the Bevy entity.
     #[func]
     pub fn assign_entity_id(&mut self, entity_id: i64) {
         self.entity_id = entity_id;
     }
 
+    /// Finds `EntityMeta` at an entity scene root or direct child.
+    ///
+    /// It uses the root node first, then the first direct child. It prints an
+    /// error when the scene is missing this node or has more than one.
     pub fn resolve_from_scene_root(instance: Gd<Node>, entity_id: i64) -> Option<Gd<EntityMeta>> {
         let root_meta = instance.clone().try_cast::<EntityMeta>().ok();
 

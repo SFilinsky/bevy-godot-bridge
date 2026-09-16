@@ -1,3 +1,10 @@
+//! Code used by `action_pipeline!`.
+//!
+//! An action pipeline lets Godot ask Bevy to do something, such as building a
+//! structure. It remembers the action, checks whether it is allowed, runs it,
+//! and sends the result back to Godot. It is not for simple one-time messages
+//! such as "gold was added".
+
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro::TokenStream;
 use proc_macro2::Span;
@@ -925,7 +932,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                         .collect()
                 }
 
-                /// Borrows static configuration and one cached candidate without cloning either.
+                /// Gets shared action data and one saved action without copying either.
                 fn static_data_and_entry_mut(
                     &mut self,
                     action_instance_id: ActionInstanceId,
@@ -1195,7 +1202,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 mut action: #check_runner_subsystem_name<'w, 's>,
                 mut check_changes: MessageWriter<#check_change_name>,
             ) {
-                // Gather lifecycle updates once before continuous checks consume them.
+                // Read action changes once before rules use them.
                 let action_change_drain_started_at = ::std::time::Instant::now();
                 let action_change_list = action.manager.drain_continuous_action_change_list();
                 let static_data_change_pending = action.manager.take_static_data_change_pending();

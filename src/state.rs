@@ -1,8 +1,10 @@
+//! Shared information about where the Godot-hosted Bevy app is in its startup.
+
 use crate::performance::layer::set_benchmark_capture_phase_for_current_scope;
 use bevy::app::{App, Plugin};
 use bevy::prelude::*;
 
-// Bevy lifecycle state shared by the bridge and gameplay crate.
+/// Startup state shared by the bridge and game code.
 #[derive(States, Debug, Clone, Copy, Eq, PartialEq, Hash, Default)]
 pub enum BevyLifecycleState {
     #[default]
@@ -42,6 +44,7 @@ fn update_benchmark_phase(state: Res<State<BevyLifecycleState>>) {
     set_benchmark_capture_phase_for_current_scope(phase.name());
 }
 
+/// Adds [`BevyLifecycleState`] and labels benchmark samples with the startup step.
 pub struct BevyLifecyclePlugin;
 
 impl Plugin for BevyLifecyclePlugin {

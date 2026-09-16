@@ -1,3 +1,5 @@
+//! Bevy-driven cuboid debug visualization for the scene-local Godot host.
+
 pub mod resources {
     use bevy::math::Vec3;
     use bevy::platform::collections::HashMap;
@@ -6,6 +8,7 @@ pub mod resources {
     use godot::classes::{BoxMesh, MeshInstance3D, Node, StandardMaterial3D};
     use godot::obj::Gd;
 
+    /// Rendering options for one debug cuboid.
     #[derive(Clone, Copy, Debug)]
     pub struct CuboidConfig {
         pub always_on_top: bool,
@@ -95,12 +98,14 @@ pub mod subsystem {
     use bevy::prelude::{ResMut, Transform};
     use godot::builtin::Color;
 
+    /// Queues named cuboid debug shapes for the bridge visualization plugin.
     #[derive(SystemParam)]
     pub struct DebugCuboidSubsystem<'w> {
         requests: ResMut<'w, DebugCuboidRequests>,
     }
 
     impl<'w> DebugCuboidSubsystem<'w> {
+        /// Creates or replaces the cuboid identified by `key`.
         pub fn set_cuboid(
             &mut self,
             key: impl Into<String>,
@@ -113,10 +118,12 @@ pub mod subsystem {
                 .set_cuboid(key, transform, half_extents, color, config);
         }
 
+        /// Removes the cuboid identified by `key`.
         pub fn clear_cuboid(&mut self, key: impl Into<String>) {
             self.requests.clear_cuboid(key);
         }
 
+        /// Removes every bridge-owned cuboid debug shape.
         pub fn clear_all(&mut self) {
             self.requests.clear_all();
         }

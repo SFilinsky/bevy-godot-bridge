@@ -1,14 +1,16 @@
-//! proc-macro: import_queue!{ config: SomeTransferConfig, ... }
+//! Code used by `import_queue!`.
 //!
-//! This replaces the old `#[derive(ImportQueue)]` approach.
+//! This macro makes a queue from Godot to Bevy. For example:
 //!
-//! Usage:
-//! import_queue! {
-//!     config: InitializeEntityIntentionTransferConfig,
-//! }
+//! ```ignore
+//! import_queue! { config: InitializeEntityIntentionTransferConfig }
+//! ```
 //!
-//! Where `InitializeEntityIntentionTransferConfig: DataTransferConfig` and
-//! `DataType` is your Bevy `Message` type (the intention), and `DtoType` is the Godot DTO.
+//! The named config tells the queue how to change the Godot data object into a
+//! Bevy `Message`.
+//!
+//! Each generated queue belongs to one `BevyApp`. A future Bevy-to-Godot queue
+//! can use the same idea: keep data from one level separate from another level.
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -137,9 +139,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let drain_fn_ident = format_ident!("__drain_{}", domain_snake);
     let module_ident = format_ident!("__{}_import_queue", domain_snake);
 
-    // NOTE: We do NOT generate a Godot-visible enqueue signature based on DTO fields
-    // because DTO may contain Godot-only types. We enqueue DTO itself and convert
-    // to Message in the drain system via DataTransferConfig::from_dto().
+    // Godot sends its DTO object as-is. Some DTO fields only exist in Godot, so
+    // the queue turns the DTO into a Bevy Message later, inside the drain system.
     //
     // Godot side call is: queue.enqueue(dto: Gd<DtoType>) + queue.flush() from owner _process().
     //
@@ -171,7 +172,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             type __Dto = <__Cfg as DataTransferConfig>::DtoType;
 
             // -----------------------------------------
-            // Per-app NonSend queue storage (DTOs)
+            // Each Bevy app keeps its own waiting Godot data here.
             // -----------------------------------------
             #[derive(Default, Debug)]
             struct #queue_storage_ident {
@@ -189,7 +190,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     identity: &mut IdentitySubsystem,
                 ) {
                     while let Some(dto) = self.q.pop_front() {
-                        // DTO -> Message conversion happens here
+                        // Turn Godot data into a Bevy Message at the boundary.
                         let msg: __Msg = <__Cfg as DataTransferConfig>::from_dto(&dto, identity);
                         out.write(msg);
                     }
@@ -252,7 +253,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     self.bevy_app = Some(app);
                 }
 
-                /// Enqueue a DTO into local pending batch.
+                /// Adds one Godot data object to this queue's waiting list.
                 #[func]
                 pub fn enqueue(&mut self, dto: Gd<__Dto>) {
                     self.pending.push(dto);
@@ -273,8 +274,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     self.enqueue_many(batch);
                 }
 
-                /// Flush pending DTOs into this queue's app-local Bevy queue storage.
-                /// Should be called by owner node once per frame (for example in `_process()`).
+                /// Moves waiting Godot data into this Bevy app's queue.
+                /// Call this once per frame, for example from `_process()`.
                 #[func]
                 pub fn flush(&mut self) {
                     if self.pending.is_empty() {
@@ -291,7 +292,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                     let dtos = std::mem::take(&mut self.pending);
 
-                    // Write batched DTOs into per-app queue via subsystem API.
+                    // Move this frame's Godot data into the Bevy-side queue.
                     app.bind_mut().with_world_mut(|world: &mut World| {
                         if world.get_non_send_resource::<#queue_storage_ident>().is_none() {
                             world.insert_non_send_resource::<#queue_storage_ident>(#queue_storage_ident::default());

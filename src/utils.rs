@@ -10,15 +10,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Bevy Resource that is available when the app is updated through `_process` callback
+/// Present while Godot runs `BevyApp` from its normal `_process` callback.
 #[derive(Resource)]
 pub struct GodotVisualFrame;
 
-/// Bevy Resource that is available when the app is updated through `_physics_process` callback
+/// Present while Godot runs `BevyApp` from its `_physics_process` callback.
 #[derive(Resource)]
 pub struct GodotPhysicsFrame;
 
-/// Adds `as_physics_system` that schedules a system only for the physics frame
+/// Runs a Bevy system only during Godot's physics updates.
 pub trait AsPhysicsSystem<Params> {
     #[allow(clippy::wrong_self_convention)]
     fn as_physics_system(self) -> ScheduleConfigs<ScheduleSystem>;
@@ -30,7 +30,7 @@ impl<Params, T: IntoSystem<(), (), Params>> AsPhysicsSystem<Params> for T {
     }
 }
 
-/// Adds `as_visual_system` that schedules a system only for the frame
+/// Runs a Bevy system only during Godot's normal frame updates.
 pub trait AsVisualSystem<Params> {
     #[allow(clippy::wrong_self_convention)]
     fn as_visual_system(self) -> ScheduleConfigs<ScheduleSystem>;
@@ -42,10 +42,10 @@ impl<Params, T: IntoSystem<(), (), Params>> AsVisualSystem<Params> for T {
     }
 }
 
-/// SystemParam to keep track of an independent delta time
+/// Gives a system the time since it last ran.
 ///
-/// Not every system runs on a Bevy update and Bevy can be updated multiple
-/// during a "frame".
+/// Not every system runs on every Bevy update, and Bevy can update multiple
+/// times during one rendered frame.
 #[derive(SystemParam)]
 pub struct SystemDeltaTimerSubsystem<'w, 's> {
     last_time: Local<'s, Option<Instant>>,
@@ -53,7 +53,7 @@ pub struct SystemDeltaTimerSubsystem<'w, 's> {
 }
 
 impl SystemDeltaTimerSubsystem<'_, '_> {
-    /// Returns the time passed since the last invocation
+    /// Returns the duration since this system parameter was last used.
     pub fn delta(&mut self) -> Duration {
         let now = Instant::now();
         let last_time = self.last_time.unwrap_or(now);
@@ -63,10 +63,12 @@ impl SystemDeltaTimerSubsystem<'_, '_> {
         now - last_time
     }
 
+    /// Returns [`Self::delta`] in seconds as `f32`.
     pub fn delta_seconds(&mut self) -> f32 {
         self.delta().as_secs_f32()
     }
 
+    /// Returns [`Self::delta`] in seconds as `f64`.
     pub fn delta_seconds_f64(&mut self) -> f64 {
         self.delta().as_secs_f64()
     }

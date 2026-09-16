@@ -1,3 +1,5 @@
+//! Starts Godot scene setup before the first Bevy update.
+
 use crate::prelude::{BevyApp, SceneRoot};
 use crate::tools::collect_children;
 use godot::builtin::StringName;
@@ -33,6 +35,10 @@ impl Drop for InitializerRegistrationBufferGuard {
     }
 }
 
+/// A step in Godot scene startup.
+///
+/// Nodes run in this order, then in scene-tree order. Pick the first step that
+/// has the data your node needs. Do not make one setup node call another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum InitializationPhase {
     /// Godot-side setup that creates initializer nodes before import data is read.
@@ -41,29 +47,26 @@ pub enum InitializationPhase {
     /// authored entity scenes.
     PreImport,
 
-    /// Settings-like data that entity startup may depend on.
+    /// Setup data that entities may need before they are created.
     ///
     /// Examples: action static data and entity settings resources.
     Configuration,
 
     /// Scene-authored entities and entity component imports.
     ///
-    /// These run after configuration so entity spawn logic can read startup
-    /// settings before creating gameplay entities.
+    /// These run after setup data, so entities can read it before they are
+    /// created.
     Entity,
 }
 
-/// Coordinates Godot-authored startup data before Bevy starts ticking.
+/// Runs Godot startup nodes before Bevy starts.
 ///
-/// Initializer nodes register themselves from their own `_ready()` callbacks and
-/// expose an `initialize()` method. Each registration includes the initializer
-/// phase, making startup order explicit at the call site. This node calls
-/// initializers once, grouped by phase and then scene-tree order, then marks the
-/// hosting BevyApp as ready for its first update.
+/// Setup nodes register themselves from `_ready()` and provide an
+/// `initialize()` method. This node runs them once in the right order, then
+/// lets the `BevyApp` run its first update.
 ///
-/// BevyApp owns the actual update loop. The coordinator must not call
-/// `app.update()` or drain Bevy queues directly because initializer methods may
-/// resolve and mutate BevyApp while submitting startup data.
+/// `BevyApp` runs Bevy. This coordinator only calls Godot setup nodes. It must
+/// not call `app.update()` itself.
 #[derive(GodotClass)]
 #[class(base=Node)]
 pub struct InitializationCoordinator {
@@ -92,6 +95,7 @@ impl InitializationCoordinator {
         ))
     }
 
+    /// Returns true when this scene has a startup coordinator.
     pub fn exists_for<T>(host: &Gd<T>) -> bool
     where
         T: GodotClass + Inherits<Node>,
@@ -99,6 +103,7 @@ impl InitializationCoordinator {
         Self::find_for(host).is_some_and(|coordinator_list| !coordinator_list.is_empty())
     }
 
+    /// Finds the one coordinator for the scene containing `host`.
     pub fn resolve<T>(host: &Gd<T>) -> Option<Gd<InitializationCoordinator>>
     where
         T: GodotClass + Inherits<Node>,
@@ -134,6 +139,10 @@ impl InitializationCoordinator {
         Some(coordinator_list.remove(0))
     }
 
+    /// Registers a Godot node that sends data during startup.
+    ///
+    /// Call this from `_ready()`. If there is no coordinator, the bridge runs
+    /// the node at once and prints one warning.
     pub fn register_initializer_node(initializer: Gd<Node>, phase: InitializationPhase) {
         if IS_INITIALIZING_SCENE.load(Ordering::Relaxed) {
             PENDING_INITIALIZER_REGISTRATION_LIST.with(|registration_list| {
@@ -282,6 +291,7 @@ impl InitializationCoordinator {
 
 #[godot_api]
 impl InitializationCoordinator {
+    /// Registers an initializer for the [`InitializationPhase::PreImport`] stage.
     #[func]
     pub fn register_pre_import_initializer_node(initializer: Gd<Node>) {
         Self::register_initializer_node(initializer, InitializationPhase::PreImport);

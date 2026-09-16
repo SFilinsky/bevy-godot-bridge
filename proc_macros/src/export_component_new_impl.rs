@@ -12,7 +12,7 @@ use syn::{parse_macro_input, Data, DeriveInput};
 /// - Bevy system: `export_<base>_changes`
 /// - Bevy plugin: `<Base>ExportPlugin`
 ///
-/// Requirements on your DTO (local type):
+/// What the Godot data type needs to provide:
 /// - `impl DTO for YourDto { type Component = ... }`
 /// - `impl DtoFrom<<YourDto as DTO>::Component> for YourDto { fn dto_from(&C)->Gd<Self> }`
 ///
@@ -129,9 +129,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
         }
 
-        /// Bevy plugin that installs the export system for this DTO’s component.
+        /// Bevy plugin that sends this component's changes to Godot.
         ///
-        /// Adds `PostUpdate` system `export_<base>_changes`.
+        /// It adds the `export_<base>_changes` system after normal Bevy updates.
         pub struct #plugin_ident;
 
         impl Plugin for #plugin_ident

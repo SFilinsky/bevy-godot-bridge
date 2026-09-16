@@ -1,3 +1,5 @@
+//! Helpers for Godot scenes used by the bridge.
+
 pub mod root_scripts;
 pub mod scene_root;
 
@@ -22,11 +24,11 @@ impl Plugin for PackedScenePlugin {
     }
 }
 
-/// A to-be-instanced-and-spawned Godot scene.
+/// Tells the bridge to create a Godot packed scene.
 ///
-/// [`GodotScene`]s that are spawned/inserted into the bevy world will be instanced from the provided
-/// handle/path and the instance will be added as an [`ErasedGd`] in the next PostUpdateFlush set.
-/// (see [`spawn_scene`])
+/// The bridge adds the scene below this `BevyApp`'s Godot node parent. It also
+/// keeps a reference so Bevy can find the created node later. Use the Godot
+/// editor for normal game scene composition.
 #[derive(Debug, Component)]
 pub struct GodotScene {
     resource: GodotSceneResource,
@@ -48,7 +50,7 @@ enum GodotSceneTransform {
 }
 
 impl GodotScene {
-    /// Instantiate the godot scene from an ErasedGdResource.
+    /// Creates a request from a Godot packed scene that is already loaded.
     pub fn from_resource(res: ErasedGdResource) -> Self {
         Self {
             resource: GodotSceneResource::Resource(res),
@@ -56,11 +58,10 @@ impl GodotScene {
         }
     }
 
-    /// Instantiate the godot scene from the given path.
+    /// Creates a request from a Godot resource path.
     ///
-    /// Note that this will call [`ResourceLoader`].load() - which is a blocking load.
-    /// If you want "preload" functionality, you should load your resources into a Bevy [`Resource`]
-    /// and use from_resource().
+    /// This calls `ResourceLoader.load()` and may pause the game briefly. For a
+    /// scene already loaded by Godot, use [`Self::from_resource`].
     pub fn from_path(path: &str) -> Self {
         Self {
             resource: GodotSceneResource::Path(path.to_string()),
@@ -68,7 +69,7 @@ impl GodotScene {
         }
     }
 
-    /// Instantiate the godot scene from a Bevy Asset [`Handle`].
+    /// Creates a spawn request from a Bevy asset handle.
     #[cfg(feature = "assets")]
     pub fn from_handle(handle: &Handle<ErasedGdResource>) -> Self {
         Self {
@@ -77,16 +78,19 @@ impl GodotScene {
         }
     }
 
+    /// Applies a 3D transform after the scene instance is attached to Godot.
     pub fn with_transform3d(mut self, transform: Transform3D) -> Self {
         self.transform = Some(GodotSceneTransform::Transform3D(transform));
         self
     }
 
+    /// Applies a 2D transform after the scene instance is attached to Godot.
     pub fn with_transform2d(mut self, transform: Transform2D) -> Self {
         self.transform = Some(GodotSceneTransform::Transform2D(transform));
         self
     }
 
+    /// Applies a 3D translation after the scene instance is attached to Godot.
     pub fn with_translation3d(mut self, translation: Vector3) -> Self {
         self.transform = Some(GodotSceneTransform::Transform3D(
             Transform3D::IDENTITY.translated(translation),
@@ -94,6 +98,7 @@ impl GodotScene {
         self
     }
 
+    /// Applies a 2D translation after the scene instance is attached to Godot.
     pub fn with_translation2d(mut self, translation: Vector2) -> Self {
         self.transform = Some(GodotSceneTransform::Transform2D(
             Transform2D::IDENTITY.translated(translation),
