@@ -1,9 +1,18 @@
+//! Types used by `action_pipeline!`.
+//!
+//! An action can start in Godot or Rust and finish in Bevy. The pipeline keeps
+//! the action's input, checks whether it is allowed, and runs it. Godot-created
+//! actions send updates and results back to Godot. Rust-created actions use the
+//! same checks and execution without needing a Godot response.
+
+/// Whether an action report currently permits execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllowanceSummary {
     Ok,
     NotAllowed,
 }
 
+/// Godot-facing status of one check result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i64)]
 pub enum ActionCheckStatus {
@@ -18,6 +27,7 @@ impl ActionCheckStatus {
     }
 }
 
+/// A status update sent from Bevy to Godot for one action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i64)]
 pub enum ActionStatus {
@@ -32,12 +42,14 @@ impl ActionStatus {
     }
 }
 
+/// Result produced when an action execution completes.
 #[derive(Debug, Clone)]
 pub struct ExecuteResult<TPayload> {
     pub ok: bool,
     pub payload: Option<TPayload>,
 }
 
+/// Names one kind of action and the data it needs.
 pub trait ActionParams: Clone + Default {
     type FullParams: Clone;
 
@@ -46,10 +58,13 @@ pub trait ActionParams: Clone + Default {
     fn merge_from(&mut self, other: &Self);
 }
 
+/// Stable identifier for one action instance, whether Godot or Rust created it.
 pub type ActionInstanceId = u64;
+/// Stable identifier for one execution requested by an action instance.
 pub type ExecutionId = u64;
 
-/// Coalesces action identifiers that need one refresh until a consumer drains them.
+/// Holds action IDs that need updating until the pipeline reads them.
+/// The same ID is kept only once.
 #[derive(Default)]
 pub struct DirtyActionIdList {
     action_id_list: Vec<ActionInstanceId>,
@@ -69,6 +84,7 @@ impl DirtyActionIdList {
     }
 }
 
+/// Explains why the pipeline needs to check an action again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckReason {
     AsyncCheck,
@@ -86,6 +102,7 @@ impl CheckReason {
     }
 }
 
+/// The answer from one rule, with optional extra data and a failure code.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Criterion<TFail> {
     Ok { payload: Option<TFail> },
@@ -102,6 +119,7 @@ impl<TFail> Criterion<TFail> {
     }
 }
 
+/// Godot constants mirroring [`ActionCheckStatus`].
 #[derive(GodotClass)]
 #[class(init, base=RefCounted)]
 pub struct ActionCheckStatusCodes {
@@ -119,6 +137,7 @@ impl ActionCheckStatusCodes {
     const NOT_PROVIDED: i64 = ActionCheckStatus::NotProvided as i64;
 }
 
+/// Godot constants mirroring [`ActionStatus`].
 #[derive(GodotClass)]
 #[class(init, base=RefCounted)]
 pub struct ActionStatusCodes {
@@ -136,37 +155,42 @@ impl ActionStatusCodes {
     const EXECUTION_FAILED: i64 = ActionStatus::ExecutionFailed as i64;
 }
 
+/// A rule that says whether an action is allowed.
+///
+/// The action pipeline asks these rules for an answer and sends the answer to
+/// Godot. A check can also say when an earlier answer may be out of date.
 pub trait Check {
     type Fail;
 
-    /// Returns continuous scheduling behavior when this check can identify stale actions itself.
+    /// Returns extra behavior when this rule can find actions that need checking again.
     fn continuous_check(&mut self) -> Option<&mut dyn ContinuousCheck> {
         None
     }
 }
 
-/// Lets a check subsystem request refreshes only for action instances whose answer may have changed.
+/// Lets a rule ask the pipeline to check an action again after something changes.
 ///
-/// The generated action pipeline owns cached reports and reevaluation. A continuous check owns only
-/// its registration-derived state and the decision about which action identifiers became stale.
+/// The pipeline stores the answer and sends it to Godot. This type only says
+/// which actions need a new answer.
 pub trait ContinuousCheck {
-    /// Applies one action lifecycle change. `None` means that the action was removed.
+    /// Tells this rule that one action changed. `None` means the action was removed.
     fn apply_action_change(
         &mut self,
         action_instance_id: ActionInstanceId,
         partial_params: Option<&dyn Any>,
     );
 
-    /// Applies an action-level static-data change when this check depends on that configuration.
+    /// Tells this rule that shared action data changed.
     ///
-    /// Checks can ignore this default notification or downcast the data and refresh only their
-    /// own affected candidates.
+    /// Most rules can ignore this. A rule that uses this data can read it and
+    /// ask to recheck only the actions it affects.
     fn apply_static_data_change(&mut self, _static_data: &dyn Any) {}
 
     /// Returns each action that needs this check field reevaluated since the previous refresh.
     fn flush_dirty_action_id_list(&mut self) -> Vec<ActionInstanceId>;
 }
 
+/// Connects one action's data to one rule.
 pub trait CheckAdapter {
     type PartialParams;
     type StaticData;
@@ -179,6 +203,7 @@ pub trait CheckAdapter {
     ) -> Criterion<<Self::CheckSubsystem<'w, 's> as Check>::Fail>;
 }
 
+/// Lets callers read whether a report allows an action.
 pub trait CheckReportLike {
     fn allowance(&self) -> AllowanceSummary;
 
@@ -187,6 +212,7 @@ pub trait CheckReportLike {
     }
 }
 
+/// Runs an action after its final checks pass.
 pub trait ExecuteAction<FullParams, ExecuteResult> {
     type StaticData: crate::dto::DataTransferConfig<DataType = Self::StaticData>;
 

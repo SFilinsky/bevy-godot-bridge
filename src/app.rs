@@ -42,6 +42,7 @@ struct GodotClock {
 }
 
 #[derive(Debug)]
+/// Explains why the bridge could not find a [`BevyApp`] from a Godot node.
 pub enum BevyAppLookupError {
     MissingInParentChain,
     MissingSceneRoot,
@@ -68,6 +69,14 @@ impl std::fmt::Display for BevyAppLookupError {
     }
 }
 
+/// Godot node that runs one Bevy [`App`].
+///
+/// Put this node below `SceneRoot` in the Godot scene. Other bridge nodes find
+/// the closest `BevyApp` through [`Self::resolve`]. Each `BevyApp` keeps its
+/// own data, entity IDs, and waiting work.
+///
+/// `BevyApp` decides when Bevy updates. [`InitializationCoordinator`] can wait
+/// until Godot has sent startup data, but it does not update Bevy itself.
 #[derive(GodotClass)]
 #[class(base=Node)]
 pub struct BevyApp {
@@ -95,26 +104,25 @@ pub struct BevyApp {
 }
 
 impl BevyApp {
+    /// Returns Bevy after this Godot node has entered the scene tree.
     pub fn get_app(&self) -> Option<&App> {
         self.app.as_ref()
     }
 
+    /// Returns mutable access to Bevy after it has been created.
     pub fn get_app_mut(&mut self) -> Option<&mut App> {
         self.app.as_mut()
     }
 
-    /// Release the startup gate after Godot scene initializers submitted their
-    /// import data. The next BevyApp::process() call will drain queued imports
-    /// and run the first Bevy update.
+    /// Lets Bevy start after Godot has sent its startup data.
     pub fn mark_scene_initialized(&mut self) {
         self.scene_initialized = true;
     }
 
-    /// Release the startup gate after one more Godot process callback.
+    /// Lets Bevy start after one more Godot process call.
     ///
-    /// InitializationCoordinator calls this from its own process callback. The
-    /// delay gives deferred Godot listeners a chance to connect before Bevy
-    /// emits startup state transitions.
+    /// This gives Godot listeners time to connect before Bevy sends its first
+    /// state changes.
     pub fn mark_scene_initialized_after_process_delay(&mut self) {
         self.mark_scene_initialized();
         self.startup_process_delay_remaining = 1;
@@ -200,6 +208,10 @@ impl BevyApp {
         Err(BevyAppLookupError::MissingInParentChain)
     }
 
+    /// Finds the `BevyApp` that belongs to a Godot node.
+    ///
+    /// It first checks parent nodes. If that fails, it checks the nearest
+    /// `SceneRoot`. It returns an error if the scene has no clear answer.
     pub fn resolve<T>(host: &Gd<T>) -> Result<Gd<Self>, BevyAppLookupError>
     where
         T: GodotClass + Inherits<Node>,
@@ -228,7 +240,10 @@ impl BevyApp {
         result
     }
 
-    /// Run a closure with a mutable reference to this instance's Bevy World.
+    /// Runs a closure with mutable access to this Bevy world's data.
+    ///
+    /// Use this only for bridge setup. Normal game code should run in Bevy
+    /// systems instead of changing the world from a Godot callback.
     pub fn with_world_mut<F>(&mut self, f: F)
     where
         F: FnOnce(&mut World),
@@ -240,14 +255,17 @@ impl BevyApp {
         f(world);
     }
 
+    /// Makes an ID that is unique inside this `BevyApp`.
     pub fn alloc_entity_id(&mut self) -> i64 {
         self.next_entity_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// Returns the performance ID used for this `BevyApp`.
     pub fn performance_scope_id(&self) -> u64 {
         self.performance_scope_id
     }
 
+    /// Returns the Godot node that receives nodes created by Bevy.
     pub fn resolve_node_host(&self) -> Gd<Node> {
         if self.node_host.is_empty() {
             return self.base().clone().upcast();

@@ -1,3 +1,5 @@
+//! Bevy-driven heatmap debug visualization for the scene-local Godot host.
+
 pub mod nodes {
     use godot::classes::base_material_3d::{ShadingMode, TextureFilter, Transparency};
     use godot::classes::{IMeshInstance3D, MeshInstance3D, PlaneMesh, StandardMaterial3D};
@@ -51,6 +53,7 @@ pub mod resources {
         Fixed { min: f32, max: f32 },
     }
 
+    /// Rendering and normalization options for one debug heatmap.
     #[derive(Clone)]
     pub struct HeatmapConfig {
         pub map_size: f32,
@@ -167,12 +170,14 @@ pub mod subsystem {
     use bevy::ecs::system::SystemParam;
     use bevy::prelude::ResMut;
 
+    /// Queues named heatmap data for the bridge visualization plugin.
     #[derive(SystemParam)]
     pub struct DebugHeatmapSubsystem<'w> {
         requests: ResMut<'w, DebugHeatmapRequests>,
     }
 
     impl<'w> DebugHeatmapSubsystem<'w> {
+        /// Creates or replaces a heatmap and keeps the values passed to it.
         pub fn set_heatmap_owned(
             &mut self,
             key: impl Into<String>,
@@ -184,6 +189,7 @@ pub mod subsystem {
             self.requests.set_heatmap_owned(key, cols, rows, data, cfg);
         }
 
+        /// Creates or replaces a heatmap by copying its scalar data.
         pub fn set_heatmap(
             &mut self,
             key: impl Into<String>,
@@ -195,6 +201,7 @@ pub mod subsystem {
             self.requests.set_heatmap(key, cols, rows, data, cfg);
         }
 
+        /// Removes the heatmap identified by `key`.
         pub fn clear_heatmap(&mut self, key: impl Into<String>) {
             self.requests.clear_heatmap(key);
         }

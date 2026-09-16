@@ -1,3 +1,5 @@
+//! Optional bridge-owned debug state and visualization helpers.
+
 pub(crate) mod cuboids;
 pub mod debug_manager;
 pub(crate) mod heatmap;
@@ -11,6 +13,7 @@ pub mod plugins {
     use super::paths::plugin::DebugPathVisualizationPlugin;
     use bevy::prelude::*;
 
+    /// Installs all bridge-provided debug visualization plugins.
     pub struct DebugVisualizationPlugin;
     impl Plugin for DebugVisualizationPlugin {
         fn build(&self, app: &mut App) {

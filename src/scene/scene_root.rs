@@ -1,5 +1,8 @@
+//! Typed marker for the root of one authored bridge scene.
+
 use godot::prelude::*;
 
+/// Marks the nearest scene root used to resolve scene-local bridge nodes.
 #[derive(GodotClass)]
 #[class(init, base=Node)]
 pub struct SceneRoot {
@@ -8,6 +11,7 @@ pub struct SceneRoot {
 }
 
 impl SceneRoot {
+    /// Walks parent nodes to find the nearest authored `SceneRoot`.
     pub fn resolve_as_parent(host: &Gd<Node>) -> Option<Gd<SceneRoot>> {
         let mut current: Option<Gd<Node>> = Some(host.clone());
 

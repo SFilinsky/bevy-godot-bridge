@@ -1,3 +1,5 @@
+//! Bevy-driven path and line debug visualization for the scene-local Godot host.
+
 pub mod resources {
     use bevy::platform::collections::HashMap;
     use bevy::prelude::Resource;
@@ -5,6 +7,7 @@ pub mod resources {
     use godot::classes::{ArrayMesh, MeshInstance3D, Node, StandardMaterial3D};
     use godot::obj::Gd;
 
+    /// Rendering options for a debug path or line.
     #[derive(Clone, Copy)]
     pub struct PathConfig {
         pub always_on_top: bool,
@@ -94,12 +97,14 @@ pub mod subsystem {
     use bevy::prelude::ResMut;
     use godot::builtin::{Color, Vector3};
 
+    /// Queues named path and line debug shapes for the bridge visualization plugin.
     #[derive(SystemParam)]
     pub struct DebugPathSubsystem<'w> {
         requests: ResMut<'w, DebugPathRequests>,
     }
 
     impl<'w> DebugPathSubsystem<'w> {
+        /// Creates or replaces a polyline identified by `key`.
         pub fn set_path(
             &mut self,
             key: impl Into<String>,
@@ -110,6 +115,7 @@ pub mod subsystem {
             self.requests.set_path(key, point_list, color, config);
         }
 
+        /// Creates or replaces a two-point line identified by `key`.
         pub fn set_line(
             &mut self,
             key: impl Into<String>,
@@ -121,10 +127,12 @@ pub mod subsystem {
             self.requests.set_line(key, a, b, color, config);
         }
 
+        /// Removes the path or line identified by `key`.
         pub fn clear(&mut self, key: &str) {
             self.requests.clear(key);
         }
 
+        /// Removes every bridge-owned path and line debug shape.
         pub fn clear_all(&mut self) {
             self.requests.clear_all();
         }

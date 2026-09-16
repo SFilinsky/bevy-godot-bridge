@@ -11,6 +11,10 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
+/// Gives a Bevy system access to its Godot scene and entity IDs.
+///
+/// Use this when a Bevy system must read or change a Godot node. The node
+/// belongs to this `BevyApp` and stays on Godot's main thread.
 #[derive(SystemParam)]
 pub struct BevyAppSubsystem<'w, 's> {
     allocator: NonSend<'w, BevyAppIdAllocatorRef>,
@@ -20,18 +24,25 @@ pub struct BevyAppSubsystem<'w, 's> {
 }
 
 impl BevyAppSubsystem<'_, '_> {
+    /// Makes an ID that is unique inside this `BevyApp`.
     pub fn alloc_entity_id(&mut self) -> i64 {
         self.allocator.0.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// Returns the `BevyApp` Godot host node.
     pub fn host_node(&self) -> Gd<Node> {
         self.host.0.clone()
     }
 
+    /// Returns the Godot parent for nodes made by Bevy.
     pub fn node_host(&self) -> Gd<Node> {
         self.node_host.0.clone()
     }
 
+    /// Finds a named child or creates it under the Bevy node parent.
+    ///
+    /// Prefer nodes made in the Godot editor for game content. This helper is
+    /// only for bridge-owned helper nodes.
     pub fn ensure_named_root(&mut self, root_name: &str) -> Gd<Node> {
         let mut host = self.node_host();
 
@@ -45,6 +56,7 @@ impl BevyAppSubsystem<'_, '_> {
         node
     }
 
+    /// Finds a child of the `BevyApp` host without changing the scene.
     pub fn try_get_host_child<T>(&self, path: &str) -> Option<Gd<T>>
     where
         T: GodotClass + Inherits<Node>,

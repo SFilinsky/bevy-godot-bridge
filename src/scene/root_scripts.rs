@@ -1,8 +1,11 @@
+//! Resolves the scene-local container for root-level Godot scripts.
+
 use crate::scene::scene_root::SceneRoot;
 use crate::tools::collect_children;
 use godot::global::godot_error;
 use godot::prelude::*;
 
+/// Explains why a scene-local [`RootScripts`] node could not be resolved.
 #[derive(Debug)]
 pub enum RootScriptsLookupError {
     MissingInParentChain,
@@ -36,6 +39,10 @@ impl std::fmt::Display for RootScriptsLookupError {
     }
 }
 
+/// Authored Godot node that groups scene-root behavior scripts.
+///
+/// The bridge resolves this node from a host by walking ancestors, then by
+/// looking for the unique direct child of the nearest [`SceneRoot`].
 #[derive(GodotClass)]
 #[class(init, base = Node)]
 pub struct RootScripts {
@@ -44,6 +51,7 @@ pub struct RootScripts {
 }
 
 impl RootScripts {
+    /// Resolves the unique root-scripts node for the scene containing `host`.
     fn resolve_as_parent(start: &Gd<Node>) -> Result<Gd<RootScripts>, RootScriptsLookupError> {
         let mut current: Option<Gd<Node>> = Some(start.clone());
 

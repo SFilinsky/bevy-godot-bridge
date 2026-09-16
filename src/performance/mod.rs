@@ -1,12 +1,12 @@
-//! Performance tracing support for Bevy systems.
+//! Tools for measuring how long Bevy systems take to run.
 //!
-//! This module installs a custom `tracing_subscriber` layer that records
-//! execution times of *all* Bevy ECS systems (engine, user, and plugin
-//! systems) when Bevy is built with the `trace` feature enabled.
+//! Turn on Bevy's `trace` feature, then call [`init_performance_tracing`] before
+//! creating the Bevy app. The bridge records timings for Bevy's own systems,
+//! your systems, and systems added by plugins. Godot can read the results to
+//! show them in a debug panel or overlay.
 //!
-//! The collected metrics are stored per app-scope (plus a global fallback bucket)
-//! and can be queried at runtime, making them suitable for tight integration
-//! with the Godot editor (custom inspector, debug UI, overlays, etc).
+//! These tools collect numbers only. Your game decides which timings are good
+//! enough.
 
 pub mod dto;
 pub mod layer;

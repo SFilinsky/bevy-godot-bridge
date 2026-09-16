@@ -1,3 +1,5 @@
+//! Godot-facing benchmark capture coordinator.
+
 use super::benchmark_output_handlers::{BenchmarkOutputHandler, YamlBenchmarkOutputHandler};
 use super::dto::{PerformanceMetrics, SystemPerformanceEntryDto};
 use super::layer::{

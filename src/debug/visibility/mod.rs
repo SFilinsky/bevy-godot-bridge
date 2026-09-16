@@ -1,3 +1,5 @@
+//! Godot behavior node that toggles authored scene nodes by bridge debug mode.
+
 use crate::debug::debug_manager::{DebugManager, EDebugState};
 use godot::builtin::{Array, NodePath};
 use godot::classes::{INode, Node};
@@ -14,6 +16,10 @@ const STATE_ENEMY_BUILDING_FLOW_BIT: i64 = 1 << 4;
 const DEFAULT_VISIBLE_STATE_MASK: i64 =
     STATE_OFF_BIT | STATE_CAPTURE_FLOW_BIT | STATE_ENEMY_BUILDING_FLOW_BIT;
 
+/// Applies a selected set of debug-mode visibility rules to authored target nodes.
+///
+/// Configure target paths and visible modes in the Godot inspector. The node
+/// reacts to `DebugManager` changes and does not poll every frame.
 #[derive(GodotClass)]
 #[class(base=Node)]
 pub struct DebugVisibilityGroup {

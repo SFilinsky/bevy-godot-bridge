@@ -1,3 +1,5 @@
+//! Lets Bevy systems use Godot's current `SceneTree`.
+
 use bevy::{ecs::system::SystemParam, prelude::NonSendMut};
 use godot::obj::Singleton;
 use godot::{
@@ -6,6 +8,7 @@ use godot::{
 };
 use std::marker::PhantomData;
 
+/// Gives a Bevy system the current Godot scene tree on the main thread.
 #[derive(SystemParam)]
 pub struct SceneTreeSubsystem<'w, 's> {
     gd: NonSendMut<'w, SceneTreeRef>,
@@ -13,6 +16,7 @@ pub struct SceneTreeSubsystem<'w, 's> {
 }
 
 impl SceneTreeSubsystem<'_, '_> {
+    /// Returns the active Godot scene tree.
     pub fn get(&mut self) -> Gd<SceneTree> {
         self.gd.0.clone()
     }

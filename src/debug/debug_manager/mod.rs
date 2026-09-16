@@ -1,3 +1,5 @@
+//! Scene-local debug-mode selection shared by Godot UI and Bevy systems.
+
 use std::cmp::PartialEq;
 use std::fmt::Debug;
 
@@ -10,12 +12,14 @@ use godot::classes::Node;
 use godot::obj::Base;
 use godot::prelude::*;
 
+/// Visibility and rerender decision for one debug visualization system.
 #[derive(Default, Clone, Copy)]
 pub struct DebugRenderGateStatus {
     pub is_visible: bool,
     pub should_rerender: bool,
 }
 
+/// Local state used to rate-limit a debug visualization's refresh work.
 #[derive(Default)]
 pub struct DebugRenderGateState {
     pub timer: Timer,
@@ -23,6 +27,7 @@ pub struct DebugRenderGateState {
     pub initialized: bool,
 }
 
+/// Lets a Bevy debug system query its visibility and rerender cadence.
 #[derive(SystemParam)]
 pub struct DebugRenderGateSubsystem<'w, 's> {
     debug: Res<'w, DebugMode>,
@@ -31,6 +36,7 @@ pub struct DebugRenderGateSubsystem<'w, 's> {
 }
 
 impl<'w, 's> DebugRenderGateSubsystem<'w, 's> {
+    /// Returns whether a specific debug mode is active.
     pub fn is_visible(&self, state: EDebugState) -> bool {
         self.debug.current_state == state
     }
@@ -83,6 +89,7 @@ impl<'w, 's> DebugRenderGateSubsystem<'w, 's> {
     }
 }
 
+/// Debug modes selectable from authored Godot debug controls.
 #[derive(GodotConvert, Var, Export, Clone, Default, Copy, PartialEq)]
 #[godot(via = GString)]
 #[derive(Debug)]
@@ -132,6 +139,7 @@ impl From<EDebugState> for GString {
     }
 }
 
+/// Authored Godot node that selects the scene-local Bevy debug mode.
 #[derive(GodotClass)]
 #[class(init, base=Node)]
 pub struct DebugManager {
@@ -158,6 +166,7 @@ impl AppAction for SetDebugModeAction {
 
 #[godot_api]
 impl DebugManager {
+    /// Resolves the debug manager below the nearest scene-local `BevyApp`.
     pub fn resolve(host: &Gd<Node>) -> Option<Gd<DebugManager>> {
         let Ok(app) = BevyApp::resolve(host) else {
             return None;
@@ -291,10 +300,12 @@ impl INode for DebugManager {
 }
 
 #[derive(Resource, Debug, Clone, Copy, Default)]
+/// Bevy resource holding the currently selected bridge debug mode.
 pub struct DebugMode {
     pub current_state: EDebugState,
 }
 
+/// Installs the Bevy-side debug-mode resource.
 pub struct DebugModeBridgePlugin;
 impl Plugin for DebugModeBridgePlugin {
     fn build(&self, app: &mut App) {

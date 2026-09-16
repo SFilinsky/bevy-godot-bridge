@@ -1,3 +1,8 @@
+//! Experimental support for using Godot resources as Bevy assets.
+//!
+//! Do not use this for normal scenes yet. Godot and Bevy load resources in
+//! different ways, and the bridge cannot safely coordinate every case.
+
 use crate::prelude::*;
 use bevy::{
     asset::{AssetLoader, LoadContext, LoadedAsset},
@@ -5,6 +10,7 @@ use bevy::{
 };
 use godot::engine::{ResourceLoader, resource_loader::CacheMode};
 
+/// Adds the experimental loader for Godot resource files.
 pub struct GodotAssetsPlugin;
 impl Plugin for GodotAssetsPlugin {
     fn build(&self, app: &mut App) {
@@ -21,11 +27,10 @@ impl Plugin for GodotAssetsPlugin {
     }
 }
 
-/// Allow for loading godot resources via Bevy's assets framework, can be used with bevy_asset_loader
+/// Loads a Godot resource file as a Bevy asset.
 ///
-/// This is not a recommended feature due to issues with referencing a PackedScene resource
-/// simultaneously in Godot during loading - and there currently isn't an easy way to make asset
-/// loading into a NonSend Bevy Resource single-threaded.
+/// Avoid this for normal packed scenes. Godot can still use a resource while
+/// Bevy is loading it, and the bridge cannot make that safe in every case yet.
 #[derive(Default)]
 pub struct GodotResourceLoader;
 

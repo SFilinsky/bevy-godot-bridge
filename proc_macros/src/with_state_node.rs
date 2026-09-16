@@ -1,3 +1,9 @@
+//! Code used by `with_state_node!`.
+//!
+//! This macro creates a Godot node for one kind of exported entity data. The
+//! node stores the current and previous values. It also lets Godot ask, with a
+//! normal typed call, whether an entity has this feature.
+
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
