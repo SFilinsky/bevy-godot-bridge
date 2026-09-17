@@ -11,7 +11,9 @@ use godot::{
 use crate::app_action_queue::ActionQueue;
 use crate::import::plugins::IdentitySubsystemPlugin;
 use crate::performance::init_performance_tracing;
-use crate::performance::layer::{allocate_app_scope_id, enter_app_scope};
+use crate::performance::layer::{
+    allocate_app_scope_id, clear_metrics_for_scope, enter_app_scope,
+};
 use crate::prelude::*;
 use crate::scene_tree::plugins::SceneTreeSubsystemPlugin;
 use bevy::prelude::{Fixed, Time, Virtual, World};
@@ -75,6 +77,7 @@ impl std::fmt::Display for BevyAppLookupError {
 pub struct BevyApp {
     app: Option<App>,
     app_builder: Option<fn(&mut App)>,
+    app_profile_name: Option<&'static str>,
 
     #[export]
     node_host: NodePath,
@@ -104,9 +107,12 @@ impl BevyApp {
     /// scene tree. Godot scripts should keep using [`Self::resolve`] and do
     /// not need to know which profile selected the setup.
     #[doc(hidden)]
-    pub fn set_app_builder(&mut self, app_builder: fn(&mut App)) {
+    pub fn set_app_builder(&mut self, app_builder: fn(&mut App), profile_name: &'static str) {
         if self.app.is_some() {
             godot_error!("BevyApp: cannot change the app profile after Bevy has started");
+            return;
+        }
+        if self.app_profile_name == Some(profile_name) {
             return;
         }
         if self.app_builder.is_some() {
@@ -115,6 +121,7 @@ impl BevyApp {
         }
 
         self.app_builder = Some(app_builder);
+        self.app_profile_name = Some(profile_name);
     }
 
     /// Returns Bevy after this Godot node has entered the scene tree.
@@ -125,6 +132,15 @@ impl BevyApp {
     /// Returns mutable access to Bevy after it has been created.
     pub fn get_app_mut(&mut self) -> Option<&mut App> {
         self.app.as_mut()
+    }
+
+    /// Returns whether this node currently has a Bevy world to run.
+    ///
+    /// A Godot node can remain valid after it leaves the scene tree. Bridge
+    /// nodes use this check before they access the world from that old node.
+    #[doc(hidden)]
+    pub fn is_initialized(&self) -> bool {
+        self.app.is_some()
     }
 
     /// Lets Bevy start after Godot has sent its startup data.
@@ -202,9 +218,9 @@ impl BevyApp {
             return Err(BevyAppLookupError::MissingSceneRoot);
         };
 
-        // A profile node may wrap its BevyApp. Search the authored scene root
-        // so callers outside that wrapper still find the same app.
-        let mut apps = collect_children::<BevyApp>(scene_root.upcast::<Node>(), true);
+        // A profile node may wrap its BevyApp. Search this authored scene, but
+        // do not cross into a child scene with its own SceneRoot.
+        let mut apps = SceneRoot::collect_descendants::<BevyApp>(scene_root);
 
         if apps.is_empty() {
             return Err(BevyAppLookupError::MissingUnderSceneRoot);
@@ -324,6 +340,7 @@ impl INode for BevyApp {
         Self {
             app: None,
             app_builder: None,
+            app_profile_name: None,
             node_host: NodePath::default(),
             action_queue: ActionQueue::default(),
             next_entity_id: Arc::new(AtomicI64::new(1)),
@@ -352,7 +369,7 @@ impl INode for BevyApp {
             ))
             .insert_non_send_resource(BevyAppIdAllocatorRef::new(self.next_entity_id.clone()));
 
-        let Some(app_builder) = self.app_builder.take() else {
+        let Some(app_builder) = self.app_builder else {
             godot_error!(
                 "BevyApp: add one generated app-profile node and connect its BevyApp property"
             );
@@ -377,6 +394,15 @@ impl INode for BevyApp {
         if !InitializationCoordinator::exists_for(&self.base().clone().upcast::<Node>()) {
             self.mark_scene_initialized();
         }
+    }
+
+    fn exit_tree(&mut self) {
+        // A node can leave and later re-enter the tree. Drop this run's world
+        // so the saved fixed profile can create a new app on the next entry.
+        self.app = None;
+        clear_metrics_for_scope(self.performance_scope_id);
+        self.scene_initialized = false;
+        self.startup_process_delay_remaining = 0;
     }
 
     fn process(&mut self, _delta_seconds: f64) {

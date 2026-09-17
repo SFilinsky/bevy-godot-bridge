@@ -222,6 +222,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let system_ident = &spec.system_ident;
     let exporter_accessor_ident = &spec.exporter_accessor_ident;
     let exporter_accessor_impl_ident = &spec.exporter_accessor_impl_ident;
+    let optional_removed_readers_ident =
+        format_ident!("{}OptionalRemovedReaders", exporter_ident);
 
     let req_cfg_tys: Vec<Type> = spec.required.iter().map(|c| c.cfg_ty.clone()).collect();
     let opt_cfg_tys: Vec<Type> = spec.optional.iter().map(|c| c.cfg_ty.clone()).collect();
@@ -283,7 +285,24 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let any_opt_removed_expr = if opt_removed_reader_idents.is_empty() {
         quote! { false }
     } else {
-        quote! { false #( || !#opt_removed_reader_idents.is_empty() )* }
+        quote! { false #( || !optional_removed_readers.#opt_removed_reader_idents.is_empty() )* }
+    };
+
+    let optional_removed_readers_definition = if opt_removed_reader_idents.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            #[derive(SystemParam)]
+            struct #optional_removed_readers_ident<'w, 's> {
+                #( #opt_removed_reader_idents: RemovedComponents<'w, 's, <#opt_cfg_tys as DataTransferConfig>::DataType>, )*
+            }
+        }
+    };
+
+    let optional_removed_readers_param = if opt_removed_reader_idents.is_empty() {
+        quote! {}
+    } else {
+        quote! { mut optional_removed_readers: #optional_removed_readers_ident, }
     };
 
     let req_apply_blocks: Vec<TokenStream2> = spec
@@ -391,7 +410,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             let state_store = &component.state_store_var_ident;
 
             quote! {
-                for entity in #removed_reader.read() {
+                for entity in optional_removed_readers.#removed_reader.read() {
                     let Some(entity_id) = identity.try_get_identity(entity) else {
                         continue;
                     };
@@ -444,6 +463,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             #( pub type #state_alias_idents = <<#all_cfg_tys as DataTransferConfig>::DtoType as WithStateNode>::StateNode; )*
+            #optional_removed_readers_definition
             #[derive(GodotClass)]
             #[class(base=Node)]
             pub struct #exporter_ident {
@@ -850,7 +870,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 created: Query<Entity, Added<#tag_ty>>,
                 updated: Query<Entity, #updated_filter>,
                 mut removed: RemovedComponents<#tag_ty>,
-                #( mut #opt_removed_reader_idents: RemovedComponents<<#opt_cfg_tys as DataTransferConfig>::DataType>, )*
+                #optional_removed_readers_param
                 snapshot: Query<( #( #snapshot_types, )* ), With<#tag_ty>>,
                 mut identity: IdentitySubsystem,
                 mut app: BevyAppSubsystem,

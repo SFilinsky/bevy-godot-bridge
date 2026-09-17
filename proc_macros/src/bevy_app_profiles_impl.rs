@@ -94,7 +94,10 @@ fn expand_profile_list(spec: ProfileList) -> TokenStream2 {
 
                     bevy_app
                         .bind_mut()
-                        .set_app_builder(super::#configure_path as fn(&mut App));
+                        .set_app_builder(
+                            super::#configure_path as fn(&mut App),
+                            stringify!(#node_name),
+                        );
                 }
             }
         }

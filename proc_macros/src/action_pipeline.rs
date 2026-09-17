@@ -522,6 +522,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
             impl DataTransferConfig for #report_transfer_config_name {
                 type DataType = #check_report_name;
                 type DtoType = #check_report_dto_name;
+                const USES_DEFAULT_OUTBOUND_DTO_BUILD: bool = false;
 
                 fn update_dto(
                     dto: &mut Gd<Self::DtoType>,
