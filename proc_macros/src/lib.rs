@@ -94,6 +94,17 @@ pub fn import_queue(input: TokenStream) -> TokenStream {
     queue::import_queue::expand(input)
 }
 
+/// Creates a typed Godot queue for values that Bevy exports.
+///
+/// The queue keeps values in order until Godot calls `drain()`. It belongs to
+/// one `BevyApp`, so values from separate levels do not mix. Add either
+/// `ExportMessagesPlugin` or `ExportEventsPlugin` for the same transfer
+/// config, then bind this queue to the app from Godot.
+#[proc_macro]
+pub fn export_queue(input: TokenStream) -> TokenStream {
+    queue::export_queue::expand(input)
+}
+
 /// Sends one set of Godot settings to Bevy while the scene starts.
 ///
 /// Use it for settings edited in Godot that Bevy needs before it can start

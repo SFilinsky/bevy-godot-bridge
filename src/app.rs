@@ -248,9 +248,12 @@ impl BevyApp {
     where
         F: FnOnce(&mut World),
     {
+        let performance_scope_id = self.performance_scope_id;
         let app = self
             .get_app_mut()
             .expect("BevyApp is not initialized: get_app_mut() returned None in with_world_mut");
+        // Keep work started by a Godot callback attached to this level's app.
+        let _scope_guard = enter_app_scope(performance_scope_id);
         let world = app.world_mut();
         f(world);
     }
