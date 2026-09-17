@@ -6,7 +6,7 @@
 //! happens.
 
 mod action_pipeline;
-mod bevy_app_impl;
+mod bevy_app_profiles_impl;
 mod export_component_impl;
 mod export_component_new_impl;
 mod export_composed;
@@ -18,14 +18,26 @@ mod with_state_node;
 
 use proc_macro::TokenStream;
 
-/// Marks the function that sets up Bevy for a Godot scene.
+/// Creates the Godot entry point and every editor-selectable Bevy app profile.
 ///
-/// Put this on the function that adds Bevy plugins and systems. When the
-/// `BevyApp` node enters the Godot scene, it calls this function to make its
-/// own Bevy app. Do not use it to store data shared by every level.
-#[proc_macro_attribute]
-pub fn bevy_app(attr: TokenStream, item: TokenStream) -> TokenStream {
-    bevy_app_impl::expand(attr, item)
+/// Call this macro once in the game library. Each profile points to a function
+/// that adds all plugins and systems for one fixed setup. The macro creates
+/// the Godot extension entry point and the named Godot `Node` classes.
+///
+/// Add a profile node above a `BevyApp` in a saved scene and assign the child's
+/// reference to its `bevy_app` property. Other bridge nodes keep finding the
+/// child through `BevyApp::resolve()` and do not need to know which profile is
+/// active.
+///
+/// ```ignore
+/// bevy_app_profiles! {
+///     GameplayBevyApp => gameplay::configure_gameplay,
+///     BenchmarkBevyApp => benchmark::configure,
+/// }
+/// ```
+#[proc_macro]
+pub fn bevy_app_profiles(input: TokenStream) -> TokenStream {
+    bevy_app_profiles_impl::expand(input)
 }
 
 /// Old way to export a component.

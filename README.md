@@ -43,6 +43,43 @@ setup finishes, and any registered initializer node calls `initialize()` immedia
 coordinator when the scene has Godot-authored startup data that must be ordered before the first Bevy update or grouped
 across multiple initialization phases.
 
+### App profiles
+
+An app profile is a typed Godot node that chooses one fixed Bevy setup. Select the profile node in the Godot editor;
+there are no profile strings or runtime switches.
+
+The profile owns only setup. Its `BevyApp` child remains the one app node that every other bridge node finds through
+the existing `BevyApp::resolve()` path. Godot scripts do not need to know which profile is active.
+
+Define each setup in its own Rust file:
+
+```rust
+use bevy::prelude::App;
+use bevy_godot4::prelude::bevy_app_profiles;
+
+pub fn configure_gameplay(app: &mut App) {
+    app.add_plugins(GameplayPlugin);
+}
+```
+
+List profiles once in their parent module. This macro creates the one Godot
+entry point required by the library.
+
+```rust
+bevy_app_profiles! {
+    GameplayBevyApp => gameplay::configure_gameplay,
+    BenchmarkBevyApp => benchmark::configure,
+}
+```
+
+Then author the profile and its app in a scene. The typed `bevy_app` property is visible in the Inspector.
+
+```text
+GameplayBevyApp
+└── BevyApp
+```
+
+
 ## The Concept
 
 The original idea was that Bevy could manipulate Godot scenes and drive the whole game. Rust's multithreaded resource

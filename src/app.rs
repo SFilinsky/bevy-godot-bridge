@@ -23,18 +23,10 @@ use godot::obj::Singleton;
 use godot::prelude::Gd;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
-use std::{
-    panic::{catch_unwind, resume_unwind, AssertUnwindSafe},
-    sync::Mutex,
-};
+use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 
 const VIRTUAL_TIME_MAX_DELTA_MS: f64 = 50.0;
 const BEVY_FIXED_TIMESTEP_HZ: f64 = 8.0;
-
-lazy_static::lazy_static! {
-    #[doc(hidden)]
-    pub static ref APP_BUILDER_FN: Mutex<Option<Box<dyn Fn(&mut App) + Send>>> = Mutex::new(None);
-}
 
 #[derive(Default, bevy::prelude::Resource)]
 struct GodotClock {
@@ -60,7 +52,7 @@ impl std::fmt::Display for BevyAppLookupError {
                 write!(f, "No SceneRoot found in host parent chain")
             }
             BevyAppLookupError::MissingUnderSceneRoot => {
-                write!(f, "No BevyApp found as direct child of resolved SceneRoot")
+                write!(f, "No BevyApp found below the resolved SceneRoot")
             }
             BevyAppLookupError::MultipleUnderSceneRoot => {
                 write!(f, "Multiple BevyApp nodes found under resolved SceneRoot")
@@ -71,9 +63,10 @@ impl std::fmt::Display for BevyAppLookupError {
 
 /// Godot node that runs one Bevy [`App`].
 ///
-/// Put this node below `SceneRoot` in the Godot scene. Other bridge nodes find
-/// the closest `BevyApp` through [`Self::resolve`]. Each `BevyApp` keeps its
-/// own data, entity IDs, and waiting work.
+/// Put this node below `SceneRoot` in the Godot scene. A generated app-profile
+/// node may wrap it and selects its fixed Bevy setup before this node starts.
+/// Other bridge nodes find the closest `BevyApp` through [`Self::resolve`].
+/// Each `BevyApp` keeps its own data, entity IDs, and waiting work.
 ///
 /// `BevyApp` decides when Bevy updates. [`InitializationCoordinator`] can wait
 /// until Godot has sent startup data, but it does not update Bevy itself.
@@ -81,6 +74,7 @@ impl std::fmt::Display for BevyAppLookupError {
 #[class(base=Node)]
 pub struct BevyApp {
     app: Option<App>,
+    app_builder: Option<fn(&mut App)>,
 
     #[export]
     node_host: NodePath,
@@ -104,6 +98,25 @@ pub struct BevyApp {
 }
 
 impl BevyApp {
+    /// Sets the function that creates this node's fixed Bevy setup.
+    ///
+    /// A generated app-profile node calls this before `BevyApp` enters the
+    /// scene tree. Godot scripts should keep using [`Self::resolve`] and do
+    /// not need to know which profile selected the setup.
+    #[doc(hidden)]
+    pub fn set_app_builder(&mut self, app_builder: fn(&mut App)) {
+        if self.app.is_some() {
+            godot_error!("BevyApp: cannot change the app profile after Bevy has started");
+            return;
+        }
+        if self.app_builder.is_some() {
+            godot_error!("BevyApp: more than one app profile points to this BevyApp");
+            return;
+        }
+
+        self.app_builder = Some(app_builder);
+    }
+
     /// Returns Bevy after this Godot node has entered the scene tree.
     pub fn get_app(&self) -> Option<&App> {
         self.app.as_ref()
@@ -131,6 +144,13 @@ impl BevyApp {
 
 #[godot_api]
 impl BevyApp {
+    /// Finds the app for a Godot node, or returns `null` when the scene has no
+    /// clear app owner.
+    #[func]
+    pub fn resolve_or_null(host: Gd<Node>) -> Option<Gd<BevyApp>> {
+        Self::resolve(&host).ok()
+    }
+
     fn apply_pending_actions(&mut self) {
         if let Some(app) = self.app.as_mut() {
             for a in self.action_queue.drain() {
@@ -182,7 +202,9 @@ impl BevyApp {
             return Err(BevyAppLookupError::MissingSceneRoot);
         };
 
-        let mut apps = collect_children::<BevyApp>(scene_root.upcast::<Node>(), false);
+        // A profile node may wrap its BevyApp. Search the authored scene root
+        // so callers outside that wrapper still find the same app.
+        let mut apps = collect_children::<BevyApp>(scene_root.upcast::<Node>(), true);
 
         if apps.is_empty() {
             return Err(BevyAppLookupError::MissingUnderSceneRoot);
@@ -301,6 +323,7 @@ impl INode for BevyApp {
     fn init(base: Base<Self::Base>) -> Self {
         Self {
             app: None,
+            app_builder: None,
             node_host: NodePath::default(),
             action_queue: ActionQueue::default(),
             next_entity_id: Arc::new(AtomicI64::new(1)),
@@ -329,7 +352,13 @@ impl INode for BevyApp {
             ))
             .insert_non_send_resource(BevyAppIdAllocatorRef::new(self.next_entity_id.clone()));
 
-        (APP_BUILDER_FN.lock().unwrap().as_mut().unwrap())(&mut app);
+        let Some(app_builder) = self.app_builder.take() else {
+            godot_error!(
+                "BevyApp: add one generated app-profile node and connect its BevyApp property"
+            );
+            return;
+        };
+        app_builder(&mut app);
 
         // .add_plugins(GodotSignalsPlugin)
         // .add_plugins(GodotInputEventPlugin);
