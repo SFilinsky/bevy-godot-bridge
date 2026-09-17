@@ -100,7 +100,10 @@ impl BenchmarkSystemReportStats {
             .map(|sample| sample.duration_seconds * 1_000.0)
             .collect();
         let summary = MetricSummary::from_sample_list(&duration_ms_list);
-        let share_of_total_percent = if cpu_time_total_ms > 0.0 && samples.is_system {
+        let share_of_total_percent = if cpu_time_total_ms > 0.0
+            && samples.is_system
+            && !samples.is_detail
+        {
             summary.total_ms / cpu_time_total_ms * 100.0
         } else {
             0.0
@@ -473,7 +476,7 @@ impl BenchmarkSceneDirector {
         let frames_over_budget = FramesOverBudget::from_frame_time_list(&self.frame_time_ms_list);
         let cpu_time_total_ms = captured_system_sample_list
             .iter()
-            .filter(|samples| samples.is_system)
+            .filter(|samples| samples.is_system && !samples.is_detail)
             .flat_map(|samples| samples.sample_list.iter())
             .map(|sample| sample.duration_seconds * 1_000.0)
             .sum::<f64>();
@@ -725,6 +728,10 @@ fn build_aggregate_report(
         FramesOverBudget::from_frame_time_list(&frame_stats.frame_time_ms_list);
     let cpu_time_total_ms = sample_index_list
         .iter()
+        .filter(|sample_index| {
+            let samples = &system_sample_list[**sample_index];
+            samples.is_system && !samples.is_detail
+        })
         .flat_map(|sample_index| system_sample_list[*sample_index].sample_list.iter())
         .map(|sample| sample.duration_seconds * 1_000.0)
         .sum::<f64>();

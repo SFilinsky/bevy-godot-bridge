@@ -19,6 +19,8 @@ struct SpanInfo {
     name: Option<String>,
     /// True if this span represents an individual system execution.
     is_system: bool,
+    /// True when this is a part of a system already measured elsewhere.
+    is_detail: bool,
     /// True if this span represents a schedule execution.
     is_schedule: bool,
 }
@@ -136,6 +138,29 @@ pub fn record_system_duration_for_current_scope(name: &str, duration: Duration) 
         SpanInfo {
             name: Some(name.to_string()),
             is_system: true,
+            is_detail: false,
+            is_schedule: false,
+        },
+        duration.as_secs_f64(),
+        Instant::now(),
+    );
+}
+
+/// Adds a timing detail that is already included in a surrounding system.
+///
+/// Benchmark reports keep this row for inspection, but do not add it to the
+/// total CPU time. Use it for a small part of a Bevy system, not for a full
+/// independent system run.
+#[cfg(feature = "bridge-transport-profiling")]
+pub(crate) fn record_detail_duration_for_current_scope(name: &str, duration: Duration) {
+    let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
+    record_system_duration(
+        scope_id,
+        name.to_string(),
+        SpanInfo {
+            name: Some(name.to_string()),
+            is_system: true,
+            is_detail: true,
             is_schedule: false,
         },
         duration.as_secs_f64(),
@@ -184,12 +209,37 @@ pub struct BenchmarkSystemSamples {
     pub phase_key: BenchmarkPhaseKey,
     pub name: String,
     pub is_system: bool,
+    /// True when this timing is included in another system's full duration.
+    pub is_detail: bool,
     pub sample_list: Vec<BenchmarkInvocationSample>,
 }
 
 /// Creates a new timing group for a Bevy app hosted by Godot.
 pub fn allocate_app_scope_id() -> AppScopeId {
     NEXT_APP_SCOPE_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Removes every timing collected for one Bevy app.
+///
+/// Call this when the app's world is dropped. If the same Godot node later
+/// creates a new world, its performance view starts with only the new run.
+pub fn clear_metrics_for_scope(scope_id: AppScopeId) {
+    let key_list: Vec<(AppScopeId, String)> = METRICS
+        .iter()
+        .filter_map(|entry| {
+            if entry.key().0 == scope_id {
+                Some(entry.key().clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for key in key_list {
+        METRICS.remove(&key);
+    }
+    BENCHMARK_CAPTURE_CLOCKS.remove(&scope_id);
+    clear_benchmark_samples_for_scope(scope_id);
 }
 
 /// Restores the previously active global timing group when dropped.
@@ -321,6 +371,7 @@ pub fn drain_benchmark_capture_for_scope(scope_id: AppScopeId) -> Vec<BenchmarkS
                     phase_key,
                     name,
                     is_system: info.is_system,
+                    is_detail: info.is_detail,
                     sample_list,
                 })
         })
@@ -602,6 +653,7 @@ where
         span.extensions_mut().insert(SpanInfo {
             name: Some(name),
             is_system,
+            is_detail: false,
             is_schedule,
         });
     }

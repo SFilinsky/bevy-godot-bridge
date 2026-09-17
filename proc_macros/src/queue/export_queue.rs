@@ -1,4 +1,4 @@
-﻿//! Code used by `export_queue!`.
+//! Code used by `export_queue!`.
 //!
 //! The macro generates only the concrete Godot class. Source collection uses
 //! normal generic Rust plugins so most outbound queue code stays out of the
@@ -101,6 +101,7 @@ fn expand_spec(spec: Spec) -> TokenStream2 {
             #[class(init, base=RefCounted)]
             pub struct #queue_name {
                 bevy_app: Option<Gd<BevyApp>>,
+                binding_id: i64,
                 #[base]
                 base: Base<RefCounted>,
             }
@@ -113,13 +114,31 @@ fn expand_spec(spec: Spec) -> TokenStream2 {
                 /// Connects this queue to the Bevy app that owns its values.
                 #[func]
                 pub fn bind_bevy_app(&mut self, mut app: Gd<BevyApp>) {
-                    let notification_callback =
-                        Callable::from_object_method(&self.to_gd(), "_emit_values_available");
+                    if !Self::is_ready_bevy_app(&app) {
+                        godot_error!(
+                            "[ExportQueue:{}] bind_bevy_app() called without an initialized BevyApp",
+                            stringify!(#config),
+                        );
+                        return;
+                    }
+
+                    // A delayed callback must identify the app binding that made it.
+                    self.binding_id = self.binding_id.wrapping_add(1);
+                    let binding_id = self.binding_id;
+                    self.detach_from_bevy_app();
+
+                    let notification_callback = Callable::from_object_method(
+                        &self.to_gd(),
+                        "_emit_values_available",
+                    )
+                    .bindv(&varray![binding_id]);
+                    let callback_owner_id = self.to_gd().instance_id().to_i64();
                     self.bevy_app = Some(app.clone());
                     app.bind_mut().with_world_mut(|world: &mut World| {
                         bevy_godot4::export_queue::set_export_queue_notification_callback::<__Config>(
                             world,
                             notification_callback,
+                            callback_owner_id,
                         );
                     });
                 }
@@ -127,9 +146,9 @@ fn expand_spec(spec: Spec) -> TokenStream2 {
                 /// Returns every value Bevy exported since the previous call.
                 #[func]
                 pub fn drain(&mut self) -> Array<Gd<__Dto>> {
-                    let Some(mut app) = self.bevy_app.as_ref().cloned() else {
+                    let Some(mut app) = self.take_owned_bevy_app() else {
                         godot_error!(
-                            "[ExportQueue:{}] drain() called before bind_bevy_app()",
+                            "[ExportQueue:{}] drain() called without an attached BevyApp",
                             stringify!(#config),
                         );
                         return Array::new();
@@ -142,15 +161,83 @@ fn expand_spec(spec: Spec) -> TokenStream2 {
                     dto_list
                 }
 
-                /// Returns whether this queue has a Bevy app to read from.
+                /// Returns whether this queue still owns a Bevy app's values.
                 #[func]
-                pub fn is_attached(&self) -> bool {
-                    self.bevy_app.is_some()
+                pub fn is_attached(&mut self) -> bool {
+                    self.take_owned_bevy_app().is_some()
                 }
 
                 #[func]
-                fn _emit_values_available(&mut self) {
+                fn _emit_values_available(&mut self, notification_id: i64, binding_id: i64) {
+                    if binding_id != self.binding_id || !self.is_current_notification(notification_id) {
+                        return;
+                    }
                     self.signals().values_available().emit();
+                }
+
+                fn detach_from_bevy_app(&mut self) {
+                    let Some(mut app) = self.bevy_app.take() else {
+                        return;
+                    };
+                    if !Self::is_ready_bevy_app(&app) {
+                        return;
+                    }
+
+                    app.bind_mut().with_world_mut(|world: &mut World| {
+                        bevy_godot4::export_queue::clear_export_queue_notification_callback::<__Config>(
+                            world,
+                            self.to_gd().instance_id().to_i64(),
+                        );
+                    });
+                }
+
+                fn take_valid_bevy_app(&mut self) -> Option<Gd<BevyApp>> {
+                    let app = self.bevy_app.as_ref()?.clone();
+                    if Self::is_ready_bevy_app(&app) {
+                        return Some(app);
+                    }
+
+                    self.bevy_app = None;
+                    None
+                }
+
+                fn is_ready_bevy_app(app: &Gd<BevyApp>) -> bool {
+                    app.is_instance_valid() && app.bind().is_initialized()
+                }
+
+                fn take_owned_bevy_app(&mut self) -> Option<Gd<BevyApp>> {
+                    let mut app = self.take_valid_bevy_app()?;
+                    let callback_owner_id = self.to_gd().instance_id().to_i64();
+                    let mut owns_callback = false;
+                    app.bind_mut().with_world_mut(|world: &mut World| {
+                        owns_callback = bevy_godot4::export_queue::export_queue_callback_belongs_to::<__Config>(
+                            world,
+                            callback_owner_id,
+                        );
+                    });
+                    if owns_callback {
+                        return Some(app);
+                    }
+
+                    self.bevy_app = None;
+                    None
+                }
+
+                fn is_current_notification(&mut self, notification_id: i64) -> bool {
+                    let Some(mut app) = self.take_valid_bevy_app() else {
+                        return false;
+                    };
+
+                    let callback_owner_id = self.to_gd().instance_id().to_i64();
+                    let mut is_owner = false;
+                    app.bind_mut().with_world_mut(|world: &mut World| {
+                        is_owner = bevy_godot4::export_queue::export_queue_notification_is_current::<__Config>(
+                            world,
+                            callback_owner_id,
+                            notification_id,
+                        );
+                    });
+                    is_owner
                 }
             }
         }
@@ -175,5 +262,13 @@ mod tests {
         assert!(output.contains("ResourceTransactionExportQueue"));
         assert!(output.contains("values_available"));
         assert!(output.contains("set_export_queue_notification_callback"));
+        assert!(output.contains("clear_export_queue_notification_callback"));
+        assert!(output.contains("is_instance_valid"));
+        assert!(output.contains("is_initialized"));
+        assert!(output.contains("binding_id"));
+        assert!(output.contains("callback_owner_id"));
+        assert!(output.contains("export_queue_callback_belongs_to"));
+        assert!(output.contains("export_queue_notification_is_current"));
+        assert!(output.contains("notification_id"));
     }
 }
