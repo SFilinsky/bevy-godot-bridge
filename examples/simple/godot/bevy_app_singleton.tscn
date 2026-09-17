@@ -1,3 +1,6 @@
 [gd_scene format=3 uid="uid://b548i42lvf7hy"]
 
-[node name="BevyApp" type="BevyApp"]
+[node name="SimpleBevyApp" type="SimpleBevyApp" node_paths=PackedStringArray("bevy_app")]
+bevy_app = NodePath("BevyApp")
+
+[node name="BevyApp" type="BevyApp" parent="."]

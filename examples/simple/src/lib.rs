@@ -7,14 +7,14 @@ use bevy::{
     state::app::StatesPlugin,
 };
 use bevy_godot4::prelude::{
-    bevy_app, AsPhysicsSystem, ErasedGd, ErasedGdResource, GodotScene, SystemDeltaTimerSubsystem,
+    AsPhysicsSystem, ErasedGd, ErasedGdResource, GodotScene, SystemDeltaTimerSubsystem,
+    bevy_app_profiles,
 };
 use godot::obj::Singleton;
 use godot::{
     builtin::Vector2,
     classes::{ResourceLoader, Sprite2D},
 };
-use godot::{init::ExtensionLibrary, prelude::gdextension};
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash, States)]
 enum GameState {
@@ -22,7 +22,6 @@ enum GameState {
     Playing,
 }
 
-#[bevy_app]
 fn build_app(app: &mut App) {
     app.add_plugins(StatesPlugin)
         .init_state::<GameState>()
@@ -34,6 +33,10 @@ fn build_app(app: &mut App) {
                 .as_physics_system()
                 .run_if(in_state(GameState::Playing)),
         );
+}
+
+bevy_app_profiles! {
+    SimpleBevyApp => build_app,
 }
 
 #[derive(Resource, Debug)]

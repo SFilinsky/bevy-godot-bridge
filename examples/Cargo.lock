@@ -338,7 +338,6 @@ dependencies = [
  "bevy_godot4_proc_macros",
  "dashmap",
  "godot",
- "lazy_static",
  "once_cell",
  "tracing",
  "tracing-subscriber",

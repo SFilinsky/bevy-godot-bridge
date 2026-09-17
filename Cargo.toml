@@ -19,7 +19,6 @@ anyhow = "1"
 bevy = { version = "0.18", default-features = false, features = ["bevy_asset", "bevy_state", "bevy_log"] }
 godot = "0.4.5"
 bevy_godot4_proc_macros = { path = "./proc_macros" }
-lazy_static = "1.5.0"
 once_cell = "1.21.3"
 dashmap = "6.0.1"
 tracing = "0.1.44"
