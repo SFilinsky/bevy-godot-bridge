@@ -10,6 +10,9 @@ crate-type = ["lib", "cdylib"]
 [features]
 # serde = ["godot/serde"]
 assets = [] # experimental feature, see assets::GodotResourceLoader
+# Records detailed timings for outbound bridge queues. Keep this off in normal
+# builds so collecting bridge metrics has no runtime cost.
+bridge-transport-profiling = []
 
 [dependencies]
 anyhow = "1"
