@@ -1,6 +1,7 @@
 //! Typed marker for the root of one authored bridge scene.
 
 use godot::prelude::*;
+observe! { use crate::performance::{requested, startup::{begin_level, tree_ready, end_level}}; }
 
 /// Marks the nearest scene root used to resolve scene-local bridge nodes.
 #[derive(GodotClass)]
@@ -54,6 +55,25 @@ impl SceneRoot {
         let mut result = Vec::new();
         visit(root.upcast::<Node>(), &mut result);
         result
+    }
+}
+
+#[godot_api]
+impl INode for SceneRoot {
+    fn enter_tree(&mut self) {
+        observe! {
+            if requested() {
+                begin_level(self.to_gd().instance_id().to_i64());
+            }
+        }
+    }
+
+    fn ready(&mut self) {
+        observe! { tree_ready(self.to_gd().instance_id().to_i64()); }
+    }
+
+    fn exit_tree(&mut self) {
+        observe! { end_level(self.to_gd().instance_id().to_i64()); }
     }
 }
 

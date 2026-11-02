@@ -11,6 +11,7 @@ use godot::{
 use crate::app_action_queue::ActionQueue;
 use crate::import::plugins::IdentitySubsystemPlugin;
 use crate::performance::init_performance_tracing;
+observe! { use crate::performance::{requested, startup::{app_span, attach_app, level_span, Kind}}; }
 use crate::performance::layer::{
     allocate_app_scope_id, clear_metrics_for_scope, enter_app_scope,
 };
@@ -220,6 +221,10 @@ impl BevyApp {
 
         // A profile node may wrap its BevyApp. Search this authored scene, but
         // do not cross into a child scene with its own SceneRoot.
+        observe! {
+
+            let _lookup = level_span(scene_root.instance_id().to_i64(), Kind::Detail, || "find Bevy app".into());
+        }
         let mut apps = SceneRoot::collect_descendants::<BevyApp>(scene_root);
 
         if apps.is_empty() {
@@ -356,6 +361,14 @@ impl INode for BevyApp {
         }
 
         init_performance_tracing();
+        observe! {
+            if requested() {
+                if let Some(root) = SceneRoot::resolve_as_parent(&self.base().clone().upcast::<Node>()) {
+                    attach_app(self.performance_scope_id, root.instance_id().to_i64());
+                }
+            }
+            let _setup = app_span(self.performance_scope_id, "construct Bevy app");
+        }
 
         let mut app = App::new();
 
@@ -428,6 +441,7 @@ impl INode for BevyApp {
 
             app.insert_resource(GodotVisualFrame);
             let _scope_guard = enter_app_scope(self.performance_scope_id);
+            observe! { let _update = app_span(self.performance_scope_id, "Bevy update"); }
             if let Err(e) = catch_unwind(AssertUnwindSafe(|| app.update())) {
                 self.app = None;
 
