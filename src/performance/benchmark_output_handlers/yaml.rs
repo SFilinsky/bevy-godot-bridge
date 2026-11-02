@@ -1,4 +1,7 @@
-observe! { use crate::performance::startup_summary::Summary; }
+observe! {
+    use crate::performance::startup_summary::Summary;
+    mod memory_yaml;
+}
 use super::BenchmarkOutputHandler;
 use crate::performance::benchmark::{
     BenchmarkAggregateReport, BenchmarkGameplayStateReport, BenchmarkPhaseReport, BenchmarkReport,
@@ -98,6 +101,11 @@ fn build_yaml_report(report_data: &BenchmarkReport) -> String {
             write_startup(&mut report, startup);
         } else {
             report.push_str("startup:\n  endpoint: \"capture not requested before level entry\"\n");
+        }
+    }
+    observe! {
+        if let Some(memory) = &report_data.memory {
+            memory_yaml::write_memory(&mut report, memory);
         }
     }
     report.push_str("phases:\n");
