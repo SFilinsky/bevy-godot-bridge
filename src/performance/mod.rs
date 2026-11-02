@@ -8,6 +8,9 @@
 //! These tools collect numbers only. Your game decides which timings are good
 //! enough.
 
+mod policy;
+pub(crate) use policy::{allowed, requested};
+observe! { pub(crate) mod startup; mod startup_memory; mod startup_summary; }
 pub mod dto;
 pub mod layer;
 mod benchmark;

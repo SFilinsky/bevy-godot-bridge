@@ -5,6 +5,12 @@
 //! actions started by Godot. See the README first when you are new to the
 //! library.
 
+// Erase the entire probe, including its arguments, from ordinary release builds.
+#[cfg(any(all(debug_assertions, feature = "dev-observability"), feature = "profiled-release"))]
+macro_rules! observe { ($($body:tt)*) => { $($body)* }; }
+#[cfg(not(any(all(debug_assertions, feature = "dev-observability"), feature = "profiled-release")))]
+macro_rules! observe { ($($body:tt)*) => {}; }
+
 pub extern crate self as bevy_godot4;
 pub use godot;
 
@@ -70,7 +76,7 @@ pub mod prelude {
         subsystems::IdentitySubsystem,
     };
     pub use crate::performance::layer::{
-        clear_benchmark_capture_gameplay_phase_for_current_scope,
+        clear_benchmark_capture_gameplay_phase_for_current_scope, measure_work, measurements_enabled, MeasurementTimer,
         record_system_duration_for_current_scope,
         set_benchmark_capture_phase_for_current_scope, set_benchmark_capture_phase_for_scope,
         set_benchmark_capture_gameplay_phase_for_current_scope,
