@@ -1,16 +1,20 @@
 //! Typed marker for the root of one authored bridge scene.
 
+use super::registration::discover;
+use crate::prelude::{BevyApp, InitializationCoordinator};
+use godot::classes::notify::NodeNotification;
+use godot::obj::InstanceId;
 use godot::prelude::*;
 observe! {
     use crate::performance::requested;
     use crate::performance::startup::{begin_level, end_level, tree_ready};
-    use godot::classes::notify::NodeNotification;
 }
 
 /// Marks the nearest scene root used to resolve scene-local bridge nodes.
 #[derive(GodotClass)]
 #[class(init, base=Node)]
 pub struct SceneRoot {
+    pub(super) entering_services: Option<Vec<InstanceId>>,
     #[base]
     base: Base<Node>,
 }
@@ -63,19 +67,37 @@ impl SceneRoot {
 }
 
 // Godot sends notifications to every class even if a level script overrides _ready().
-#[cfg(any(
-    all(debug_assertions, feature = "dev-observability"),
-    feature = "profiled-release"
-))]
 #[godot_api]
 impl INode for SceneRoot {
     fn on_notification(&mut self, what: NodeNotification) {
         match what {
-            NodeNotification::ENTER_TREE if requested() => {
-                begin_level(self.to_gd().instance_id().to_i64())
+            NodeNotification::ENTER_TREE => {
+                observe! {
+                    if requested() {
+                        begin_level(self.to_gd().instance_id().to_i64());
+                    }
+                }
+                // Seed only the two service types that early startup callers need.
+                let branch = self.base().clone();
+                let mut ids: Vec<_> = discover::<BevyApp>(&branch, true)
+                    .iter()
+                    .map(Gd::instance_id)
+                    .collect();
+                ids.extend(
+                    discover::<InitializationCoordinator>(&branch, true)
+                        .iter()
+                        .map(Gd::instance_id),
+                );
+                self.entering_services = Some(ids);
             }
-            NodeNotification::READY => tree_ready(self.to_gd().instance_id().to_i64()),
-            NodeNotification::EXIT_TREE => end_level(self.to_gd().instance_id().to_i64()),
+            NodeNotification::POST_ENTER_TREE => self.entering_services = None,
+            NodeNotification::READY => {
+                observe! { tree_ready(self.to_gd().instance_id().to_i64()); }
+            }
+            NodeNotification::EXIT_TREE => {
+                self.entering_services = None;
+                observe! { end_level(self.to_gd().instance_id().to_i64()); }
+            }
             _ => {}
         }
     }

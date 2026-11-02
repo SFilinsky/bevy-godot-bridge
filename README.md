@@ -135,3 +135,9 @@ and input.
 
 If Bevy develops a solid editor that allows non-programmers to work with the engine, it could make this bridge obsolete.
 With a native solution, the workflow would be more straightforward.
+
+### Finding a scene service
+
+Look up a Bevy app from the host node that needs it. The nearest scene root owns the lookup. Apps, coordinators and generated state stores register with Godot, which updates their group membership on tree entry and exit. A state store must be a direct child of the resolved app. Missing or duplicate providers keep their existing diagnostics.
+
+While a scene is entering, later siblings may already be parented without appearing in a live group. The root takes a temporary snapshot of its authored app and coordinator candidates. Detached scenes and partially mounted branches use scoped discovery. Callers can keep the resolved reference for their own lifetime. Rebind when the provider or owning scope changes.

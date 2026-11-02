@@ -1,6 +1,7 @@
 //! Helpers for Godot scenes used by the bridge.
 
 pub mod node_registry;
+pub mod registration;
 pub mod root_scripts;
 pub mod scene_root;
 
