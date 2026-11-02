@@ -8,13 +8,17 @@
 //! These tools collect numbers only. Your game decides which timings are good
 //! enough.
 
-mod policy;
-pub(crate) use policy::{allowed, requested};
-observe! { pub(crate) mod startup; mod startup_memory; mod startup_summary; }
-pub mod dto;
-pub mod layer;
+mod measurement_gate;
+pub(crate) use measurement_gate::{allowed, requested};
+observe! {
+    pub(crate) mod startup;
+    mod startup_memory;
+    mod startup_summary;
+}
 mod benchmark;
 mod benchmark_output_handlers;
+pub mod dto;
+pub mod layer;
 mod ui;
 
 pub use layer::init_performance_tracing;

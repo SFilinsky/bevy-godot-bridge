@@ -1,7 +1,11 @@
 //! Typed marker for the root of one authored bridge scene.
 
 use godot::prelude::*;
-observe! { use crate::performance::{requested, startup::{begin_level, tree_ready, end_level}}; }
+observe! {
+    use crate::performance::requested;
+    use crate::performance::startup::{begin_level, end_level, tree_ready};
+    use godot::classes::notify::NodeNotification;
+}
 
 /// Marks the nearest scene root used to resolve scene-local bridge nodes.
 #[derive(GodotClass)]
@@ -58,22 +62,22 @@ impl SceneRoot {
     }
 }
 
+// Godot sends notifications to every class even if a level script overrides _ready().
+#[cfg(any(
+    all(debug_assertions, feature = "dev-observability"),
+    feature = "profiled-release"
+))]
 #[godot_api]
 impl INode for SceneRoot {
-    fn enter_tree(&mut self) {
-        observe! {
-            if requested() {
-                begin_level(self.to_gd().instance_id().to_i64());
+    fn on_notification(&mut self, what: NodeNotification) {
+        match what {
+            NodeNotification::ENTER_TREE if requested() => {
+                begin_level(self.to_gd().instance_id().to_i64())
             }
+            NodeNotification::READY => tree_ready(self.to_gd().instance_id().to_i64()),
+            NodeNotification::EXIT_TREE => end_level(self.to_gd().instance_id().to_i64()),
+            _ => {}
         }
-    }
-
-    fn ready(&mut self) {
-        observe! { tree_ready(self.to_gd().instance_id().to_i64()); }
-    }
-
-    fn exit_tree(&mut self) {
-        observe! { end_level(self.to_gd().instance_id().to_i64()); }
     }
 }
 

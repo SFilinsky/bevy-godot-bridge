@@ -7,8 +7,8 @@ use godot::obj::{Base, Gd, NewGd};
 use godot::prelude::*;
 
 use crate::performance::layer::{
-    get_sorted_metrics, get_sorted_metrics_for_scope, AppScopeId, SystemMetricsEntry,
-    GLOBAL_APP_SCOPE_ID,
+    AppScopeId, GLOBAL_APP_SCOPE_ID, SystemMetricsEntry, get_sorted_metrics,
+    get_sorted_metrics_for_scope,
 };
 
 /// One system's timings, ready for Godot.
@@ -105,7 +105,9 @@ impl INode for PerformanceMetrics {
     }
 
     fn ready(&mut self) {
-        if !allowed() { self.base_mut().set_process(false); }
+        if !allowed() {
+            self.base_mut().set_process(false);
+        }
     }
 
     fn process(&mut self, delta_seconds: f64) {

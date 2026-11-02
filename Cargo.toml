@@ -11,16 +11,14 @@ crate-type = ["lib", "cdylib"]
 # serde = ["godot/serde"]
 assets = [] # experimental feature, see assets::GodotResourceLoader
 # The recording implementation is available in debug builds or explicitly profiled releases.
-dev-observability = ["dep:windows-sys"]
+dev-observability = ["dep:memory-stats"]
 profiled-release = ["dev-observability"]
 # Records detailed timings for outbound bridge queues. Keep this off in normal
 # builds so collecting bridge metrics has no runtime cost.
 bridge-transport-profiling = []
 
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", optional = true, features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
-
 [dependencies]
+memory-stats = { version = "1.2", optional = true }
 anyhow = "1"
 bevy = { version = "0.18", default-features = false, features = ["bevy_asset", "bevy_state", "bevy_log"] }
 godot = "0.4.5"

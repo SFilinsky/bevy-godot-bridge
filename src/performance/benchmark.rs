@@ -3,7 +3,7 @@
 use super::{allowed, requested};
 observe! {
     use super::layer::measure_for_scope;
-    use super::policy::collecting;
+    use super::measurement_gate::collecting;
     use super::startup::{action_accepted, complete, load_span, marker, prepare_load, read};
     use super::startup_summary::Summary;
     use godot::classes::Os;
@@ -108,14 +108,12 @@ impl BenchmarkSystemReportStats {
             .map(|sample| sample.duration_seconds * 1_000.0)
             .collect();
         let summary = MetricSummary::from_sample_list(&duration_ms_list);
-        let share_of_total_percent = if cpu_time_total_ms > 0.0
-            && samples.is_system
-            && !samples.is_detail
-        {
-            summary.total_ms / cpu_time_total_ms * 100.0
-        } else {
-            0.0
-        };
+        let share_of_total_percent =
+            if cpu_time_total_ms > 0.0 && samples.is_system && !samples.is_detail {
+                summary.total_ms / cpu_time_total_ms * 100.0
+            } else {
+                0.0
+            };
 
         Self {
             name: samples.name.clone(),
@@ -142,7 +140,10 @@ struct BenchmarkPhaseFrameStatsBuilder {
 }
 
 pub(crate) struct BenchmarkReport {
-    #[cfg(any(all(debug_assertions, feature = "dev-observability"), feature = "profiled-release"))]
+    #[cfg(any(
+        all(debug_assertions, feature = "dev-observability"),
+        feature = "profiled-release"
+    ))]
     pub(crate) startup: Option<Summary>,
     pub(crate) scene_id: String,
     pub(crate) duration_seconds: f64,
@@ -288,7 +289,11 @@ impl INode for BenchmarkSceneDirector {
         observe! {
             // Synthetic profiles can start directly, without any player-ready signal.
             if !self.require_measurement_request && self.frame_time_ms_list.is_empty() {
-                complete(self.performance_scope_id, "first benchmark frame", Os::singleton().get_static_memory_usage());
+                complete(
+                    self.performance_scope_id,
+                    "first benchmark frame",
+                    Os::singleton().get_static_memory_usage(),
+                );
             }
         }
         self.elapsed_seconds += delta_seconds;
@@ -320,7 +325,9 @@ impl INode for BenchmarkSceneDirector {
 impl BenchmarkSceneDirector {
     #[func]
     pub fn start(&mut self) {
-        if !self.permitted() { return; }
+        if !self.permitted() {
+            return;
+        }
         self.apply_time_scale();
         self.metrics = self.resolve_metrics();
         self.connect_metrics_source();
@@ -355,14 +362,22 @@ impl BenchmarkSceneDirector {
     }
 
     #[func]
-    fn measurement_allowed() -> bool { allowed() }
+    fn measurement_allowed() -> bool {
+        allowed()
+    }
 
     #[func]
-    fn startup_requested() -> bool { requested() }
+    fn startup_requested() -> bool {
+        requested()
+    }
 
     #[func]
     fn prepare_measured_load() {
-        observe! { if requested() { prepare_load(); } }
+        observe! {
+            if requested() {
+                prepare_load();
+            }
+        }
     }
 
     /// Runs a synchronous load step exactly once, including with recording disabled.
@@ -376,7 +391,9 @@ impl BenchmarkSceneDirector {
     fn measure_step(&self, _name: GString, work: Callable) -> Variant {
         observe! {
             if collecting() {
-                return measure_for_scope(self.performance_scope_id, &_name.to_string(), || work.callv(&Array::new()));
+                return measure_for_scope(self.performance_scope_id, &_name.to_string(), || {
+                    work.callv(&Array::new())
+                });
             }
         }
         work.callv(&Array::new())
@@ -390,8 +407,16 @@ impl BenchmarkSceneDirector {
     #[func]
     fn startup_ready(&self, _drawn: bool) {
         observe! {
-            let endpoint = if _drawn { "ready frame drawn" } else { "ready (headless)" };
-            complete(self.performance_scope_id, endpoint, Os::singleton().get_static_memory_usage());
+            let endpoint = if _drawn {
+                "ready frame drawn"
+            } else {
+                "ready (headless)"
+            };
+            complete(
+                self.performance_scope_id,
+                endpoint,
+                Os::singleton().get_static_memory_usage(),
+            );
         }
     }
 
@@ -559,7 +584,10 @@ impl BenchmarkSceneDirector {
             build_phase_report_list(captured_system_sample_list, &self.phase_frame_sample_list);
 
         BenchmarkReport {
-            #[cfg(any(all(debug_assertions, feature = "dev-observability"), feature = "profiled-release"))]
+            #[cfg(any(
+                all(debug_assertions, feature = "dev-observability"),
+                feature = "profiled-release"
+            ))]
             startup: read(self.performance_scope_id, Summary::from_recording),
             scene_id: self.scene_id.to_string(),
             duration_seconds: self.elapsed_seconds,
@@ -729,7 +757,9 @@ fn record_frame_sample(
     frame_sample: &BenchmarkPhaseFrameSample,
 ) {
     frame_stats.duration_seconds += frame_sample.duration_seconds;
-    frame_stats.frame_time_ms_list.push(frame_sample.duration_ms);
+    frame_stats
+        .frame_time_ms_list
+        .push(frame_sample.duration_ms);
 }
 
 fn build_gameplay_state_report_list(
@@ -750,17 +780,15 @@ fn build_gameplay_state_report_list(
                 None
             }
         })
-        .chain(
-            frame_stats_by_gameplay_state_key_map.keys().filter_map(
-                |(key_lifecycle_phase_name, gameplay_phase_name)| {
-                    if key_lifecycle_phase_name == lifecycle_phase_name {
-                        Some(gameplay_phase_name.clone())
-                    } else {
-                        None
-                    }
-                },
-            ),
-        )
+        .chain(frame_stats_by_gameplay_state_key_map.keys().filter_map(
+            |(key_lifecycle_phase_name, gameplay_phase_name)| {
+                if key_lifecycle_phase_name == lifecycle_phase_name {
+                    Some(gameplay_phase_name.clone())
+                } else {
+                    None
+                }
+            },
+        ))
         .collect::<Vec<_>>();
     gameplay_phase_name_list.sort();
     gameplay_phase_name_list.dedup();

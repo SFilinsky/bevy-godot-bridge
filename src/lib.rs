@@ -6,10 +6,18 @@
 //! library.
 
 // Erase the entire probe, including its arguments, from ordinary release builds.
-#[cfg(any(all(debug_assertions, feature = "dev-observability"), feature = "profiled-release"))]
+#[cfg(any(
+    all(debug_assertions, feature = "dev-observability"),
+    feature = "profiled-release"
+))]
 macro_rules! observe { ($($body:tt)*) => { $($body)* }; }
-#[cfg(not(any(all(debug_assertions, feature = "dev-observability"), feature = "profiled-release")))]
-macro_rules! observe { ($($body:tt)*) => {}; }
+#[cfg(not(any(
+    all(debug_assertions, feature = "dev-observability"),
+    feature = "profiled-release"
+)))]
+macro_rules! observe {
+    ($($body:tt)*) => {};
+}
 
 pub extern crate self as bevy_godot4;
 pub use godot;
@@ -18,18 +26,18 @@ pub use godot;
 pub mod action_framework;
 mod app;
 mod app_action_queue;
-mod bevy_app_subsystem;
 #[cfg(feature = "assets")]
 mod assets;
+mod bevy_app_subsystem;
 mod debug;
 mod dto;
 mod entity_meta;
 mod entity_registry;
 mod erased_gd;
-mod import;
-mod initialization;
 /// Queues Bevy values until Godot reads a batch.
 pub mod export_queue;
+mod import;
+mod initialization;
 mod performance;
 mod required_settings;
 mod scene;
@@ -76,17 +84,16 @@ pub mod prelude {
         subsystems::IdentitySubsystem,
     };
     pub use crate::performance::layer::{
-        clear_benchmark_capture_gameplay_phase_for_current_scope, measure_work, measurements_enabled, MeasurementTimer,
-        record_system_duration_for_current_scope,
-        set_benchmark_capture_phase_for_current_scope, set_benchmark_capture_phase_for_scope,
+        MeasurementTimer, clear_benchmark_capture_gameplay_phase_for_current_scope, measure_work,
+        measurements_enabled, record_system_duration_for_current_scope,
         set_benchmark_capture_gameplay_phase_for_current_scope,
+        set_benchmark_capture_phase_for_current_scope, set_benchmark_capture_phase_for_scope,
     };
     pub use crate::state::{BevyLifecyclePlugin, BevyLifecycleState};
     pub use crate::tools::collect_children;
     pub use bevy_godot4_proc_macros::{
-        ExportComponent, ExportComponentNew, ExportEntity, action_pipeline,
-        bevy_app_profiles,
-        export_composed, export_queue, import_bundle, import_queue,
-        settings_pipeline, with_state_node,
+        ExportComponent, ExportComponentNew, ExportEntity, action_pipeline, bevy_app_profiles,
+        export_composed, export_queue, import_bundle, import_queue, settings_pipeline,
+        with_state_node,
     };
 }

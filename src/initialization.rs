@@ -90,8 +90,10 @@ impl InitializationCoordinator {
         let host_node = host.clone().upcast::<Node>();
         let scene_root = SceneRoot::resolve_as_parent(&host_node)?;
         observe! {
-            use crate::performance::startup::{level_span, Kind};
-            let _lookup = level_span(scene_root.instance_id().to_i64(), Kind::Detail, || "find initialization coordinator".into());
+            use crate::performance::startup::{Kind, level_span};
+            let _lookup = level_span(scene_root.instance_id().to_i64(), Kind::Detail, || {
+                "find initialization coordinator".into()
+            });
         }
         Some(collect_children::<InitializationCoordinator>(
             scene_root.upcast::<Node>(),
@@ -129,7 +131,9 @@ impl InitializationCoordinator {
         let mut coordinator_list = Self::find_for(host).unwrap_or_default();
 
         if coordinator_list.is_empty() {
-            godot_error!("InitializationCoordinator::resolve() failed: no coordinator in SceneRoot.");
+            godot_error!(
+                "InitializationCoordinator::resolve() failed: no coordinator in SceneRoot."
+            );
             return None;
         }
 
@@ -273,8 +277,10 @@ impl InitializationCoordinator {
         // After this loop finishes, queued imports exist but Bevy has not ticked
         // yet. BevyApp will drain those queues on its next process callback.
         observe! {
-            use crate::performance::startup::{level_span, Kind};
-            let level = self.resolve_scene_root().map(|root| root.instance_id().to_i64());
+            use crate::performance::startup::{Kind, level_span};
+            let level = self
+                .resolve_scene_root()
+                .map(|root| root.instance_id().to_i64());
         }
         for phase in [
             InitializationPhase::PreImport,
@@ -282,9 +288,14 @@ impl InitializationCoordinator {
             InitializationPhase::Entity,
         ] {
             self.drain_pending_initializer_registrations();
-            observe! { let _phase = level.and_then(|id| level_span(id, Kind::Stage, || format!("initialize {phase:?}"))); }
+            observe! {
+                let _phase =
+                    level.and_then(|id| level_span(id, Kind::Stage, || format!("initialize {phase:?}")));
+            }
             for mut node in self.collect_initializers_for_phase(phase) {
-                observe! { let _node = level.and_then(|id| level_span(id, Kind::Detail, || node.get_class().to_string())); }
+                observe! {
+                    let _node = level.and_then(|id| level_span(id, Kind::Detail, || node.get_class().to_string()));
+                }
                 initialized_count += 1;
                 node.call(&initialize_method, &[]);
             }
