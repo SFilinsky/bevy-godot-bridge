@@ -4,6 +4,8 @@ use super::{allowed, requested};
 observe! {
     use super::layer::measure_for_scope;
     use super::measurement_gate::collecting;
+    use super::memory::{MemoryReport, Window};
+    use super::startup::take_memory_window;
     use super::startup::{action_accepted, complete, load_span, marker, prepare_load, read};
     use super::startup_summary::Summary;
     use godot::classes::Os;
@@ -145,6 +147,11 @@ pub(crate) struct BenchmarkReport {
         feature = "profiled-release"
     ))]
     pub(crate) startup: Option<Summary>,
+    #[cfg(any(
+        all(debug_assertions, feature = "dev-observability"),
+        feature = "profiled-release"
+    ))]
+    pub(crate) memory: Option<MemoryReport>,
     pub(crate) scene_id: String,
     pub(crate) duration_seconds: f64,
     pub(crate) configured_duration_seconds: f64,
@@ -213,6 +220,11 @@ pub struct BenchmarkSceneDirector {
     #[export]
     initial_phase_name: GString,
 
+    #[cfg(any(
+        all(debug_assertions, feature = "dev-observability"),
+        feature = "profiled-release"
+    ))]
+    memory_window: Option<Window>,
     metrics: Option<Gd<PerformanceMetrics>>,
     elapsed_seconds: f64,
     frame_time_ms_list: Vec<f64>,
@@ -253,6 +265,11 @@ impl INode for BenchmarkSceneDirector {
             start_on_ready: false,
             require_measurement_request: false,
             initial_phase_name: "Loading".into(),
+            #[cfg(any(
+                all(debug_assertions, feature = "dev-observability"),
+                feature = "profiled-release"
+            ))]
+            memory_window: None,
             metrics: None,
             elapsed_seconds: 0.0,
             frame_time_ms_list: Vec::new(),
@@ -289,11 +306,7 @@ impl INode for BenchmarkSceneDirector {
         observe! {
             // Synthetic profiles can start directly, without any player-ready signal.
             if !self.require_measurement_request && self.frame_time_ms_list.is_empty() {
-                complete(
-                    self.performance_scope_id,
-                    "first benchmark frame",
-                    Os::singleton().get_static_memory_usage(),
-                );
+                self.mark_memory_ready("first benchmark frame");
             }
         }
         self.elapsed_seconds += delta_seconds;
@@ -313,11 +326,11 @@ impl INode for BenchmarkSceneDirector {
     }
 
     fn exit_tree(&mut self) {
-        if !self.is_running || self.is_finished {
-            return;
+        if self.is_running && !self.is_finished {
+            self.finish();
         }
-
-        self.finish();
+        self.is_capture_running = false;
+        observe! { self.memory_window = None; }
     }
 }
 
@@ -405,18 +418,14 @@ impl BenchmarkSceneDirector {
     }
 
     #[func]
-    fn startup_ready(&self, _drawn: bool) {
+    fn startup_ready(&mut self, _drawn: bool) {
         observe! {
             let endpoint = if _drawn {
                 "ready frame drawn"
             } else {
                 "ready (headless)"
             };
-            complete(
-                self.performance_scope_id,
-                endpoint,
-                Os::singleton().get_static_memory_usage(),
-            );
+            self.mark_memory_ready(endpoint);
         }
     }
 
@@ -508,9 +517,7 @@ impl BenchmarkSceneDirector {
         self.is_finished = true;
         self.restore_time_scale();
 
-        let captured_system_sample_list =
-            drain_benchmark_capture_for_scope(self.performance_scope_id);
-        let report = self.build_report(captured_system_sample_list);
+        let report = self.build_report();
         let output_path = self.global_output_path();
         let success = match self.write_report(&output_path, &report) {
             Ok(()) => {
@@ -568,10 +575,10 @@ impl BenchmarkSceneDirector {
         Ok(())
     }
 
-    fn build_report(
-        &self,
-        captured_system_sample_list: Vec<BenchmarkSystemSamples>,
-    ) -> BenchmarkReport {
+    fn build_report(&mut self) -> BenchmarkReport {
+        observe! { let memory = self.memory_window.take().map(Window::finish); }
+        let captured_system_sample_list =
+            drain_benchmark_capture_for_scope(self.performance_scope_id);
         let frame_summary = MetricSummary::from_sample_list(&self.frame_time_ms_list);
         let frames_over_budget = FramesOverBudget::from_frame_time_list(&self.frame_time_ms_list);
         let cpu_time_total_ms = captured_system_sample_list
@@ -589,6 +596,11 @@ impl BenchmarkSceneDirector {
                 feature = "profiled-release"
             ))]
             startup: read(self.performance_scope_id, Summary::from_recording),
+            #[cfg(any(
+                all(debug_assertions, feature = "dev-observability"),
+                feature = "profiled-release"
+            ))]
+            memory,
             scene_id: self.scene_id.to_string(),
             duration_seconds: self.elapsed_seconds,
             configured_duration_seconds: self.duration_seconds,
@@ -632,12 +644,37 @@ impl BenchmarkSceneDirector {
         scaled_delta_seconds / time_scale
     }
 
+    #[cfg(any(
+        all(debug_assertions, feature = "dev-observability"),
+        feature = "profiled-release"
+    ))]
+    fn mark_memory_ready(&mut self, endpoint: &'static str) {
+        if let Some(memory) = self
+            .memory_window
+            .as_mut()
+            .and_then(|window| window.mark_ready(Os::singleton().get_static_memory_usage()))
+        {
+            complete(self.performance_scope_id, endpoint, memory);
+        }
+    }
+
     fn start_capture(&mut self) {
         if self.is_capture_running {
             return;
         }
 
         self.performance_scope_id = self.resolve_performance_scope_id();
+        observe! {
+            self.memory_window.get_or_insert_with(|| {
+                take_memory_window(self.performance_scope_id).unwrap_or_else(|| {
+                    let already_ready = read(self.performance_scope_id, |recording| {
+                        recording.endpoint.is_some()
+                    })
+                    .unwrap_or(false);
+                    Window::start(already_ready)
+                })
+            });
+        }
         begin_benchmark_capture_for_scope(self.performance_scope_id, 1.0);
         set_benchmark_capture_phase_for_scope(
             self.performance_scope_id,

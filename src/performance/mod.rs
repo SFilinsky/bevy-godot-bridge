@@ -12,7 +12,7 @@ mod measurement_gate;
 pub(crate) use measurement_gate::{allowed, requested};
 observe! {
     pub(crate) mod startup;
-    mod startup_memory;
+    mod memory;
     mod startup_summary;
 }
 mod benchmark;

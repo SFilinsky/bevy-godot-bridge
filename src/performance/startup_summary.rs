@@ -1,6 +1,6 @@
 //! Condenses repeated calls while keeping the first occurrence of each stage in time order.
+use super::memory::Memory;
 use super::startup::{Kind, Recording};
-use super::startup_memory::Memory;
 use std::collections::{BTreeMap, HashSet};
 use std::thread::ThreadId;
 

@@ -1,5 +1,5 @@
 //! Keeps a bounded timeline for each measured level until its director builds a report.
-use super::startup_memory::Memory;
+use super::memory::{Memory, Window};
 use godot::classes::Time;
 use godot::obj::Singleton;
 use std::collections::HashMap;
@@ -34,6 +34,7 @@ pub(crate) struct Sample {
 pub(crate) struct Recording {
     origin: Instant,
     tree_start: Option<Instant>,
+    memory_window: Option<Window>,
     pub origin_name: &'static str,
     offset: Duration,
     pub samples: Vec<Sample>,
@@ -48,6 +49,7 @@ impl Recording {
         Self {
             origin: Instant::now(),
             tree_start: None,
+            memory_window: None,
             origin_name,
             offset,
             samples: Vec::new(),
@@ -94,8 +96,14 @@ static SESSIONS: LazyLock<Mutex<Sessions>> = LazyLock::new(Mutex::default);
 static OPEN: AtomicBool = AtomicBool::new(false);
 
 fn session(sessions: &Sessions) -> Shared {
+    let mut recording = new_recording(sessions);
+    recording.memory_window = Some(Window::start(false));
+    Arc::new(Mutex::new(recording))
+}
+
+fn new_recording(sessions: &Sessions) -> Recording {
     if sessions.seen_level {
-        Arc::new(Mutex::new(Recording::new("level load", Duration::ZERO)))
+        Recording::new("level load", Duration::ZERO)
     } else {
         // Align the launcher once. All subsequent intervals use the same monotonic clock.
         let launch_offset = env::var("EQUILIBRIA_LAUNCH_UNIX_US")
@@ -109,10 +117,10 @@ fn session(sessions: &Sessions) -> Shared {
             })
             .filter(|elapsed| *elapsed < Duration::from_secs(600));
         if let Some(offset) = launch_offset {
-            return Arc::new(Mutex::new(Recording::new("launcher process start", offset)));
+            return Recording::new("launcher process start", offset);
         }
         let offset = Duration::from_micros(Time::singleton().get_ticks_usec());
-        Arc::new(Mutex::new(Recording::new("Godot engine startup", offset)))
+        Recording::new("Godot engine startup", offset)
     }
 }
 
@@ -261,7 +269,18 @@ pub(crate) fn action_accepted(id: u64) {
     }
 }
 
-pub(crate) fn complete(id: u64, endpoint: &'static str, memory_bytes: u64) {
+pub(crate) fn take_memory_window(app: u64) -> Option<Window> {
+    let sessions = SESSIONS.lock().unwrap();
+    sessions
+        .levels
+        .get(sessions.apps.get(&app)?)?
+        .lock()
+        .unwrap()
+        .memory_window
+        .take()
+}
+
+pub(crate) fn complete(id: u64, endpoint: &'static str, memory: Memory) {
     let sessions = SESSIONS.lock().unwrap();
     if let Some(capture) = sessions
         .apps
@@ -274,7 +293,7 @@ pub(crate) fn complete(id: u64, endpoint: &'static str, memory_bytes: u64) {
         }
         recording.record(endpoint, Kind::Marker, Instant::now(), Duration::ZERO);
         recording.endpoint = Some(endpoint);
-        recording.memory = Some(Memory::at_ready(memory_bytes));
+        recording.memory = Some(memory);
     }
     update_open(&sessions);
 }
