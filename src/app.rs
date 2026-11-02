@@ -5,28 +5,31 @@ use godot::{
     builtin::NodePath,
     classes::{INode, Node},
     obj::{Base, WithBaseField},
-    prelude::{godot_api, GodotClass, Inherits},
+    prelude::{GodotClass, Inherits, godot_api},
 };
 
 use crate::app_action_queue::ActionQueue;
 use crate::import::plugins::IdentitySubsystemPlugin;
 use crate::performance::init_performance_tracing;
-observe! { use crate::performance::{requested, startup::{app_span, attach_app, level_span, Kind}}; }
-use crate::performance::layer::{
-    allocate_app_scope_id, clear_metrics_for_scope, enter_app_scope,
-};
+observe! {
+    use crate::performance::{
+        requested,
+        startup::{Kind, app_span, attach_app, level_span},
+    };
+}
+use crate::performance::layer::{allocate_app_scope_id, clear_metrics_for_scope, enter_app_scope};
 use crate::prelude::*;
 use crate::scene_tree::plugins::SceneTreeSubsystemPlugin;
+use bevy::DefaultPlugins;
 use bevy::prelude::{Fixed, Time, Virtual, World};
 use bevy::time::TimeUpdateStrategy;
-use bevy::DefaultPlugins;
 use bevy_godot4::scene::PackedScenePlugin;
 use godot::global::godot_error;
 use godot::obj::Singleton;
 use godot::prelude::Gd;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
-use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicI64, Ordering};
 
 const VIRTUAL_TIME_MAX_DELTA_MS: f64 = 50.0;
 const BEVY_FIXED_TIMESTEP_HZ: f64 = 8.0;
@@ -222,8 +225,9 @@ impl BevyApp {
         // A profile node may wrap its BevyApp. Search this authored scene, but
         // do not cross into a child scene with its own SceneRoot.
         observe! {
-
-            let _lookup = level_span(scene_root.instance_id().to_i64(), Kind::Detail, || "find Bevy app".into());
+            let _lookup = level_span(scene_root.instance_id().to_i64(), Kind::Detail, || {
+                "find Bevy app".into()
+            });
         }
         let mut apps = SceneRoot::collect_descendants::<BevyApp>(scene_root);
 
@@ -326,7 +330,6 @@ impl BevyApp {
             Err(_) => self.base().clone().upcast(),
         }
     }
-
 }
 
 fn scaled_godot_time_scale() -> f64 {

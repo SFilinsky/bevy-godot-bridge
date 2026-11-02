@@ -112,24 +112,56 @@ fn build_yaml_report(report_data: &BenchmarkReport) -> String {
 observe! {
     fn write_startup(out: &mut String, startup: &Summary) {
         use std::fmt::Write;
-        let _ = writeln!(out, "startup:\n  origin: \"{}\"\n  endpoint: \"{}\"\n  elapsed_ms: {:.3}\n  dropped_samples: {}\n  observed_threads: {}", startup.origin,
-            startup.endpoint.unwrap_or("incomplete"), startup.last_ms, startup.dropped, startup.threads);
-        if let Some(action) = startup.first_action_ms { let _ = writeln!(out, "  first_action_accepted_ms: {action:.3}"); }
+        let _ = writeln!(
+            out,
+            "startup:\n  origin: \"{}\"\n  endpoint: \"{}\"\n  elapsed_ms: {:.3}\n  dropped_samples: {}\n  observed_threads: {}",
+            startup.origin,
+            startup.endpoint.unwrap_or("incomplete"),
+            startup.last_ms,
+            startup.dropped,
+            startup.threads
+        );
+        if let Some(action) = startup.first_action_ms {
+            let _ = writeln!(out, "  first_action_accepted_ms: {action:.3}");
+        }
         if let Some(memory) = startup.memory {
             // Godot release templates can return zero when allocator tracking is unavailable.
             if memory.godot_static > 0 {
-                let _ = writeln!(out, "  godot_static_bytes_at_ready: {}", memory.godot_static);
+                let _ = writeln!(
+                    out,
+                    "  godot_static_bytes_at_ready: {}",
+                    memory.godot_static
+                );
             }
-            if let Some(bytes) = memory.resident { let _ = writeln!(out, "  resident_bytes_at_ready: {bytes}"); }
-            if let Some(bytes) = memory.private_commit { let _ = writeln!(out, "  private_commit_bytes_at_ready: {bytes}"); }
+            if let Some(bytes) = memory.resident {
+                let _ = writeln!(out, "  resident_bytes_at_ready: {bytes}");
+            }
+            if let Some(bytes) = memory.private_commit {
+                let _ = writeln!(out, "  private_commit_bytes_at_ready: {bytes}");
+            }
         }
-        for (name, rows) in [("stages", &startup.stages), ("top_contributors", &startup.contributors)] {
-            if rows.is_empty() { let _ = writeln!(out, "  {name}: []"); continue; }
+        for (name, rows) in [
+            ("stages", &startup.stages),
+            ("top_contributors", &startup.contributors),
+        ] {
+            if rows.is_empty() {
+                let _ = writeln!(out, "  {name}: []");
+                continue;
+            }
             let _ = writeln!(out, "  {name}:");
             for row in rows {
-                let _ = writeln!(out, "    - name: \"{}\"\n      first_ms: {:.3}\n      last_end_ms: {:.3}\n      total_work_ms: {:.3}\n      calls: {}",
-                    yaml_escape(&row.name), row.first_ms, row.end_ms, row.work_ms, row.calls);
-                if let Some(owner) = &row.within { let _ = writeln!(out, "      within: \"{}\"", yaml_escape(owner)); }
+                let _ = writeln!(
+                    out,
+                    "    - name: \"{}\"\n      first_ms: {:.3}\n      last_end_ms: {:.3}\n      total_work_ms: {:.3}\n      calls: {}",
+                    yaml_escape(&row.name),
+                    row.first_ms,
+                    row.end_ms,
+                    row.work_ms,
+                    row.calls
+                );
+                if let Some(owner) = &row.within {
+                    let _ = writeln!(out, "      within: \"{}\"", yaml_escape(owner));
+                }
             }
         }
     }
@@ -179,7 +211,10 @@ fn write_aggregate_report(report: &mut String, aggregate: &BenchmarkAggregateRep
         "{indent}duration_seconds: {:.3}\n",
         aggregate.duration_seconds
     ));
-    report.push_str(&format!("{indent}frames_total: {}\n", aggregate.frames_total));
+    report.push_str(&format!(
+        "{indent}frames_total: {}\n",
+        aggregate.frames_total
+    ));
     report.push_str(&format!(
         "{indent}average_frame_ms: {:.6}\n",
         aggregate.frame_summary.average_ms
@@ -289,5 +324,11 @@ fn write_system_report(report: &mut String, system: &BenchmarkSystemReportStats,
 }
 
 fn yaml_escape(value: &impl ToString) -> String {
-    value.to_string().replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t")
+    value
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }

@@ -1,7 +1,7 @@
 use super::allowed;
 use super::dto::{PerformanceMetrics, SystemPerformanceEntryDto};
 use godot::classes::{Control, INode, Label, Node};
-use godot::global::{godot_error, Error};
+use godot::global::{Error, godot_error};
 use godot::obj::{Base, Gd, NewAlloc};
 use godot::prelude::*;
 
@@ -88,7 +88,10 @@ impl INode for PerformanceHud {
     }
 
     fn ready(&mut self) {
-        if !allowed() { self.base_mut().set_process(false); return; }
+        if !allowed() {
+            self.base_mut().set_process(false);
+            return;
+        }
         self.container = self.resolve_container();
         self.connect_metrics_source();
         self.refresh_now();

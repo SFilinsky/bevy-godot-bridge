@@ -1,21 +1,27 @@
 //! Keeps a bounded timeline for each measured level until its director builds a report.
 use super::startup_memory::Memory;
 use godot::classes::Time;
-use std::env;
-use std::time::{SystemTime, UNIX_EPOCH};
 use godot::obj::Singleton;
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const LIMIT: usize = 16_384;
 pub(crate) type LevelId = i64;
 type Shared = Arc<Mutex<Recording>>;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) enum Kind { Stage, Detail, System, Schedule, Marker }
+pub(crate) enum Kind {
+    Stage,
+    Detail,
+    System,
+    Schedule,
+    Marker,
+}
 
 pub(crate) struct Sample {
     pub name: String,
@@ -39,17 +45,39 @@ pub(crate) struct Recording {
 
 impl Recording {
     fn new(origin_name: &'static str, offset: Duration) -> Self {
-        Self { origin: Instant::now(), tree_start: None, origin_name, offset, samples: Vec::new(), dropped: 0, endpoint: None, memory: None, first_action: None }
+        Self {
+            origin: Instant::now(),
+            tree_start: None,
+            origin_name,
+            offset,
+            samples: Vec::new(),
+            dropped: 0,
+            endpoint: None,
+            memory: None,
+            first_action: None,
+        }
     }
 
     fn record(&mut self, name: &str, kind: Kind, start: Instant, duration: Duration) {
-        if self.endpoint.is_some() { return; }
+        if self.endpoint.is_some() {
+            return;
+        }
         // Reserve space for boundaries even when thousands of systems or nodes ran.
-        let limit = if matches!(kind, Kind::Detail | Kind::System | Kind::Schedule) { LIMIT - 128 } else { LIMIT };
-        if self.samples.len() >= limit { self.dropped += 1; return; }
+        let limit = if matches!(kind, Kind::Detail | Kind::System | Kind::Schedule) {
+            LIMIT - 128
+        } else {
+            LIMIT
+        };
+        if self.samples.len() >= limit {
+            self.dropped += 1;
+            return;
+        }
         self.samples.push(Sample {
-            name: name.to_owned(), at: start.saturating_duration_since(self.origin) + self.offset,
-            duration, kind, thread: thread::current().id(),
+            name: name.to_owned(),
+            at: start.saturating_duration_since(self.origin) + self.offset,
+            duration,
+            kind,
+            thread: thread::current().id(),
         });
     }
 }
@@ -70,9 +98,15 @@ fn session(sessions: &Sessions) -> Shared {
         Arc::new(Mutex::new(Recording::new("level load", Duration::ZERO)))
     } else {
         // Align the launcher once. All subsequent intervals use the same monotonic clock.
-        let launch_offset = env::var("EQUILIBRIA_LAUNCH_UNIX_US").ok()
+        let launch_offset = env::var("EQUILIBRIA_LAUNCH_UNIX_US")
+            .ok()
             .and_then(|s| s.parse::<u64>().ok())
-            .and_then(|us| SystemTime::now().duration_since(UNIX_EPOCH).ok()?.checked_sub(Duration::from_micros(us)))
+            .and_then(|us| {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .ok()?
+                    .checked_sub(Duration::from_micros(us))
+            })
             .filter(|elapsed| *elapsed < Duration::from_secs(600));
         if let Some(offset) = launch_offset {
             return Arc::new(Mutex::new(Recording::new("launcher process start", offset)));
@@ -89,7 +123,10 @@ pub(crate) fn prepare_load() {
 
 pub(crate) fn begin_level(id: LevelId) {
     let mut sessions = SESSIONS.lock().unwrap();
-    let capture = sessions.pending.take().unwrap_or_else(|| session(&sessions));
+    let capture = sessions
+        .pending
+        .take()
+        .unwrap_or_else(|| session(&sessions));
     capture.lock().unwrap().tree_start = Some(Instant::now());
     sessions.levels.insert(id, capture);
     sessions.seen_level = true;
@@ -108,11 +145,15 @@ pub(crate) fn tree_ready(id: LevelId) {
 
 pub(crate) fn attach_app(id: u64, level: LevelId) {
     let mut sessions = SESSIONS.lock().unwrap();
-    if sessions.levels.contains_key(&level) { sessions.apps.insert(id, level); }
+    if sessions.levels.contains_key(&level) {
+        sessions.apps.insert(id, level);
+    }
 }
 
 fn for_app(app: u64) -> Option<Shared> {
-    if !OPEN.load(Ordering::Relaxed) { return None; }
+    if !OPEN.load(Ordering::Relaxed) {
+        return None;
+    }
     let sessions = SESSIONS.lock().unwrap();
     sessions.levels.get(sessions.apps.get(&app)?).cloned()
 }
@@ -127,18 +168,30 @@ pub(crate) struct Span {
 impl Drop for Span {
     fn drop(&mut self) {
         let duration = self.start.elapsed();
-        self.capture.lock().unwrap().record(&self.name, self.kind, self.start, duration);
+        self.capture
+            .lock()
+            .unwrap()
+            .record(&self.name, self.kind, self.start, duration);
     }
 }
 
 fn span(capture: Option<Shared>, kind: Kind, name: impl FnOnce() -> String) -> Option<Span> {
     let capture = capture?;
-    if capture.lock().unwrap().endpoint.is_some() { return None; }
-    Some(Span { capture, kind, name: name(), start: Instant::now() })
+    if capture.lock().unwrap().endpoint.is_some() {
+        return None;
+    }
+    Some(Span {
+        capture,
+        kind,
+        name: name(),
+        start: Instant::now(),
+    })
 }
 
 pub(crate) fn level_span(id: LevelId, kind: Kind, name: impl FnOnce() -> String) -> Option<Span> {
-    if !OPEN.load(Ordering::Relaxed) { return None; }
+    if !OPEN.load(Ordering::Relaxed) {
+        return None;
+    }
     let capture = SESSIONS.lock().unwrap().levels.get(&id).cloned();
     span(capture, kind, name)
 }
@@ -150,7 +203,10 @@ pub(crate) fn load_span(name: impl FnOnce() -> String) -> Option<Span> {
 
 pub(crate) fn detail(id: u64, name: &str, start: Instant, end: Instant) {
     if let Some(capture) = for_app(id) {
-        capture.lock().unwrap().record(name, Kind::Detail, start, end - start);
+        capture
+            .lock()
+            .unwrap()
+            .record(name, Kind::Detail, start, end - start);
     }
 }
 
@@ -160,24 +216,44 @@ pub(crate) fn app_span(id: u64, name: &'static str) -> Option<Span> {
 
 pub(crate) fn system(id: u64, name: &str, start: Instant, end: Instant, is_system: bool) {
     if let Some(capture) = for_app(id) {
-        let kind = if is_system { Kind::System } else { Kind::Schedule };
-        capture.lock().unwrap().record(name, kind, start, end - start);
+        let kind = if is_system {
+            Kind::System
+        } else {
+            Kind::Schedule
+        };
+        capture
+            .lock()
+            .unwrap()
+            .record(name, kind, start, end - start);
     }
 }
 
 pub(crate) fn marker(id: u64, name: &str) {
     if let Some(capture) = for_app(id) {
-        capture.lock().unwrap().record(name, Kind::Marker, Instant::now(), Duration::ZERO);
+        capture
+            .lock()
+            .unwrap()
+            .record(name, Kind::Marker, Instant::now(), Duration::ZERO);
     }
 }
 
 fn update_open(sessions: &Sessions) {
-    OPEN.store(sessions.levels.values().any(|capture| capture.lock().unwrap().endpoint.is_none()), Ordering::Relaxed);
+    OPEN.store(
+        sessions
+            .levels
+            .values()
+            .any(|capture| capture.lock().unwrap().endpoint.is_none()),
+        Ordering::Relaxed,
+    );
 }
 
 pub(crate) fn action_accepted(id: u64) {
     let sessions = SESSIONS.lock().unwrap();
-    if let Some(capture) = sessions.apps.get(&id).and_then(|level| sessions.levels.get(level)) {
+    if let Some(capture) = sessions
+        .apps
+        .get(&id)
+        .and_then(|level| sessions.levels.get(level))
+    {
         let mut recording = capture.lock().unwrap();
         if recording.first_action.is_none() {
             recording.first_action = Some(recording.origin.elapsed() + recording.offset);
@@ -187,9 +263,15 @@ pub(crate) fn action_accepted(id: u64) {
 
 pub(crate) fn complete(id: u64, endpoint: &'static str, memory_bytes: u64) {
     let sessions = SESSIONS.lock().unwrap();
-    if let Some(capture) = sessions.apps.get(&id).and_then(|level| sessions.levels.get(level)) {
+    if let Some(capture) = sessions
+        .apps
+        .get(&id)
+        .and_then(|level| sessions.levels.get(level))
+    {
         let mut recording = capture.lock().unwrap();
-        if recording.endpoint.is_some() { return; }
+        if recording.endpoint.is_some() {
+            return;
+        }
         recording.record(endpoint, Kind::Marker, Instant::now(), Duration::ZERO);
         recording.endpoint = Some(endpoint);
         recording.memory = Some(Memory::at_ready(memory_bytes));
@@ -199,7 +281,11 @@ pub(crate) fn complete(id: u64, endpoint: &'static str, memory_bytes: u64) {
 
 pub(crate) fn read<T>(app: u64, reader: impl FnOnce(&Recording) -> T) -> Option<T> {
     let sessions = SESSIONS.lock().unwrap();
-    let recording = sessions.levels.get(sessions.apps.get(&app)?)?.lock().unwrap();
+    let recording = sessions
+        .levels
+        .get(sessions.apps.get(&app)?)?
+        .lock()
+        .unwrap();
     Some(reader(&recording))
 }
 
@@ -221,19 +307,39 @@ mod tests {
         let mut capture = Recording::new("test", Duration::ZERO);
         let start = capture.origin;
         // Children finish first. Output order follows entry, even across overlapping work.
-        capture.record("lookup", Kind::Detail, start + Duration::from_millis(2), Duration::from_millis(4));
-        capture.record("construct app", Kind::Stage, start + Duration::from_millis(1), Duration::from_millis(7));
-        capture.record("attach scene", Kind::Stage, start, Duration::from_millis(10));
+        capture.record(
+            "lookup",
+            Kind::Detail,
+            start + Duration::from_millis(2),
+            Duration::from_millis(4),
+        );
+        capture.record(
+            "construct app",
+            Kind::Stage,
+            start + Duration::from_millis(1),
+            Duration::from_millis(7),
+        );
+        capture.record(
+            "attach scene",
+            Kind::Stage,
+            start,
+            Duration::from_millis(10),
+        );
         let result = Summary::from_recording(&capture);
         assert_eq!(result.stages[0].name, "attach scene");
-        assert_eq!(result.contributors[0].within.as_deref(), Some("construct app"));
+        assert_eq!(
+            result.contributors[0].within.as_deref(),
+            Some("construct app")
+        );
         assert_eq!(result.last_ms, 10.0);
     }
 
     #[test]
     fn full_detail_buffer_preserves_readiness_and_closed_capture() {
         let mut capture = Recording::new("test", Duration::ZERO);
-        for _ in 0..LIMIT { capture.record("lookup", Kind::Detail, Instant::now(), Duration::ZERO); }
+        for _ in 0..LIMIT {
+            capture.record("lookup", Kind::Detail, Instant::now(), Duration::ZERO);
+        }
         assert_eq!(capture.dropped, 128);
         capture.record("ready", Kind::Marker, Instant::now(), Duration::ZERO);
         capture.endpoint = Some("ready");
