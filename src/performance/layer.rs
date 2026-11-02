@@ -1,5 +1,7 @@
 //! The code that collects system timings for each Bevy app.
 
+use super::policy::{collecting, enable_collection};
+observe! { use super::startup::{detail, marker, system}; }
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -105,6 +107,42 @@ pub struct SystemMetricsEntry {
 
 /// Identifies the timings that belong to one Bevy app in a Godot scene.
 pub type AppScopeId = u64;
+
+/// Use when a feature batches many small timings into its existing metric.
+pub fn measurements_enabled() -> bool { collecting() }
+
+pub struct MeasurementTimer(Option<Instant>);
+
+impl MeasurementTimer {
+    #[inline]
+    pub fn start() -> Self { Self(measurements_enabled().then(Instant::now)) }
+    #[inline]
+    pub fn elapsed(&self) -> Duration { self.0.map(|start| start.elapsed()).unwrap_or_default() }
+}
+
+/// Times a synchronous step inside a Bevy update. Runs the work once in every build.
+#[inline]
+pub fn measure_work<T>(_name: &'static str, work: impl FnOnce() -> T) -> T {
+    observe! {
+        if collecting() {
+            return measure_for_scope(CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed), _name, work);
+        }
+    }
+    work()
+}
+
+observe! {
+    pub(super) fn measure_for_scope<T>(id: AppScopeId, name: &str, work: impl FnOnce() -> T) -> T {
+        if !collecting() { return work(); }
+        let start = Instant::now();
+        let result = work();
+        let end = Instant::now();
+        detail(id, name, start, end);
+        let info = SpanInfo { name: Some(name.to_owned()), is_system: true, is_detail: true, is_schedule: false };
+        record_system_duration(id, name.to_owned(), info, (end - start).as_secs_f64(), end);
+        result
+    }
+}
 /// Timings recorded when there is no active Godot-hosted Bevy app.
 pub const GLOBAL_APP_SCOPE_ID: AppScopeId = 0;
 
@@ -131,6 +169,7 @@ const UNASSIGNED_BENCHMARK_PHASE_NAME: &str = "Unassigned";
 /// your code, add one combined result here, and avoid making the measurement
 /// noticeably change the work being measured.
 pub fn record_system_duration_for_current_scope(name: &str, duration: Duration) {
+    if !collecting() { return; }
     let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
     record_system_duration(
         scope_id,
@@ -275,6 +314,9 @@ pub fn begin_benchmark_capture_for_scope(scope_id: AppScopeId, time_scale: f64) 
 
 /// Labels new benchmark samples with the current bridge step.
 pub fn set_benchmark_capture_phase_for_current_scope(phase_name: impl Into<String>) {
+    if !collecting() { return; }
+    let phase_name = phase_name.into();
+    observe! { marker(CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed), &phase_name); }
     let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
     set_benchmark_capture_phase_for_scope(scope_id, phase_name);
 }
@@ -284,6 +326,7 @@ pub fn set_benchmark_capture_phase_for_scope(
     scope_id: AppScopeId,
     phase_name: impl Into<String>,
 ) {
+    if !collecting() { return; }
     BENCHMARK_CAPTURE_PHASE_BY_SCOPE.insert(
         scope_id,
         BenchmarkPhaseKey::from_lifecycle_phase_name(phase_name),
@@ -292,6 +335,7 @@ pub fn set_benchmark_capture_phase_for_scope(
 
 /// Labels new benchmark samples with the current game step.
 pub fn set_benchmark_capture_gameplay_phase_for_current_scope(phase_name: impl Into<String>) {
+    if !collecting() { return; }
     let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
     set_benchmark_capture_gameplay_phase_for_scope(scope_id, phase_name);
 }
@@ -315,6 +359,7 @@ pub fn set_benchmark_capture_gameplay_phase_for_scope(
 
 /// Removes the game-step label from new benchmark samples.
 pub fn clear_benchmark_capture_gameplay_phase_for_current_scope() {
+    if !collecting() { return; }
     let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
     clear_benchmark_capture_gameplay_phase_for_scope(scope_id);
 }
@@ -419,6 +464,7 @@ fn sanitized_benchmark_time_scale(time_scale: f64) -> f64 {
 /// Call this before creating or running a Bevy [`App`]. Calling it again does
 /// nothing.
 pub fn init_performance_tracing() {
+    if !enable_collection() { return; }
     static INSTALLED: Lazy<()> = Lazy::new(|| {
         let subscriber = tracing_subscriber::registry().with(SystemPerformanceLayer);
         if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
@@ -696,7 +742,8 @@ where
                 .map(|scope| scope.0)
                 .unwrap_or(GLOBAL_APP_SCOPE_ID);
             let now = Instant::now();
-            (start.elapsed().as_secs_f64(), now, scope_id)
+            observe! { system(scope_id, &key, start, now, info.is_system); }
+            ((now - start).as_secs_f64(), now, scope_id)
         };
 
         record_system_duration(scope_id, key, info, elapsed, now);
