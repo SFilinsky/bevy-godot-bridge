@@ -64,16 +64,20 @@ impl Recording {
         if self.endpoint.is_some() {
             return;
         }
-        // Reserve space for boundaries even when thousands of systems or nodes ran.
+        // Keep space for stages and markers, including one slot only completion can use.
         let limit = if matches!(kind, Kind::Detail | Kind::System | Kind::Schedule) {
             LIMIT - 128
         } else {
-            LIMIT
+            LIMIT - 1
         };
         if self.samples.len() >= limit {
             self.dropped += 1;
             return;
         }
+        self.push_sample(name, kind, start, duration);
+    }
+
+    fn push_sample(&mut self, name: &str, kind: Kind, start: Instant, duration: Duration) {
         self.samples.push(Sample {
             name: name.to_owned(),
             at: start.saturating_duration_since(self.origin) + self.offset,
@@ -81,6 +85,15 @@ impl Recording {
             kind,
             thread: thread::current().id(),
         });
+    }
+
+    fn complete(&mut self, endpoint: &'static str, at: Instant, memory: Memory) {
+        if self.endpoint.is_some() {
+            return;
+        }
+        self.push_sample(endpoint, Kind::Marker, at, Duration::ZERO);
+        self.endpoint = Some(endpoint);
+        self.memory = Some(memory);
     }
 }
 
@@ -288,12 +301,7 @@ pub(crate) fn complete(id: u64, endpoint: &'static str, memory: Memory) {
         .and_then(|level| sessions.levels.get(level))
     {
         let mut recording = capture.lock().unwrap();
-        if recording.endpoint.is_some() {
-            return;
-        }
-        recording.record(endpoint, Kind::Marker, Instant::now(), Duration::ZERO);
-        recording.endpoint = Some(endpoint);
-        recording.memory = Some(memory);
+        recording.complete(endpoint, Instant::now(), memory);
     }
     update_open(&sessions);
 }
@@ -318,7 +326,7 @@ pub(crate) fn end_level(id: LevelId) {
 #[cfg(test)]
 mod tests {
     use super::{Kind, LIMIT, Recording};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     #[test]
     fn summary_orders_nested_work_by_start_and_preserves_overlap() {
@@ -354,17 +362,33 @@ mod tests {
     }
 
     #[test]
-    fn full_detail_buffer_preserves_readiness_and_closed_capture() {
-        let mut capture = Recording::new("test", Duration::ZERO);
+    fn full_buffer_preserves_readiness_and_closed_capture() {
+        use super::super::memory::Memory;
+        use super::super::startup_summary::Summary;
+
+        let mut capture = Recording::new("test", Duration::from_secs(2));
+        let start = capture.origin;
+        // Exhaust the detail allowance and then fill every remaining stage slot.
         for _ in 0..LIMIT {
-            capture.record("lookup", Kind::Detail, Instant::now(), Duration::ZERO);
+            capture.record("lookup", Kind::Detail, start, Duration::ZERO);
         }
-        assert_eq!(capture.dropped, 128);
-        capture.record("ready", Kind::Marker, Instant::now(), Duration::ZERO);
-        capture.endpoint = Some("ready");
-        let count = capture.samples.len();
-        capture.record("late", Kind::Stage, Instant::now(), Duration::ZERO);
-        assert_eq!(capture.samples.len(), count);
-        assert_eq!(capture.samples.last().unwrap().name, "ready");
+        for _ in 0..128 {
+            capture.record("update", Kind::Stage, start, Duration::ZERO);
+        }
+        let memory = Memory {
+            godot_static: 0,
+            resident: None,
+            private_commit: None,
+        };
+        capture.complete("ready", start + Duration::from_secs(5), memory);
+        capture.complete("second ready", start + Duration::from_secs(6), memory);
+        capture.record("late", Kind::Stage, start, Duration::ZERO);
+
+        let summary = Summary::from_recording(&capture);
+        assert_eq!(summary.endpoint, Some("ready"));
+        assert_eq!(summary.last_ms, 7000.0);
+        assert!(summary.stages.iter().any(|row| row.name == "ready"));
+        assert_eq!(capture.samples.len(), LIMIT);
+        assert_eq!(capture.dropped, 129);
     }
 }
