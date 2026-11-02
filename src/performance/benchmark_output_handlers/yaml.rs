@@ -1,3 +1,4 @@
+observe! { use crate::performance::startup_summary::Summary; }
 use super::BenchmarkOutputHandler;
 use crate::performance::benchmark::{
     BenchmarkAggregateReport, BenchmarkGameplayStateReport, BenchmarkPhaseReport, BenchmarkReport,
@@ -92,6 +93,13 @@ fn build_yaml_report(report_data: &BenchmarkReport) -> String {
         "  refresh_interval_seconds: {:.3}\n",
         report_data.refresh_interval_seconds
     ));
+    observe! {
+        if let Some(startup) = &report_data.startup {
+            write_startup(&mut report, startup);
+        } else {
+            report.push_str("startup:\n  endpoint: \"capture not requested before level entry\"\n");
+        }
+    }
     report.push_str("phases:\n");
 
     for phase_report in &report_data.phase_report_list {
@@ -99,6 +107,29 @@ fn build_yaml_report(report_data: &BenchmarkReport) -> String {
     }
 
     report
+}
+
+observe! {
+    fn write_startup(out: &mut String, startup: &Summary) {
+        use std::fmt::Write;
+        let _ = writeln!(out, "startup:\n  origin: \"{}\"\n  endpoint: \"{}\"\n  elapsed_ms: {:.3}\n  dropped_samples: {}\n  observed_threads: {}", startup.origin,
+            startup.endpoint.unwrap_or("incomplete"), startup.last_ms, startup.dropped, startup.threads);
+        if let Some(action) = startup.first_action_ms { let _ = writeln!(out, "  first_action_accepted_ms: {action:.3}"); }
+        if let Some(memory) = startup.memory {
+            let _ = writeln!(out, "  godot_static_bytes_at_ready: {}", memory.godot_static);
+            if let Some(bytes) = memory.resident { let _ = writeln!(out, "  resident_bytes_at_ready: {bytes}"); }
+            if let Some(bytes) = memory.private_commit { let _ = writeln!(out, "  private_commit_bytes_at_ready: {bytes}"); }
+        }
+        for (name, rows) in [("stages", &startup.stages), ("top_contributors", &startup.contributors)] {
+            if rows.is_empty() { let _ = writeln!(out, "  {name}: []"); continue; }
+            let _ = writeln!(out, "  {name}:");
+            for row in rows {
+                let _ = writeln!(out, "    - name: \"{}\"\n      first_ms: {:.3}\n      last_end_ms: {:.3}\n      total_work_ms: {:.3}\n      calls: {}",
+                    yaml_escape(&row.name), row.first_ms, row.end_ms, row.work_ms, row.calls);
+                if let Some(owner) = &row.within { let _ = writeln!(out, "      within: \"{}\"", yaml_escape(owner)); }
+            }
+        }
+    }
 }
 
 fn write_phase_report(report: &mut String, phase_report: &BenchmarkPhaseReport) {
