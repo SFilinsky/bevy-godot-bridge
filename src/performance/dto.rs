@@ -1,5 +1,6 @@
 //! Godot objects for reading Bevy system timings.
 
+use super::allowed;
 use godot::builtin::{Array, GString};
 use godot::classes::{INode, Node, RefCounted};
 use godot::obj::{Base, Gd, NewGd};
@@ -101,6 +102,10 @@ impl INode for PerformanceMetrics {
             time_accum: 0.0,
             base,
         }
+    }
+
+    fn ready(&mut self) {
+        if !allowed() { self.base_mut().set_process(false); }
     }
 
     fn process(&mut self, delta_seconds: f64) {

@@ -89,6 +89,10 @@ impl InitializationCoordinator {
     {
         let host_node = host.clone().upcast::<Node>();
         let scene_root = SceneRoot::resolve_as_parent(&host_node)?;
+        observe! {
+            use crate::performance::startup::{level_span, Kind};
+            let _lookup = level_span(scene_root.instance_id().to_i64(), Kind::Detail, || "find initialization coordinator".into());
+        }
         Some(collect_children::<InitializationCoordinator>(
             scene_root.upcast::<Node>(),
             true,
@@ -268,13 +272,19 @@ impl InitializationCoordinator {
         // register and expose initialize(); they do not decide startup timing.
         // After this loop finishes, queued imports exist but Bevy has not ticked
         // yet. BevyApp will drain those queues on its next process callback.
+        observe! {
+            use crate::performance::startup::{level_span, Kind};
+            let level = self.resolve_scene_root().map(|root| root.instance_id().to_i64());
+        }
         for phase in [
             InitializationPhase::PreImport,
             InitializationPhase::Configuration,
             InitializationPhase::Entity,
         ] {
             self.drain_pending_initializer_registrations();
+            observe! { let _phase = level.and_then(|id| level_span(id, Kind::Stage, || format!("initialize {phase:?}"))); }
             for mut node in self.collect_initializers_for_phase(phase) {
+                observe! { let _node = level.and_then(|id| level_span(id, Kind::Detail, || node.get_class().to_string())); }
                 initialized_count += 1;
                 node.call(&initialize_method, &[]);
             }
