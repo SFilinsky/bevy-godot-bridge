@@ -1,5 +1,6 @@
 pub use crate::bevy_app_subsystem::BevyAppSubsystem;
 use crate::bevy_app_subsystem::{BevyAppHostPlugin, BevyAppIdAllocatorRef};
+use crate::scene::registration::scene_services;
 use bevy::app::App;
 use godot::{
     builtin::NodePath,
@@ -222,14 +223,13 @@ impl BevyApp {
             return Err(BevyAppLookupError::MissingSceneRoot);
         };
 
-        // A profile node may wrap its BevyApp. Search this authored scene, but
-        // do not cross into a child scene with its own SceneRoot.
+        // Profiles may wrap the app. Its nearest scene root determines which level owns it.
         observe! {
             let _lookup = level_span(scene_root.instance_id().to_i64(), Kind::Detail, || {
                 "find Bevy app".into()
             });
         }
-        let mut apps = SceneRoot::collect_descendants::<BevyApp>(scene_root);
+        let mut apps = scene_services::<Self>(&scene_root, host);
 
         if apps.is_empty() {
             return Err(BevyAppLookupError::MissingUnderSceneRoot);
@@ -248,6 +248,9 @@ impl BevyApp {
         while let Some(node) = cur {
             if let Ok(app) = node.clone().try_cast::<BevyApp>() {
                 return Ok(app);
+            }
+            if node.clone().try_cast::<SceneRoot>().is_ok() {
+                break;
             }
             cur = node.get_parent();
         }
@@ -345,6 +348,7 @@ fn scaled_godot_time_scale() -> f64 {
 #[godot_api]
 impl INode for BevyApp {
     fn init(base: Base<Self::Base>) -> Self {
+        register_service::<Self>(&base);
         Self {
             app: None,
             app_builder: None,

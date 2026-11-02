@@ -64,6 +64,7 @@ pub mod prelude {
     pub use super::required_settings::RequiredSettings;
     pub use super::scene::GodotScene;
     pub use super::scene::node_registry::{NodeRegistry, RegistryError};
+    pub use super::scene::registration::{child_services, register_service};
     pub use super::scene::root_scripts::RootScripts;
     pub use super::scene::scene_root::SceneRoot;
     pub use super::scene_tree::SceneTreeSubsystem;

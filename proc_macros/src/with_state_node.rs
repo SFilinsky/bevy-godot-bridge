@@ -8,8 +8,9 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::{
+    Ident, Path, Result, Token,
     parse::{Parse, ParseStream},
-    parse_macro_input, Ident, Path, Result, Token,
+    parse_macro_input,
 };
 
 struct Spec {
@@ -149,7 +150,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     return None;
                 };
 
-                let mut found = bevy_godot4::prelude::collect_children::<#state>(app.upcast::<Node>(), false);
+                use bevy_godot4::prelude::child_services;
+                let mut found = child_services::<Self>(app.upcast::<Node>());
 
                 if found.len() > 1 {
                     panic!(
@@ -227,8 +229,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     return None;
                 };
 
-                let owner = bevy_godot4::prelude::BevyApp::resolve(&entity_meta.clone().upcast::<Node>()).ok()?;
-                let store = Self::resolve(owner.upcast::<Node>())?;
+                let store = Self::resolve(entity_meta.clone().upcast::<Node>())?;
 
                 if store.bind().implements(entity_id) {
                     Some(store)
@@ -242,6 +243,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
         #[godot_api]
         impl INode for #state {
             fn init(base: Base<Node>) -> Self {
+                use bevy_godot4::prelude::register_service;
+                register_service::<Self>(&base);
                 Self {
                     entries: std::collections::HashMap::new(),
                     base,
