@@ -116,7 +116,10 @@ observe! {
             startup.endpoint.unwrap_or("incomplete"), startup.last_ms, startup.dropped, startup.threads);
         if let Some(action) = startup.first_action_ms { let _ = writeln!(out, "  first_action_accepted_ms: {action:.3}"); }
         if let Some(memory) = startup.memory {
-            let _ = writeln!(out, "  godot_static_bytes_at_ready: {}", memory.godot_static);
+            // Godot release templates can return zero when allocator tracking is unavailable.
+            if memory.godot_static > 0 {
+                let _ = writeln!(out, "  godot_static_bytes_at_ready: {}", memory.godot_static);
+            }
             if let Some(bytes) = memory.resident { let _ = writeln!(out, "  resident_bytes_at_ready: {bytes}"); }
             if let Some(bytes) = memory.private_commit { let _ = writeln!(out, "  private_commit_bytes_at_ready: {bytes}"); }
         }
@@ -286,5 +289,5 @@ fn write_system_report(report: &mut String, system: &BenchmarkSystemReportStats,
 }
 
 fn yaml_escape(value: &impl ToString) -> String {
-    value.to_string().replace('\\', "\\\\").replace('"', "\\\"")
+    value.to_string().replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t")
 }
