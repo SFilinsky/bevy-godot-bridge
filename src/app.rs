@@ -1,6 +1,6 @@
 pub use crate::bevy_app_subsystem::BevyAppSubsystem;
 use crate::bevy_app_subsystem::{BevyAppHostPlugin, BevyAppIdAllocatorRef};
-use crate::scene::registration::scene_services;
+use crate::scene::registration::{register_level_service_on_entry, scene_services};
 use bevy::app::App;
 use godot::{
     builtin::NodePath,
@@ -348,7 +348,7 @@ fn scaled_godot_time_scale() -> f64 {
 #[godot_api]
 impl INode for BevyApp {
     fn init(base: Base<Self::Base>) -> Self {
-        register_service::<Self>(&base);
+        register_level_service_on_entry(&base);
         Self {
             app: None,
             app_builder: None,

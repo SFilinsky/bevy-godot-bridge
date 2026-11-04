@@ -243,8 +243,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
         #[godot_api]
         impl INode for #state {
             fn init(base: Base<Node>) -> Self {
-                use bevy_godot4::prelude::register_service;
-                register_service::<Self>(&base);
+                use bevy_godot4::prelude::register_store_on_entry;
+                register_store_on_entry(&base);
                 Self {
                     entries: std::collections::HashMap::new(),
                     base,

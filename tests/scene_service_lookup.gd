@@ -18,12 +18,39 @@ class Initializer extends Node:
 		calls += 1
 
 
+class MountDuringEntry extends Node:
+	var profile: PackedScene
+	var found := false
+
+	func _enter_tree() -> void:
+		# The level snapshot predates this newly built branch.
+		var branch := Node.new()
+		var consumer := EarlyConsumer.new()
+		var provider := profile.instantiate()
+		consumer.expected = provider.get_node("BevyApp") as BevyApp
+		branch.add_child(consumer)
+		branch.add_child(provider)
+		add_child(branch)
+		found = consumer.found_during_entry
+
+
 func _initialize() -> void:
 	_run.call_deferred()
 
 
 func _run() -> void:
 	var profile := load(OS.get_cmdline_user_args()[0]) as PackedScene
+	var mounting_level := SceneRoot.new()
+	var mounting := MountDuringEntry.new()
+	mounting.profile = profile
+	mounting_level.add_child(mounting)
+	root.add_child(mounting_level)
+	if not mounting.found:
+		push_error("New provider mounted during level entry was missed")
+		mounting_level.free()
+		quit(1)
+		return
+	mounting_level.free()
 	var outer := SceneRoot.new()
 	var wrapper := Node.new()
 	var consumer := EarlyConsumer.new()
@@ -42,6 +69,11 @@ func _run() -> void:
 	var ok := BevyApp.resolve_or_null(consumer) == consumer.expected
 	root.add_child(outer)
 	ok = ok and consumer.found_during_entry and BevyApp.resolve_or_null(nested) == nested_app
+	# Warm typed lookup must see removal and later re-registration of its class.
+	NodeRegistry.unregister(consumer.expected)
+	ok = ok and BevyApp.resolve_or_null(consumer) == null
+	NodeRegistry.register_level_singleton(consumer.expected)
+	ok = ok and BevyApp.resolve_or_null(consumer) == consumer.expected
 
 	# A mounted subtree may contain an app after an early consumer.
 	var second := SceneRoot.new()

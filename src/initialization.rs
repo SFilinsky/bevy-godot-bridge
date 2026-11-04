@@ -1,7 +1,7 @@
 //! Starts Godot scene setup before the first Bevy update.
 
-use crate::prelude::{BevyApp, SceneRoot, register_service};
-use crate::scene::registration::scene_services;
+use crate::prelude::{BevyApp, SceneRoot};
+use crate::scene::registration::{register_level_service_on_entry, scene_services};
 use crate::tools::collect_children;
 use godot::builtin::StringName;
 use godot::classes::{INode, Node};
@@ -320,7 +320,7 @@ impl InitializationCoordinator {
 #[godot_api]
 impl INode for InitializationCoordinator {
     fn init(base: Base<Node>) -> Self {
-        register_service::<Self>(&base);
+        register_level_service_on_entry(&base);
         Self {
             enabled: true,
             did_initialize: false,
