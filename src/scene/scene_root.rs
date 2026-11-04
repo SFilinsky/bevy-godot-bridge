@@ -5,6 +5,7 @@ use crate::prelude::{BevyApp, InitializationCoordinator};
 use godot::classes::notify::NodeNotification;
 use godot::obj::InstanceId;
 use godot::prelude::*;
+use std::collections::HashMap;
 observe! {
     use crate::performance::requested;
     use crate::performance::startup::{begin_level, end_level, tree_ready};
@@ -15,6 +16,7 @@ observe! {
 #[class(init, base=Node)]
 pub struct SceneRoot {
     pub(super) entering_services: Option<Vec<InstanceId>>,
+    pub(super) entering_children: Option<HashMap<InstanceId, i32>>,
     #[base]
     base: Base<Node>,
 }
@@ -89,13 +91,27 @@ impl INode for SceneRoot {
                         .map(Gd::instance_id),
                 );
                 self.entering_services = Some(ids);
+                // Remember the authored shape once. Early lookup can detect branches
+                // added by entry callbacks without rediscovering an unchanged level.
+                let mut child_map = HashMap::new();
+                let mut pending_list = vec![branch];
+                while let Some(node) = pending_list.pop() {
+                    let child_list: Vec<_> = node.get_children().iter_shared().collect();
+                    child_map.insert(node.instance_id(), node.get_child_count());
+                    pending_list.extend(child_list);
+                }
+                self.entering_children = Some(child_map);
             }
-            NodeNotification::POST_ENTER_TREE => self.entering_services = None,
+            NodeNotification::POST_ENTER_TREE => {
+                self.entering_services = None;
+                self.entering_children = None;
+            }
             NodeNotification::READY => {
                 observe! { tree_ready(self.to_gd().instance_id().to_i64()); }
             }
             NodeNotification::EXIT_TREE => {
                 self.entering_services = None;
+                self.entering_children = None;
                 observe! { end_level(self.to_gd().instance_id().to_i64()); }
             }
             _ => {}
