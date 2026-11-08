@@ -12,7 +12,9 @@ use godot::{
 use crate::app_action_queue::ActionQueue;
 use crate::import::plugins::IdentitySubsystemPlugin;
 use crate::performance::init_performance_tracing;
+use crate::performance::update_snapshot::BevyUpdateSnapshot;
 observe! {
+    use crate::performance::{allowed, update_history::UpdateHistory};
     use crate::performance::{
         requested,
         startup::{Kind, app_span, attach_app, level_span},
@@ -91,6 +93,11 @@ pub struct BevyApp {
 
     next_entity_id: Arc<AtomicI64>,
     performance_scope_id: u64,
+    #[cfg(any(
+        all(debug_assertions, feature = "dev-observability"),
+        feature = "profiled-release"
+    ))]
+    update_history: UpdateHistory,
     // Scene-authored import nodes must enqueue their startup data before Bevy's
     // first update. This gate is released by InitializationCoordinator after it
     // calls all registered Godot initializers.
@@ -106,6 +113,19 @@ pub struct BevyApp {
 }
 
 impl BevyApp {
+    /// Raw update observations for independent readers; absent from production collection.
+    pub(crate) fn update_timings(&self, after_sequence: i64) -> Gd<BevyUpdateSnapshot> {
+        observe! { return BevyUpdateSnapshot::read(&self.update_history, after_sequence); }
+        #[cfg(not(any(
+            all(debug_assertions, feature = "dev-observability"),
+            feature = "profiled-release"
+        )))]
+        {
+            let _ = after_sequence;
+            BevyUpdateSnapshot::unavailable()
+        }
+    }
+
     /// Sets the function that creates this node's fixed Bevy setup.
     ///
     /// A generated app-profile node calls this before `BevyApp` enters the
@@ -357,6 +377,11 @@ impl INode for BevyApp {
             action_queue: ActionQueue::default(),
             next_entity_id: Arc::new(AtomicI64::new(1)),
             performance_scope_id: allocate_app_scope_id(),
+            #[cfg(any(
+                all(debug_assertions, feature = "dev-observability"),
+                feature = "profiled-release"
+            ))]
+            update_history: UpdateHistory::new(false),
             scene_initialized: false,
             startup_process_delay_remaining: 0,
             base,
@@ -368,6 +393,7 @@ impl INode for BevyApp {
         }
 
         init_performance_tracing();
+        observe! { self.update_history = UpdateHistory::new(allowed()); }
         observe! {
             if requested() {
                 if let Some(root) = SceneRoot::resolve_as_parent(&self.base().clone().upcast::<Node>()) {
@@ -449,12 +475,15 @@ impl INode for BevyApp {
             app.insert_resource(GodotVisualFrame);
             let _scope_guard = enter_app_scope(self.performance_scope_id);
             observe! { let _update = app_span(self.performance_scope_id, "Bevy update"); }
+            // Measure the outer update once; nested systems must not inflate its total.
+            observe! { let update_started = self.update_history.begin(); }
             if let Err(e) = catch_unwind(AssertUnwindSafe(|| app.update())) {
                 self.app = None;
 
                 eprintln!("bevy app update panicked");
                 resume_unwind(e);
             }
+            observe! { self.update_history.finish(update_started); }
             app.world_mut().remove_resource::<GodotVisualFrame>();
         }
     }
