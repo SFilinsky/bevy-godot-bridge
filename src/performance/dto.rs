@@ -1,6 +1,8 @@
 //! Godot objects for reading Bevy system timings.
 
 use super::allowed;
+use crate::app::BevyApp;
+use crate::performance::update_snapshot::BevyUpdateSnapshot;
 use godot::builtin::{Array, GString};
 use godot::classes::{INode, Node, RefCounted};
 use godot::obj::{Base, Gd, NewGd};
@@ -134,6 +136,16 @@ impl PerformanceMetrics {
         };
 
         app.bind().performance_scope_id()
+    }
+
+    /// Read complete-update observations after a sequence number without consuming them.
+    #[func]
+    pub fn get_update_timings(&self, after_sequence: i64) -> Gd<BevyUpdateSnapshot> {
+        let host = self.base().clone().upcast::<Node>();
+        match BevyApp::resolve(&host) {
+            Ok(app) => app.bind().update_timings(after_sequence),
+            Err(_) => BevyUpdateSnapshot::unavailable(),
+        }
     }
 
     fn build_metrics_snapshot(&self) -> Array<Gd<SystemPerformanceEntryDto>> {

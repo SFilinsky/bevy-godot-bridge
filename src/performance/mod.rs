@@ -9,6 +9,8 @@
 //! enough.
 
 mod measurement_gate;
+pub(crate) mod update_snapshot;
+observe! { pub(crate) mod update_history; }
 pub(crate) use measurement_gate::{allowed, requested};
 observe! {
     pub(crate) mod startup;
