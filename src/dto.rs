@@ -40,7 +40,9 @@ impl OutboundDtoBuildTimingScope {
     /// Starts collecting timings for DTOs created by the current queue drain.
     pub(crate) fn begin() -> Self {
         let previous_timing = OUTBOUND_DTO_BUILD_TIMING.with(|timing| {
-            timing.borrow_mut().replace(OutboundDtoBuildTiming::default())
+            timing
+                .borrow_mut()
+                .replace(OutboundDtoBuildTiming::default())
         });
         Self {
             previous_timing,
@@ -50,9 +52,8 @@ impl OutboundDtoBuildTimingScope {
 
     /// Stops collection and returns the combined timing for this queue drain.
     pub(crate) fn finish(mut self) -> OutboundDtoBuildTiming {
-        let timing = OUTBOUND_DTO_BUILD_TIMING.with(|active_timing| {
-            active_timing.borrow_mut().take().unwrap_or_default()
-        });
+        let timing = OUTBOUND_DTO_BUILD_TIMING
+            .with(|active_timing| active_timing.borrow_mut().take().unwrap_or_default());
         let previous_timing = self.previous_timing.take();
         OUTBOUND_DTO_BUILD_TIMING.with(|active_timing| {
             *active_timing.borrow_mut() = previous_timing;
@@ -100,10 +101,7 @@ impl Drop for OutboundDtoBuildDepthGuard {
 }
 
 #[cfg(feature = "bridge-transport-profiling")]
-fn measure_outbound_dto_build<T>(
-    stage: OutboundDtoBuildStage,
-    operation: impl FnOnce() -> T,
-) -> T {
+fn measure_outbound_dto_build<T>(stage: OutboundDtoBuildStage, operation: impl FnOnce() -> T) -> T {
     let has_active_timing = OUTBOUND_DTO_BUILD_TIMING.with(|timing| timing.borrow().is_some());
     if !has_active_timing {
         return operation();
@@ -197,9 +195,9 @@ pub trait DataTransferConfig {
 
         #[cfg(not(feature = "bridge-transport-profiling"))]
         {
-        let mut dto = Self::DtoType::new_gd();
-        Self::update_dto(&mut dto, data, identity);
-        dto
+            let mut dto = Self::DtoType::new_gd();
+            Self::update_dto(&mut dto, data, identity);
+            dto
         }
     }
 }

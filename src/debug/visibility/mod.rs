@@ -3,10 +3,10 @@
 use crate::debug::debug_manager::{DebugManager, EDebugState};
 use godot::builtin::{Array, NodePath};
 use godot::classes::{INode, Node};
-use godot::global::{godot_error, Error};
+use godot::global::{Error, godot_error};
 use godot::meta::ToGodot;
 use godot::obj::{Base, WithBaseField};
-use godot::prelude::{godot_api, Gd, GodotClass};
+use godot::prelude::{Gd, GodotClass, godot_api};
 
 const STATE_OFF_BIT: i64 = 1 << 0;
 const STATE_COLLIDERS_BIT: i64 = 1 << 1;
@@ -118,7 +118,7 @@ fn is_visible_in_debug_state(visible_state_mask: i64, current_state: EDebugState
 
 #[cfg(test)]
 mod tests {
-    use super::{is_visible_in_debug_state, DEFAULT_VISIBLE_STATE_MASK};
+    use super::{DEFAULT_VISIBLE_STATE_MASK, is_visible_in_debug_state};
     use crate::debug::debug_manager::EDebugState;
 
     #[test]

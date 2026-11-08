@@ -340,4 +340,4 @@ pub mod plugins {
                 .add_systems(FixedUpdate, handle_initialize_entity.in_set(EntityInitSet));
         }
     }
-    }
+}

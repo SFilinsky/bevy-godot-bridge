@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote, quote_spanned};
-use syn::{parse_macro_input, spanned::Spanned, ItemStruct, Type};
+use syn::{ItemStruct, Type, parse_macro_input, spanned::Spanned};
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as ItemStruct);

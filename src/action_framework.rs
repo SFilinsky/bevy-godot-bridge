@@ -105,8 +105,12 @@ impl CheckReason {
 /// The answer from one rule, with optional extra data and a failure code.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Criterion<TFail> {
-    Ok { payload: Option<TFail> },
-    NotProvided { payload: Option<TFail> },
+    Ok {
+        payload: Option<TFail>,
+    },
+    NotProvided {
+        payload: Option<TFail>,
+    },
     Fail {
         code: &'static str,
         payload: Option<TFail>,
@@ -224,5 +228,5 @@ pub trait ExecuteAction<FullParams, ExecuteResult> {
 }
 use godot::classes::RefCounted;
 use godot::obj::Base;
-use godot::prelude::{godot_api, GodotClass};
+use godot::prelude::{GodotClass, godot_api};
 use std::any::Any;

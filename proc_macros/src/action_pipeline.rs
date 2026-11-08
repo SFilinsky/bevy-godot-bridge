@@ -10,9 +10,9 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{format_ident, quote};
 use syn::{
-    bracketed,
+    Ident, Path, Result, Token, Type, bracketed,
     parse::{Parse, ParseStream},
-    parse_macro_input, Ident, Path, Result, Token, Type,
+    parse_macro_input,
 };
 
 struct CheckSpec {
@@ -135,7 +135,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
 }
 
 fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
-
     let action_name_ident = spec.name;
     let action_name = action_name_ident.to_string();
     let module_name = format_ident!("{}_action_pipeline", action_name.to_snake_case());
@@ -240,11 +239,15 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
         }
     });
 
-    let check_mask_constants = checks.iter().enumerate().map(|(index, c)| {
-        let constant = format_ident!("CHECK_MASK_{}", c.name.to_string().to_upper_camel_case());
-        let bit = 1_u64 << index;
-        quote! { const #constant: u64 = #bit; }
-    }).collect::<Vec<_>>();
+    let check_mask_constants = checks
+        .iter()
+        .enumerate()
+        .map(|(index, c)| {
+            let constant = format_ident!("CHECK_MASK_{}", c.name.to_string().to_upper_camel_case());
+            let bit = 1_u64 << index;
+            quote! { const #constant: u64 = #bit; }
+        })
+        .collect::<Vec<_>>();
     let all_check_mask = if checks.is_empty() {
         0
     } else {
@@ -284,14 +287,20 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
     let preparation_metric_name = format!("{runner_metric_prefix}: candidate preparation");
     let evaluation_metric_name = format!("{runner_metric_prefix}: candidate evaluation");
     let delivery_metric_name = format!("{runner_metric_prefix}: cached report update and delivery");
-    let continuous_check_metric_names = checks.iter().map(|c| {
-        let check_name = c.name.to_string();
-        format!("{runner_metric_prefix}: {check_name} continuous maintenance")
-    }).collect::<Vec<_>>();
-    let check_evaluation_metric_names = checks.iter().map(|c| {
-        let check_name = c.name.to_string();
-        format!("{runner_metric_prefix}: {check_name} evaluation")
-    }).collect::<Vec<_>>();
+    let continuous_check_metric_names = checks
+        .iter()
+        .map(|c| {
+            let check_name = c.name.to_string();
+            format!("{runner_metric_prefix}: {check_name} continuous maintenance")
+        })
+        .collect::<Vec<_>>();
+    let check_evaluation_metric_names = checks
+        .iter()
+        .map(|c| {
+            let check_name = c.name.to_string();
+            format!("{runner_metric_prefix}: {check_name} evaluation")
+        })
+        .collect::<Vec<_>>();
 
     let check_refresh_timing_metric_records = checks
         .iter()
@@ -307,10 +316,13 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
         })
         .collect::<Vec<_>>();
 
-    let report_allowance_terms = checks.iter().map(|c| {
-        let name = &c.name;
-        quote! { && report.#name.is_ok() }
-    }).collect::<Vec<_>>();
+    let report_allowance_terms = checks
+        .iter()
+        .map(|c| {
+            let name = &c.name;
+            quote! { && report.#name.is_ok() }
+        })
+        .collect::<Vec<_>>();
 
     let continuous_check_refreshes = checks.iter().enumerate().zip(continuous_check_metric_names.iter()).map(|((index, c), metric_name)| {
         let p_method = format_ident!("p{}", index);
@@ -1736,7 +1748,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_spec, Spec};
+    use super::{Spec, expand_spec};
     use quote::quote;
 
     #[test]
