@@ -10,9 +10,9 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use std::collections::HashSet;
 use syn::{
-    bracketed,
+    Ident, LitStr, Path, Result, Token, Type, bracketed,
     parse::{Parse, ParseStream},
-    parse_macro_input, Ident, LitStr, Path, Result, Token, Type,
+    parse_macro_input,
 };
 
 #[derive(Clone)]
@@ -222,8 +222,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
     let system_ident = &spec.system_ident;
     let exporter_accessor_ident = &spec.exporter_accessor_ident;
     let exporter_accessor_impl_ident = &spec.exporter_accessor_impl_ident;
-    let optional_removed_readers_ident =
-        format_ident!("{}OptionalRemovedReaders", exporter_ident);
+    let optional_removed_readers_ident = format_ident!("{}OptionalRemovedReaders", exporter_ident);
 
     let req_cfg_tys: Vec<Type> = spec.required.iter().map(|c| c.cfg_ty.clone()).collect();
     let opt_cfg_tys: Vec<Type> = spec.optional.iter().map(|c| c.cfg_ty.clone()).collect();

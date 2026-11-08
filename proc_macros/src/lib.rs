@@ -68,9 +68,7 @@ pub fn export_component_new(input: TokenStream) -> TokenStream {
 ///
 /// Do not use this in new code. Use `export_composed!` instead. It remains only
 /// so older code still builds.
-#[deprecated(
-    note = "legacy exporter; use export_composed! with DataTransferConfig instead"
-)]
+#[deprecated(note = "legacy exporter; use export_composed! with DataTransferConfig instead")]
 #[proc_macro_derive(ExportEntity, attributes(export_entity))]
 pub fn export_entity(input: TokenStream) -> TokenStream {
     export_entity_impl::expand(input)

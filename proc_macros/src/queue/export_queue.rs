@@ -68,7 +68,10 @@ fn queue_name_from_config(config: &Path) -> syn::Result<Ident> {
         ));
     }
 
-    Ok(format_ident!("{domain_name}ExportQueue", span = Span::call_site()))
+    Ok(format_ident!(
+        "{domain_name}ExportQueue",
+        span = Span::call_site()
+    ))
 }
 
 pub fn expand(input: TokenStream) -> TokenStream {

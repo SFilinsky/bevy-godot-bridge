@@ -11,8 +11,8 @@ use std::marker::PhantomData;
 #[cfg(feature = "bridge-transport-profiling")]
 use std::time::{Duration, Instant};
 
-use bevy::ecs::system::SystemState;
 use bevy::ecs::schedule::common_conditions::on_message;
+use bevy::ecs::system::SystemState;
 use bevy::prelude::{
     App, Event, IntoScheduleConfigs, Message, MessageReader, NonSendMut, On, Plugin, PostUpdate,
     World,
@@ -126,8 +126,7 @@ pub fn set_export_queue_notification_callback<C>(
     world: &mut World,
     notification_callback: Callable,
     owner_id: i64,
-)
-where
+) where
     C: DataTransferConfig + 'static,
     C::DataType: 'static,
 {
@@ -283,7 +282,9 @@ where
 
     // Convert one batch at the Godot boundary instead of in every source system.
     for value in queue.drain() {
-        let dto = metrics.measure(DrainStage::DtoCreation, || C::from_data(&value, &mut identity));
+        let dto = metrics.measure(DrainStage::DtoCreation, || {
+            C::from_data(&value, &mut identity)
+        });
 
         // Appending to Godot's Array is separate from creating the DTO object.
         metrics.measure(DrainStage::DtoArrayAppend, || dto_list.push(&dto));
@@ -462,7 +463,6 @@ impl DrainMetrics {
         self.dto_field_copy = timing.field_copy;
         self.default_dto_value_count = timing.value_count;
     }
-
 }
 
 #[cfg(test)]

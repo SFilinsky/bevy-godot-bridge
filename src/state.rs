@@ -50,17 +50,11 @@ pub struct BevyLifecyclePlugin;
 impl Plugin for BevyLifecyclePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<BevyLifecycleState>()
-            .add_systems(
-                OnEnter(BevyLifecycleState::Loading),
-                update_benchmark_phase,
-            )
+            .add_systems(OnEnter(BevyLifecycleState::Loading), update_benchmark_phase)
             .add_systems(
                 OnEnter(BevyLifecycleState::Initialization),
                 update_benchmark_phase,
             )
-            .add_systems(
-                OnEnter(BevyLifecycleState::Playing),
-                update_benchmark_phase,
-            );
+            .add_systems(OnEnter(BevyLifecycleState::Playing), update_benchmark_phase);
     }
 }

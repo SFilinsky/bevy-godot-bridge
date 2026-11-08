@@ -8,8 +8,8 @@ use godot::{
     prelude::{Gd, GodotClass, Inherits},
 };
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 /// Gives a Bevy system access to its Godot scene and entity IDs.
 ///
