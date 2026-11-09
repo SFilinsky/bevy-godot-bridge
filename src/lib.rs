@@ -34,6 +34,8 @@ mod dto;
 mod entity_meta;
 mod entity_registry;
 mod erased_gd;
+#[doc(hidden)]
+pub mod export_profile;
 /// Queues Bevy values until Godot reads a batch.
 pub mod export_queue;
 mod import;

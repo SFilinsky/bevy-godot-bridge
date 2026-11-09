@@ -78,39 +78,44 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 C: bevy_godot4::prelude::DataTransferConfig<DtoType = #dto>,
                 #dto: PartialEq,
             {
+                use bevy_godot4::export_profile::{Stage as ExportStage, measure as measure_export};
                 if entity_id < 0 {
                     return false;
                 }
 
-                let entry = self.entries.entry(entity_id).or_insert_with(|| {
-                    (#dto::new_gd(), #dto::new_gd(), #dto::new_gd(), -1)
-                });
+                // Keep allocation separate from looking up an existing triple of objects.
+                let entry = measure_export(ExportStage::StoreLookup, || self.entries.entry(entity_id).or_insert_with(|| {
+                    measure_export(ExportStage::ObjectCreation, || (#dto::new_gd(), #dto::new_gd(), #dto::new_gd(), -1))
+                }));
 
                 let (curr, prev, spare, updated_revision) = entry;
 
                 if *updated_revision < 0 {
-                    C::update_dto(curr, data, identity);
-                    C::update_dto(prev, data, identity);
-                    C::update_dto(spare, data, identity);
+                    measure_export(ExportStage::FieldCopy, || C::update_dto(curr, data, identity));
+                    measure_export(ExportStage::FieldCopy, || C::update_dto(prev, data, identity));
+                    measure_export(ExportStage::FieldCopy, || C::update_dto(spare, data, identity));
                     *updated_revision = revision;
                     return true;
                 }
 
-                C::update_dto(spare, data, identity);
+                measure_export(ExportStage::FieldCopy, || C::update_dto(spare, data, identity));
 
-                let same_value = {
+                let same_value = measure_export(ExportStage::Equality, || {
                     let curr_bound = curr.bind();
                     let spare_bound = spare.bind();
                     *curr_bound == *spare_bound
-                };
+                });
 
                 if same_value {
                     return false;
                 }
 
-                std::mem::swap(prev, curr);
-                std::mem::swap(curr, spare);
-                *updated_revision = revision;
+                measure_export(ExportStage::Bookkeeping, || {
+                    use std::mem::swap;
+                    swap(prev, curr);
+                    swap(curr, spare);
+                    *updated_revision = revision;
+                });
                 true
             }
 

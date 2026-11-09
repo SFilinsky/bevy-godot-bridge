@@ -348,7 +348,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         }
                     } else if !is_created {
                         if #state_store_bind.implements(eid_i64) {
-                            #state_store_bind.remove_entity(eid_i64);
+                            measure_export(ExportStage::Removal, || #state_store_bind.remove_entity(eid_i64));
                             changed_candidate = true;
                         }
                     }
@@ -365,7 +365,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             let state_alias = &component.state_alias_ident;
 
             quote! {
-                let mut #state_store = #state_alias::resolve(state_store_owner.clone()).unwrap_or_else(|| {
+                let mut #state_store = measure_export(ExportStage::Resolve, || #state_alias::resolve(state_store_owner.clone())).unwrap_or_else(|| {
                     panic!(
                         "{} failed to resolve {} singleton store before export tick",
                         stringify!(#exporter_ident),
@@ -384,7 +384,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             let state_store_bind = &component.state_store_bind_ident;
 
             quote! {
-                let mut #state_store_bind = #state_store.bind_mut();
+                let mut #state_store_bind = measure_export(ExportStage::StoreBind, || #state_store.bind_mut());
             }
         })
         .collect();
@@ -396,7 +396,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             let state_store = &component.state_store_var_ident;
 
             quote! {
-                #state_store.bind_mut().remove_entity(entity_id);
+                measure_export(ExportStage::Removal, || #state_store.bind_mut().remove_entity(entity_id));
             }
         })
         .collect();
@@ -409,19 +409,19 @@ pub fn expand(input: TokenStream) -> TokenStream {
             let state_store = &component.state_store_var_ident;
 
             quote! {
-                for entity in optional_removed_readers.#removed_reader.read() {
-                    let Some(entity_id) = identity.try_get_identity(entity) else {
+                for entity in query_iter(optional_removed_readers.#removed_reader.read()) {
+                    let Some(entity_id) = measure_export(ExportStage::Snapshot, || identity.try_get_identity(entity)) else {
                         continue;
                     };
 
-                    if removed_entity_ids.contains(&entity_id) || emitted_entity_ids.contains(&entity_id) {
+                    if measure_export(ExportStage::Deduplicate, || removed_entity_ids.contains(&entity_id) || emitted_entity_ids.contains(&entity_id)) {
                         continue;
                     }
 
                     let did_remove = {
                         let mut state_store_bind = #state_store.bind_mut();
                         if state_store_bind.implements(entity_id) {
-                            state_store_bind.remove_entity(entity_id);
+                            measure_export(ExportStage::Removal, || state_store_bind.remove_entity(entity_id));
                             true
                         } else {
                             false
@@ -431,8 +431,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     if did_remove {
                         let next_revision = exporter.revision_cache.get(&entity_id).copied().unwrap_or(-1) + 1;
                         exporter.revision_cache.insert(entity_id, next_revision);
-                        exporter.signals().on_updated().emit(entity_id, next_revision);
-                        emitted_entity_ids.insert(entity_id);
+                        measure_export(ExportStage::Signal, || exporter.signals().on_updated().emit(entity_id, next_revision));
+                        measure_export(ExportStage::Deduplicate, || emitted_entity_ids.insert(entity_id));
                     }
                 }
             }
@@ -445,6 +445,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use bevy::ecs::system::SystemParam;
             use bevy::prelude::*;
             use bevy_godot4::prelude::*;
+            use bevy_godot4::export_profile::{ExportProfile, Stage as ExportStage, measure as measure_export, query_iter};
             use godot::prelude::*;
             use std::collections::{HashMap, HashSet};
             use std::marker::PhantomData;
@@ -741,13 +742,17 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 #[func]
                 fn _on_updated(&mut self, entity_id: i64, revision: i64) {
-                    let Some(mut meta) = self.ensure_spawned_entity_meta(entity_id) else {
-                        return;
-                    };
+                    measure_export(ExportStage::GodotRoute, || {
+                        let Some(mut meta) = self.ensure_spawned_entity_meta(entity_id) else {
+                            return;
+                        };
 
-                    let mut meta = meta.bind_mut();
-                    meta.revision = revision;
-                    meta.signals().on_change().emit(revision);
+                        let mut meta = meta.bind_mut();
+                        meta.revision = revision;
+                        measure_export(ExportStage::GodotListeners, || {
+                            meta.signals().on_change().emit(revision);
+                        });
+                    });
                 }
 
                 #[func]
@@ -875,40 +880,41 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 mut app: BevyAppSubsystem,
                 mut exporter_accessor: #exporter_accessor_ident,
             ) {
-                let any_created = !created.is_empty();
-                let any_updated = !updated.is_empty();
-                let any_removed = !removed.is_empty();
-                let any_opt_removed = #any_opt_removed_expr;
+                // Observe the original query flow without buffering or reordering entities.
+                let _profile = ExportProfile::begin(stringify!(#system_ident));
+                let (any_created, any_updated, any_removed, any_opt_removed) = measure_export(ExportStage::Query, || {
+                    (!created.is_empty(), !updated.is_empty(), !removed.is_empty(), #any_opt_removed_expr)
+                });
 
                 if !any_created && !any_updated && !any_removed && !any_opt_removed {
                     return;
                 }
 
-                let Some(mut exporter) = exporter_accessor.get(&mut app) else {
+                let Some(mut exporter) = measure_export(ExportStage::Resolve, || exporter_accessor.get(&mut app)) else {
                     return;
                 };
-                let mut exporter = exporter.bind_mut();
-                let state_store_owner: Gd<Node> = app.host_node();
+                let mut exporter = measure_export(ExportStage::StoreBind, || exporter.bind_mut());
+                let state_store_owner: Gd<Node> = measure_export(ExportStage::Resolve, || app.host_node());
                 #( #state_store_resolve_blocks )*
 
                 let mut created_bits: HashSet<u64> = HashSet::new();
 
                 if any_created {
-                    for entity in created.iter() {
-                        created_bits.insert(entity.to_bits());
+                    for entity in query_iter(created.iter()) {
+                        measure_export(ExportStage::Deduplicate, || created_bits.insert(entity.to_bits()));
                     }
                 }
 
                 let mut emitted_entity_ids: HashSet<i64> = HashSet::new();
 
                 let mut process_entity = |entity: Entity, is_created: bool| {
-                    let eid_i64 = identity.get_identity(entity);
+                    let eid_i64 = measure_export(ExportStage::Snapshot, || identity.get_identity(entity));
 
-                    let Ok(( #( #req_bindings, )* #( #opt_bindings, )* )) = snapshot.get(entity) else {
+                    let Ok(( #( #req_bindings, )* #( #opt_bindings, )* )) = measure_export(ExportStage::Snapshot, || snapshot.get(entity)) else {
                         return;
                     };
 
-                    let next_revision = exporter.revision_cache.get(&eid_i64).copied().unwrap_or(-1) + 1;
+                    let next_revision = measure_export(ExportStage::Bookkeeping, || exporter.revision_cache.get(&eid_i64).copied().unwrap_or(-1) + 1);
                     let mut changed_candidate = false;
 
                     {
@@ -918,26 +924,26 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
 
                     if is_created || changed_candidate {
-                        exporter.revision_cache.insert(eid_i64, next_revision);
-                        emitted_entity_ids.insert(eid_i64);
+                        measure_export(ExportStage::Bookkeeping, || exporter.revision_cache.insert(eid_i64, next_revision));
+                        measure_export(ExportStage::Deduplicate, || emitted_entity_ids.insert(eid_i64));
 
                         if is_created {
-                            exporter.signals().on_created().emit(eid_i64, next_revision);
+                            measure_export(ExportStage::Signal, || exporter.signals().on_created().emit(eid_i64, next_revision));
                         } else {
-                            exporter.signals().on_updated().emit(eid_i64, next_revision);
+                            measure_export(ExportStage::Signal, || exporter.signals().on_updated().emit(eid_i64, next_revision));
                         }
                     }
                 };
 
                 if any_created {
-                    for entity in created.iter() {
+                    for entity in query_iter(created.iter()) {
                         process_entity(entity, true);
                     }
                 }
 
                 if any_updated {
-                    for entity in updated.iter() {
-                        if created_bits.contains(&entity.to_bits()) {
+                    for entity in query_iter(updated.iter()) {
+                        if measure_export(ExportStage::Deduplicate, || created_bits.contains(&entity.to_bits())) {
                             continue;
                         }
 
@@ -948,12 +954,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 let mut removed_entity_ids: HashSet<i64> = HashSet::new();
 
                 if any_removed {
-                    for entity in removed.read() {
-                        if let Some(entity_id) = identity.try_get_identity(entity) {
-                            removed_entity_ids.insert(entity_id);
+                    for entity in query_iter(removed.read()) {
+                        if let Some(entity_id) = measure_export(ExportStage::Snapshot, || identity.try_get_identity(entity)) {
+                            measure_export(ExportStage::Deduplicate, || removed_entity_ids.insert(entity_id));
                             #( #state_remove_blocks )*
-                            exporter.cleanup_entity(entity_id);
-                            exporter.signals().on_removed().emit(entity_id);
+                            measure_export(ExportStage::Removal, || exporter.cleanup_entity(entity_id));
+                            measure_export(ExportStage::Signal, || exporter.signals().on_removed().emit(entity_id));
                         }
                     }
                 }
