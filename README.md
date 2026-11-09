@@ -141,3 +141,14 @@ With a native solution, the workflow would be more straightforward.
 Look up a Bevy app from the host node that needs it. The nearest scene root owns the lookup. Apps, coordinators and generated state stores register with Godot, which updates their group membership on tree entry and exit. A state store must be a direct child of the resolved app. Missing or duplicate providers keep their existing diagnostics.
 
 While a scene is entering, later siblings may already be parented without appearing in a live group. The root takes a temporary snapshot of its authored app and coordinator candidates. Detached scenes and partially mounted branches use scoped discovery. Callers can keep the resolved reference for their own lifetime. Rebind when the provider or owning scope changes.
+
+### Following entity export costs
+
+Enable `bridge-transport-profiling` only in a measured development/profiled
+build, then set `EQUILIBRIA_ENTITY_PROFILE=1` for entity stage timings. The
+exporter records exclusive totals for finding changes, saved-value updates,
+Godot notification and cleanup. Nested child times are charged once. Normal
+builds compile the fine timing implementation out. Compare with probes disabled
+because recording itself has measurable cost. A zero creation/removal row means
+that workload did not exercise it. Godot work inside a listener is synchronous;
+later presentation callbacks need separate measurement.
