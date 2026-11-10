@@ -39,6 +39,7 @@ mod export_delivery;
 pub mod export_profile;
 /// Queues Bevy values until Godot reads a batch.
 pub mod export_queue;
+mod export_values;
 mod import;
 mod initialization;
 mod performance;
@@ -64,6 +65,7 @@ pub mod prelude {
     pub use super::entity_registry::EntityRegistry;
     pub use super::erased_gd::{ErasedGd, ErasedGdResource};
     pub use super::export_delivery::{ExportChangeSource, GodotExportDelivery};
+    pub use super::export_values::{ExportValue, ExportValueBatch, ExportValueSubscription};
     pub use super::initialization::{InitializationCoordinator, InitializationPhase};
     pub use super::required_settings::RequiredSettings;
     pub use super::scene::GodotScene;

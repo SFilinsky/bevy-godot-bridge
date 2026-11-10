@@ -3,14 +3,18 @@
 //! State stores publish version numbers. Entity scenes declare which stores
 //! their listeners use, so unchanged features never enter GDScript callbacks.
 
+use crate::export_values::{ExportValue, ExportValueBatch, ValueBatchRegistry};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem::take;
+use std::rc::{Rc, Weak};
 
 use godot::builtin::StringName;
 use godot::classes::{INode, IRefCounted, Node, Performance, RefCounted};
 use godot::obj::{Base, Gd, Singleton, WithBaseField};
 use godot::prelude::{GodotClass, godot_api};
 
+use crate::app::BevyApp;
 use crate::entity_meta::EntityMeta;
 use crate::performance::layer::enter_app_scope;
 observe! {
@@ -24,6 +28,7 @@ observe! {
 #[class(base=RefCounted)]
 pub struct ExportChangeSource {
     revision_map: HashMap<i64, i64>,
+    native_list: Vec<Weak<RefCell<Vec<i64>>>>,
     base: Base<RefCounted>,
 }
 
@@ -31,6 +36,18 @@ impl ExportChangeSource {
     /// Mark an actual value change, including disappearance of an optional value.
     pub fn mark(&mut self, entity_id: i64, revision: i64) {
         self.revision_map.insert(entity_id, revision);
+        self.native_list.retain(|weak| {
+            if let Some(pending) = weak.upgrade() {
+                pending.borrow_mut().push(entity_id);
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    pub(crate) fn watch_native(&mut self, pending: &Rc<RefCell<Vec<i64>>>) {
+        self.native_list.push(Rc::downgrade(pending));
     }
 
     /// Forget a destroyed entity; IDs are not reused within the app.
@@ -53,6 +70,7 @@ impl IRefCounted for ExportChangeSource {
     fn init(base: Base<RefCounted>) -> Self {
         Self {
             revision_map: HashMap::new(),
+            native_list: Vec::new(),
             base,
         }
     }
@@ -62,12 +80,21 @@ impl IRefCounted for ExportChangeSource {
 #[derive(GodotClass)]
 #[class(base=Node)]
 pub struct GodotExportDelivery {
+    value_batches: ValueBatchRegistry,
     pending_list: Vec<(Gd<EntityMeta>, i64)>,
     delivery_list: Vec<(Gd<EntityMeta>, i64)>,
     scope_id: u64,
     last_delivery_ms: f64,
     monitor_name: Option<StringName>,
+    #[cfg(any(
+        all(debug_assertions, feature = "dev-observability"),
+        feature = "profiled-release"
+    ))]
     pending_usec: u64,
+    #[cfg(any(
+        all(debug_assertions, feature = "dev-observability"),
+        feature = "profiled-release"
+    ))]
     pending_frame: u64,
     max_delay_usec: u64,
     max_delay_frames: u64,
@@ -75,6 +102,18 @@ pub struct GodotExportDelivery {
 }
 
 impl GodotExportDelivery {
+    /// Find delivery without borrowing Bevy, including while a new scene becomes ready.
+    pub fn resolve(host: &Gd<Node>) -> Option<Gd<Self>> {
+        let app = BevyApp::resolve(host).ok()?;
+        app.try_get_node_as::<Self>("ExportDelivery")
+    }
+    /// Share one native value reader per feature type within this app.
+    pub fn value_batch<T: ExportValue>(
+        &mut self,
+        create: impl FnOnce() -> ExportValueBatch<T>,
+    ) -> Rc<ExportValueBatch<T>> {
+        self.value_batches.get_or_insert(create)
+    }
     pub(crate) fn configure(&mut self, scope_id: u64, priority: i32) {
         self.scope_id = scope_id;
         self.base_mut().set_process_priority(priority);
@@ -94,6 +133,7 @@ impl GodotExportDelivery {
     pub(crate) fn clear(&mut self) {
         self.pending_list.clear();
         self.delivery_list.clear();
+        self.value_batches = ValueBatchRegistry::default();
     }
 }
 
@@ -128,12 +168,21 @@ impl GodotExportDelivery {
 impl INode for GodotExportDelivery {
     fn init(base: Base<Node>) -> Self {
         Self {
+            value_batches: ValueBatchRegistry::default(),
             pending_list: Vec::new(),
             delivery_list: Vec::new(),
             scope_id: 0,
             last_delivery_ms: 0.0,
             monitor_name: None,
+            #[cfg(any(
+                all(debug_assertions, feature = "dev-observability"),
+                feature = "profiled-release"
+            ))]
             pending_usec: 0,
+            #[cfg(any(
+                all(debug_assertions, feature = "dev-observability"),
+                feature = "profiled-release"
+            ))]
             pending_frame: 0,
             max_delay_usec: 0,
             max_delay_frames: 0,
@@ -162,19 +211,25 @@ impl INode for GodotExportDelivery {
     fn process(mut this: Gd<Self>, _delta: f64) {
         // Take the published work without retaining a Rust borrow across callbacks.
         // A callback may detach its view or unload the entire owning scene.
-        let (mut delivery_list, scope_id) = {
+        let (mut delivery_list, value_batch_list, scope_id) = {
             let mut owner = this.bind_mut();
             owner.last_delivery_ms = 0.0;
-            if owner.pending_list.is_empty() {
+            if owner.pending_list.is_empty() && !owner.value_batches.pending() {
                 return;
             }
             observe! {
+                if !owner.pending_list.is_empty() {
                 owner.max_delay_usec = owner.max_delay_usec.max(Time::singleton().get_ticks_usec().saturating_sub(owner.pending_usec));
                 owner.max_delay_frames = owner.max_delay_frames.max(Engine::singleton().get_process_frames().saturating_sub(owner.pending_frame));
+                }
             }
             let delivery_list = take(&mut owner.pending_list);
             owner.pending_list = take(&mut owner.delivery_list);
-            (delivery_list, owner.scope_id)
+            (
+                delivery_list,
+                owner.value_batches.deliveries(),
+                owner.scope_id,
+            )
         };
         let _scope = enter_app_scope(scope_id);
         observe! { let started = Instant::now(); }
@@ -184,6 +239,17 @@ impl INode for GodotExportDelivery {
             }
             if entity.is_instance_valid() {
                 EntityMeta::_deliver_changes(entity, revision);
+            }
+        }
+        if this.is_instance_valid() {
+            let delivery_owner = this.clone().upcast::<Node>();
+            for batch in value_batch_list {
+                if !this.is_instance_valid() || !this.is_inside_tree() {
+                    break;
+                }
+                if batch.pending() {
+                    batch.deliver(&delivery_owner);
+                }
             }
         }
         if this.is_instance_valid() {
