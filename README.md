@@ -163,6 +163,29 @@ source changed for that entity. An empty source list receives every entity
 revision. Call `unwatch_changes(id)` when the consuming view leaves the tree.
 Two consumers have independent subscriptions, even when they use the same source.
 
+Native integrations can use `ExportValueBatch<T>` when several views need the
+same plain values. Give each feature a distinct small `Copy` value type that
+implements `ExportValue`, with a typed callback argument conversion. Resolve
+`GodotExportDelivery` from the authored host, then obtain its `value_batch`.
+The first registration supplies that feature's sources and reader; later views
+share it within the same app. Do not use the same value type for different input
+schemas in one app.
+
+Keep the `ExportValueSubscription` returned by `watch` in the authored behavior
+and call `cancel` when the behavior exits the tree. Dropping it also cancels.
+Registration queues the initial value. Changed input sources queue entity IDs;
+delivery combines them, reads each affected entity once into a reusable value
+buffer, then invokes its subscribed views. Cancellation, freed views and scene
+unloading are checked again before each call. No callback retains a Rust borrow
+of the batch or Bevy app. `None` from the reader means no value to publish; a
+feature that clears a display on removal should publish an explicit absent value.
+
+In profiled builds, `Godot values: read <feature>` and
+`Godot values: apply <feature>` split native collection from argument preparation
+and script application. These rows are children of the total Godot delivery row;
+do not add them to that total a second time. Existing entity subscriptions remain
+useful for sparse state and consumers that need the saved object API.
+
 Author one `ExportDelivery` child under `BevyApp` and assign its `export_delivery` property. Generated spawners queue changed
 entities, then this child invokes visual listeners at the next process priority
 in the same frame. Do not independently pause this child or manually run another
