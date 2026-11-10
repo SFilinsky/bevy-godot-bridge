@@ -1,7 +1,7 @@
 pub use crate::bevy_app_subsystem::BevyAppSubsystem;
 use crate::bevy_app_subsystem::{BevyAppHostPlugin, BevyAppIdAllocatorRef};
-use crate::export_delivery::GodotExportDelivery;
 use crate::scene::registration::{register_level_service_on_entry, scene_services};
+use crate::update_dispatcher::UpdateDispatcher;
 use bevy::app::App;
 use godot::{
     builtin::NodePath,
@@ -84,7 +84,7 @@ impl std::fmt::Display for BevyAppLookupError {
 #[class(base=Node)]
 pub struct BevyApp {
     #[export]
-    export_delivery: Option<Gd<GodotExportDelivery>>,
+    update_dispatcher: Option<Gd<UpdateDispatcher>>,
     app: Option<App>,
     app_builder: Option<fn(&mut App)>,
     app_profile_name: Option<&'static str>,
@@ -374,7 +374,7 @@ impl INode for BevyApp {
         register_level_service_on_entry(&base);
         Self {
             app: None,
-            export_delivery: None,
+            update_dispatcher: None,
             app_builder: None,
             app_profile_name: None,
             node_host: NodePath::default(),
@@ -397,18 +397,18 @@ impl INode for BevyApp {
         }
 
         // A separate Godot callback runs after this app; it is not part of app.update().
-        let Some(mut delivery) = self.export_delivery.clone() else {
-            godot_error!("BevyApp: author an ExportDelivery child and assign export_delivery");
+        let Some(mut delivery) = self.update_dispatcher.clone() else {
+            godot_error!("BevyApp: author an UpdateDispatcher child and assign update_dispatcher");
             return;
         };
         let host = self.base().clone();
         let deliveries = host
             .get_children()
             .iter_shared()
-            .filter(|child| child.clone().try_cast::<GodotExportDelivery>().is_ok())
+            .filter(|child| child.clone().try_cast::<UpdateDispatcher>().is_ok())
             .count();
         if delivery.get_parent().as_ref() != Some(&host) || deliveries != 1 {
-            godot_error!("BevyApp: export_delivery must reference its only delivery child");
+            godot_error!("BevyApp: update_dispatcher must reference its only delivery child");
             return;
         }
         delivery.bind_mut().configure(
@@ -469,7 +469,7 @@ impl INode for BevyApp {
         // A node can leave and later re-enter the tree. Drop this run's world
         // so the saved fixed profile can create a new app on the next entry.
         self.app = None;
-        if let Some(delivery) = self.export_delivery.as_mut() {
+        if let Some(delivery) = self.update_dispatcher.as_mut() {
             delivery.bind_mut().clear();
         }
         clear_metrics_for_scope(self.performance_scope_id);

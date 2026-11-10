@@ -8,15 +8,17 @@ use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::mem::take;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
-use godot::builtin::{Array, Callable, Variant};
+use godot::builtin::{Array, Variant};
 use godot::classes::{IRefCounted, Node, RefCounted};
+use godot::global::godot_error;
 use godot::obj::{Base, Gd, NewGd};
 use godot::prelude::{GodotClass, godot_api};
+use godot_apis::updates::{Receiver, UpdatePayload, UpdateReceiver};
 
 use crate::entity_meta::EntityMeta;
-use crate::export_delivery::ExportChangeSource;
+use crate::update_dispatcher::ExportChangeSource;
 observe! {
     use std::time::Instant;
     use godot::classes::{Engine, Time};
@@ -44,35 +46,35 @@ impl PendingValues {
 
 /// A reader's prepared value, gathered before any Godot callback runs.
 /// Native consumers can use small copies; object readers share read-only published values.
-pub trait ExportValue: Clone + 'static {
+pub trait ExportValue: UpdatePayload {
     /// Plain feature name used in profiling rows.
     const NAME: &'static str;
-    /// Fill the reused argument array expected by this feature's typed callback.
-    fn write_arguments(self, argument_list: &mut Array<Variant>);
 }
 
 /// Cancel this view's subscription when its authored owner leaves the tree.
 #[derive(GodotClass)]
 #[class(base=RefCounted)]
-pub struct ExportValueSubscription {
+pub struct UpdateSubscription {
     active: Rc<Cell<bool>>,
     cleanup_pending: Rc<Cell<bool>>,
+    keep_alive: Option<Rc<dyn Any>>,
     base: Base<RefCounted>,
 }
 
 #[godot_api]
-impl IRefCounted for ExportValueSubscription {
+impl IRefCounted for UpdateSubscription {
     fn init(base: Base<RefCounted>) -> Self {
         Self {
             active: Rc::new(Cell::new(true)),
             cleanup_pending: Rc::new(Cell::new(false)),
+            keep_alive: None,
             base,
         }
     }
 }
 
 #[godot_api]
-impl ExportValueSubscription {
+impl UpdateSubscription {
     /// Safe to call repeatedly, including from another callback in this batch.
     #[func]
     pub fn cancel(&self) {
@@ -81,41 +83,88 @@ impl ExportValueSubscription {
     }
 }
 
-impl Drop for ExportValueSubscription {
+impl UpdateSubscription {
+    pub(crate) fn retain_source(&mut self, source: Rc<dyn Any>) {
+        self.keep_alive = Some(source);
+    }
+}
+
+impl Drop for UpdateSubscription {
     fn drop(&mut self) {
         self.cancel();
     }
 }
 
 #[derive(Clone)]
-enum Consumer<T> {
-    Script(Callable),
-    Native(Rc<dyn Fn(T)>),
-}
-
-impl<T> Consumer<T> {
-    fn is_valid(&self) -> bool {
-        match self {
-            Self::Script(callback) => callback.is_valid(),
-            Self::Native(_) => true,
-        }
-    }
-}
-
-struct Binding<T> {
+pub(crate) struct Binding<T: ExportValue> {
     owner: Gd<Node>,
-    entity: Gd<EntityMeta>,
-    consumer: Consumer<T>,
+    entity: Option<Gd<EntityMeta>>,
+    consumer: Receiver<T>,
     active: Rc<Cell<bool>>,
 }
 
-impl<T> Binding<T> {
-    fn is_active(&self) -> bool {
+impl<T: ExportValue> Binding<T> {
+    pub(crate) fn cancel(&self) {
+        self.active.set(false);
+    }
+    pub(crate) fn subscribe(
+        owner: Gd<Node>,
+        entity: Option<Gd<EntityMeta>>,
+        receiver: Gd<UpdateReceiver>,
+        cleanup_pending: Rc<Cell<bool>>,
+    ) -> Option<(Self, Gd<UpdateSubscription>)> {
+        // Validate destination types before retaining any subscription state.
+        let consumer = match receiver.bind().resolve::<T>() {
+            Ok(consumer) => consumer,
+            Err(error) => {
+                godot_error!("Cannot subscribe to {}: {}", T::NAME, error);
+                return None;
+            }
+        };
+        let mut subscription = UpdateSubscription::new_gd();
+        subscription.bind_mut().cleanup_pending = cleanup_pending;
+        let active = subscription.bind().active.clone();
+        Some((
+            Self {
+                owner,
+                entity,
+                consumer,
+                active,
+            },
+            subscription,
+        ))
+    }
+
+    pub(crate) fn send(
+        &self,
+        value: &T,
+        arguments: &mut Array<Variant>,
+        arguments_ready: &mut bool,
+    ) {
+        // Earlier receivers may have removed a scene or cancelled this connection.
+        if !self.is_active() {
+            return;
+        }
+        match &self.consumer {
+            Receiver::Callback(callback) => {
+                if !*arguments_ready {
+                    value.write_arguments(arguments);
+                    *arguments_ready = true;
+                }
+                callback.callv(arguments);
+            }
+            Receiver::Native(receive) => receive(value.clone().into_fields()),
+        }
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
         self.active.get()
             && self.owner.is_instance_valid()
             && self.owner.is_inside_tree()
-            && self.entity.is_instance_valid()
-            && self.entity.bind().accepts_updates()
+            && self
+                .entity
+                .as_ref()
+                .is_none_or(|entity| entity.is_instance_valid() && entity.bind().accepts_updates())
             && self.consumer.is_valid()
     }
 }
@@ -150,48 +199,34 @@ impl<T: ExportValue> ExportValueBatch<T> {
         }
     }
 
-    /// Register an authored view. Its initial value arrives in the next delivery.
-    pub fn watch(
+    /// Connect either destination through the same lifetime and initial-value rules.
+    pub fn subscribe(
         &self,
         owner: Gd<Node>,
         entity: Gd<EntityMeta>,
-        callback: Callable,
-    ) -> Gd<ExportValueSubscription> {
-        self.register(owner, entity, Consumer::Script(callback))
-    }
-
-    /// Connect typed native work with the same ordering and cancellation as script views.
-    pub fn watch_native(
-        &self,
-        owner: Gd<Node>,
-        entity: Gd<EntityMeta>,
-        receive: impl Fn(T) + 'static,
-    ) -> Gd<ExportValueSubscription> {
-        self.register(owner, entity, Consumer::Native(Rc::new(receive)))
-    }
-
-    fn register(
-        &self,
-        owner: Gd<Node>,
-        entity: Gd<EntityMeta>,
-        consumer: Consumer<T>,
-    ) -> Gd<ExportValueSubscription> {
-        let mut subscription = ExportValueSubscription::new_gd();
-        subscription.bind_mut().cleanup_pending = self.cleanup_pending.clone();
+        receiver: Gd<UpdateReceiver>,
+    ) -> Option<Gd<UpdateSubscription>> {
         let entity_id = entity.bind().entity_id;
-        let binding = Binding {
-            owner,
-            entity,
-            consumer,
-            active: subscription.bind().active.clone(),
-        };
+        self.subscribe_for(owner, entity_id, Some(entity), receiver)
+    }
+
+    /// Level services can observe an ID without requiring a visual EntityMeta node.
+    pub fn subscribe_for(
+        &self,
+        owner: Gd<Node>,
+        entity_id: i64,
+        entity: Option<Gd<EntityMeta>>,
+        receiver: Gd<UpdateReceiver>,
+    ) -> Option<Gd<UpdateSubscription>> {
+        let (binding, subscription) =
+            Binding::subscribe(owner, entity, receiver, self.cleanup_pending.clone())?;
         self.binding_map
             .borrow_mut()
             .entry(entity_id)
             .or_default()
             .push(binding);
         self.changed_list.borrow_mut().push(entity_id);
-        subscription
+        Some(subscription)
     }
 }
 
@@ -266,43 +301,20 @@ impl<T: ExportValue> ValueDelivery for ExportValueBatch<T> {
                         binding_list
                             .iter()
                             .filter(|binding| binding.is_active())
-                            .map(|binding| {
-                                (
-                                    binding.consumer.clone(),
-                                    binding.active.clone(),
-                                    binding.owner.clone(),
-                                    binding.entity.clone(),
-                                )
-                            }),
+                            .cloned(),
                     );
                 }
             }
-            // Native-only destinations never create script arguments.
+            // Convert once only if at least one live Godot callback needs arguments.
             let mut arguments_ready = false;
-            for (consumer, active, owner, entity) in callback_list.drain(..) {
+            for binding in callback_list.drain(..) {
                 if !delivery_owner.is_instance_valid() || !delivery_owner.is_inside_tree() {
                     break;
                 }
-                if active.get()
-                    && owner.is_instance_valid()
-                    && owner.is_inside_tree()
-                    && entity.is_instance_valid()
-                    && entity.bind().accepts_updates()
-                    && consumer.is_valid()
-                {
-                    match consumer {
-                        Consumer::Script(callback) => {
-                            if !arguments_ready {
-                                value.clone().write_arguments(&mut argument_list);
-                                arguments_ready = true;
-                            }
-                            callback.callv(&argument_list);
-                        }
-                        Consumer::Native(receive) => receive(value.clone()),
-                    }
-                }
+                binding.send(&value, &mut argument_list, &mut arguments_ready);
             }
         }
+
         // Registration during callbacks may have added initial values for next frame.
         changed_list.extend(self.changed_list.borrow_mut().ids.drain(..));
         self.changed_list.borrow_mut().ids = changed_list;
@@ -316,7 +328,7 @@ impl<T: ExportValue> ValueDelivery for ExportValueBatch<T> {
 #[derive(Default)]
 pub(crate) struct ValueBatchRegistry {
     typed_map: HashMap<TypeId, Rc<dyn Any>>,
-    delivery_list: Vec<Rc<dyn ValueDelivery>>,
+    delivery_list: Vec<Weak<dyn ValueDelivery>>,
 }
 
 impl ValueBatchRegistry {
@@ -333,26 +345,40 @@ impl ValueBatchRegistry {
         }
         let batch = Rc::new(create());
         self.typed_map.insert(key, batch.clone());
-        self.delivery_list.push(batch.clone());
+        let delivery: Rc<dyn ValueDelivery> = batch.clone();
+        self.delivery_list.push(Rc::downgrade(&delivery));
         batch
     }
 
     pub(crate) fn pending(&self) -> bool {
-        self.delivery_list.iter().any(|batch| batch.pending())
+        self.delivery_list
+            .iter()
+            .filter_map(Weak::upgrade)
+            .any(|batch| batch.pending())
     }
     pub(crate) fn pending_since(&self) -> Option<(u64, u64)> {
         self.delivery_list
             .iter()
+            .filter_map(Weak::upgrade)
             .filter_map(|batch| batch.pending_since())
             .min()
     }
     pub(crate) fn subscriber_count(&self, entity_id: i64) -> usize {
         self.delivery_list
             .iter()
+            .filter_map(Weak::upgrade)
             .map(|batch| batch.subscriber_count(entity_id))
             .sum()
     }
-    pub(crate) fn deliveries(&self) -> Vec<Rc<dyn ValueDelivery>> {
-        self.delivery_list.clone()
+    pub(crate) fn register(&mut self, delivery: Rc<dyn ValueDelivery>) {
+        self.delivery_list.retain(|entry| entry.strong_count() > 0);
+        self.delivery_list.push(Rc::downgrade(&delivery));
+    }
+    pub(crate) fn deliveries(&mut self) -> Vec<Rc<dyn ValueDelivery>> {
+        self.delivery_list.retain(|entry| entry.strong_count() > 0);
+        self.delivery_list
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect()
     }
 }

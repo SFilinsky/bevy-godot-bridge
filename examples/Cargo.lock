@@ -338,6 +338,7 @@ dependencies = [
  "bevy_godot4_proc_macros",
  "dashmap",
  "godot",
+ "godot-apis",
  "once_cell",
  "tracing",
  "tracing-subscriber",
@@ -1068,6 +1069,13 @@ checksum = "5599d03afd17a511e11d0bf9e06c88d4095a9120f10cf00a74f50b300f53413e"
 dependencies = [
  "godot-core",
  "godot-macros",
+]
+
+[[package]]
+name = "godot-apis"
+version = "0.1.0"
+dependencies = [
+ "godot",
 ]
 
 [[package]]

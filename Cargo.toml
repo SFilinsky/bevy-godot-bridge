@@ -8,6 +8,8 @@ readme = "README.md"
 crate-type = ["lib", "cdylib"]
 
 [features]
+# Expose inspection methods used only by Godot regression tests and benchmark counters.
+bridge-test-api = ["bevy_godot4_proc_macros/bridge-test-api"]
 # serde = ["godot/serde"]
 assets = [] # experimental feature, see assets::GodotResourceLoader
 # The recording implementation is available in debug builds or explicitly profiled releases.
@@ -18,6 +20,7 @@ profiled-release = ["dev-observability"]
 bridge-transport-profiling = []
 
 [dependencies]
+godot-apis = { path = "godot-apis" }
 memory-stats = { version = "1.2", optional = true }
 anyhow = "1"
 bevy = { version = "0.18", default-features = false, features = ["bevy_asset", "bevy_state", "bevy_log"] }

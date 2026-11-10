@@ -1,0 +1,8 @@
+[package]
+name = "godot-apis"
+version = "0.1.0"
+edition = "2024"
+description = "Shared APIs for independent Godot components written in Rust"
+
+[dependencies]
+godot = "0.4.5"

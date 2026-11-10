@@ -12,8 +12,6 @@ pub enum Stage {
     Deduplicate,
     Snapshot,
     StoreBind,
-    StoreLookup,
-    ObjectCreation,
     FieldCopy,
     Equality,
     Bookkeeping,
@@ -21,7 +19,6 @@ pub enum Stage {
     Removal,
     Other,
     GodotRoute,
-    GodotListeners,
 }
 
 /// Keeps one exporter's detail totals together until it returns.
@@ -94,22 +91,19 @@ mod enabled {
     use std::sync::OnceLock;
     use std::time::{Duration, Instant};
 
-    const LABEL_LIST: [&str; 15] = [
+    const LABEL_LIST: [&str; 12] = [
         "query scan",
         "service lookup",
         "duplicate filtering",
         "identity and snapshot",
         "store borrowing",
-        "store lookup",
-        "DTO object creation",
-        "DTO field copy",
-        "DTO equality",
+        "capture snapshot fields",
+        "compare queued snapshots",
         "revision and state bookkeeping",
-        "signals and callbacks",
+        "queue entity notices",
         "removal cleanup",
         "other and probe overhead",
         "find Godot unit and set revision",
-        "notify Godot unit listeners",
     ];
     thread_local! {
         static CURRENT: RefCell<Option<Batch>> = const { RefCell::new(None) };
@@ -117,7 +111,7 @@ mod enabled {
     static REQUESTED: OnceLock<bool> = OnceLock::new();
 
     pub struct Batch {
-        total_list: [Duration; 15],
+        total_list: [Duration; 12],
         stage: Stage,
         last: Instant,
     }
@@ -138,7 +132,7 @@ mod enabled {
         let previous = if active {
             CURRENT.with(|current| {
                 current.borrow_mut().replace(Batch {
-                    total_list: [Duration::ZERO; 15],
+                    total_list: [Duration::ZERO; 12],
                     stage: Stage::Other,
                     last: Instant::now(),
                 })
@@ -209,12 +203,12 @@ mod enabled {
         fn nested_stages_partition_elapsed_time_without_double_counting() {
             let start = Instant::now();
             let mut batch = Batch {
-                total_list: [Duration::ZERO; 15],
+                total_list: [Duration::ZERO; 12],
                 stage: Stage::Other,
                 last: start,
             };
-            batch.transition(Stage::StoreLookup, start + Duration::from_millis(2));
-            let parent = batch.transition(Stage::ObjectCreation, start + Duration::from_millis(3));
+            batch.transition(Stage::StoreBind, start + Duration::from_millis(2));
+            let parent = batch.transition(Stage::FieldCopy, start + Duration::from_millis(3));
             batch.transition(parent, start + Duration::from_millis(7));
             batch.transition(Stage::Other, start + Duration::from_millis(10));
             assert_eq!(
@@ -222,11 +216,11 @@ mod enabled {
                 Duration::from_millis(2)
             );
             assert_eq!(
-                batch.total_list[Stage::StoreLookup as usize],
+                batch.total_list[Stage::StoreBind as usize],
                 Duration::from_millis(4)
             );
             assert_eq!(
-                batch.total_list[Stage::ObjectCreation as usize],
+                batch.total_list[Stage::FieldCopy as usize],
                 Duration::from_millis(4)
             );
             assert_eq!(

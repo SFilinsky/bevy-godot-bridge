@@ -1,12 +1,12 @@
 //! Position import layered on top of bridge entity initialization.
 
 pub mod intentions {
-    use crate::dto::DataTransferConfig;
+    use crate::data_transfer::DataTransferConfig;
     use crate::import::subsystems::IdentitySubsystem;
     use bevy::prelude::{Message, Vec3};
-    use bevy_godot4::prelude::NoSnapshot;
+
+    use bevy_godot4::prelude::bridge_dto;
     use bevy_godot4_proc_macros::import_queue;
-    use godot::obj::Base;
     use godot::prelude::*;
 
     /// Request to set an imported entity's initial Bevy transform from Godot.
@@ -17,47 +17,42 @@ pub mod intentions {
     }
 
     /// Godot-facing DTO for [`InitializePositionIntention`].
-    #[derive(GodotClass, Debug)]
-    #[class(init, base=RefCounted)]
-    pub struct InitializePositionIntentionDto {
+    #[bridge_dto(InitializePositionIntentionDto)]
+    #[derive(Debug)]
+    pub struct InitializePositionIntentionSnapshot {
         #[var]
         pub godot_id: i64,
 
         #[var]
         pub position: Vector3,
-
-        #[base]
-        base: Base<RefCounted>,
     }
 
     /// DTO mapping used by the generated position-initialization import queue.
     pub struct InitializePositionIntentionTransferConfig;
     impl DataTransferConfig for InitializePositionIntentionTransferConfig {
         type DataType = InitializePositionIntention;
-        type DtoType = InitializePositionIntentionDto;
-        type Snapshot = NoSnapshot;
 
-        fn update_dto(
-            dto: &mut Gd<Self::DtoType>,
+        type Snapshot = InitializePositionIntentionSnapshot;
+
+        fn update_snapshot(
+            snapshot: &mut Self::Snapshot,
             data: &Self::DataType,
             _identity: &mut IdentitySubsystem,
         ) {
-            let mut d = dto.bind_mut();
-            d.godot_id = data.godot_id;
-            d.position = Vector3::new(data.position.x, data.position.y, data.position.z);
+            snapshot.godot_id = data.godot_id;
+            snapshot.position = Vector3::new(data.position.x, data.position.y, data.position.z);
         }
 
         fn update_data(
-            dto: &Gd<Self::DtoType>,
+            snapshot: &Self::Snapshot,
             data: &mut Self::DataType,
             _identity: &mut IdentitySubsystem,
         ) {
-            let d = dto.bind();
-            data.godot_id = d.godot_id;
+            data.godot_id = snapshot.godot_id;
             data.position = Vec3::new(
-                d.position.x as f32,
-                d.position.y as f32,
-                d.position.z as f32,
+                snapshot.position.x as f32,
+                snapshot.position.y as f32,
+                snapshot.position.z as f32,
             );
         }
     }

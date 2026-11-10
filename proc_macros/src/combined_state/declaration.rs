@@ -1,4 +1,3 @@
-use proc_macro2::TokenStream;
 use std::collections::HashSet;
 use syn::{
     Error, Expr, Ident, LitStr, Path, Result, Token, Type, braced,
@@ -35,7 +34,6 @@ pub(super) enum Source {
 }
 pub(super) struct Spec {
     pub source: Source,
-    pub methods: TokenStream,
 }
 
 fn fields(input: ParseStream) -> Result<Vec<Field>> {
@@ -65,7 +63,6 @@ impl Parse for Spec {
         let mut output_list = None;
         let mut mapping = None;
         let mut label = None;
-        let mut methods = TokenStream::new();
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             if !key_set.insert(key.to_string()) {
@@ -80,11 +77,6 @@ impl Parse for Spec {
                 "outputs" => output_list = Some(fields(input)?),
                 "value_mapping_fn" => mapping = Some(input.parse()?),
                 "label" => label = Some(input.parse()?),
-                "methods" => {
-                    let content;
-                    braced!(content in input);
-                    methods = content.parse()?;
-                }
                 _ => return Err(Error::new(key.span(), "unknown reader setting")),
             }
             if !input.is_empty() {
@@ -125,7 +117,7 @@ impl Parse for Spec {
                 name: name.ok_or_else(|| input.error("config requires name"))?,
             }
         };
-        Ok(Self { source, methods })
+        Ok(Self { source })
     }
 }
 
@@ -143,6 +135,7 @@ mod tests {
             "prefix: A, inputs: { x: T, x: U }",
             "prefix: A, inputs: {}",
             "prefix: A, prefix: B, inputs: { x: T }",
+            "config: C, name: A, methods: {}",
             r#"config: C, name: A, label: "unexpected""#,
         ] {
             assert!(parse_str::<Spec>(source).is_err(), "accepted {source}");

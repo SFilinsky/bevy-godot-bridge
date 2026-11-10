@@ -1,16 +1,5 @@
-//! Code used by `import_queue!`.
-//!
-//! This macro makes a queue from Godot to Bevy. For example:
-//!
-//! ```ignore
-//! import_queue! { config: InitializeEntityIntentionTransferConfig }
-//! ```
-//!
-//! The named config tells the queue how to change the Godot data object into a
-//! Bevy `Message`.
-//!
-//! Each generated queue belongs to one `BevyApp`. A future Bevy-to-Godot queue
-//! can use the same idea: keep data from one level separate from another level.
+//! Generate a concrete Godot queue and plugin name for one transfer config.
+//! Request storage and Bevy delivery live in the shared `ImportQueue` implementation.
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -125,237 +114,77 @@ fn to_snake(s: &str) -> String {
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let spec = parse_macro_input!(input as Spec);
-
-    let cfg_path: Path = spec.config;
-    let (domain_ident, domain_snake) = derive_domain_from_config(&cfg_path).unwrap();
-
-    // Public API idents
-    let queue_rc_ident = format_ident!("{}Queue", domain_ident); // <Domain>Queue
-    let plugin_ident = format_ident!("{}ImportPlugin", domain_ident); // <Domain>ImportPlugin
-
-    // Internal names
-    let queue_storage_ident = format_ident!("__{}_ImportQueueStorage", domain_ident);
-    let queue_write_subsystem_ident = format_ident!("__{}_ImportQueueWriteSubsystem", domain_ident);
-    let queue_read_subsystem_ident = format_ident!("__{}_ImportQueueReadSubsystem", domain_ident);
-    let drain_fn_ident = format_ident!("__drain_{}", domain_snake);
+    let cfg_path = spec.config;
+    let (domain_ident, domain_snake) = match derive_domain_from_config(&cfg_path) {
+        Ok(names) => names,
+        Err(error) => return error.into_compile_error().into(),
+    };
+    let queue_ident = format_ident!("{}Queue", domain_ident);
+    let plugin_ident = format_ident!("{}ImportPlugin", domain_ident);
     let module_ident = format_ident!("__{}_import_queue", domain_snake);
 
-    // Godot sends its DTO object as-is. Some DTO fields only exist in Godot, so
-    // the queue turns the DTO into a Bevy Message later, inside the drain system.
-    //
-    // Godot side call is: queue.enqueue(dto: Gd<DtoType>) + queue.flush() from owner _process().
-    //
-    // This matches your requirement after the Vec3 issue.
-
+    // Godot needs concrete registered types; shared Rust code owns their behavior.
     let expanded: TokenStream2 = quote! {
         #[allow(non_snake_case)]
         mod #module_ident {
-            use bevy::prelude::*;
-            use bevy::ecs::system::SystemParam;
-            use std::collections::VecDeque;
+            use bevy::prelude::{App, Plugin};
+            use bevy_godot4::prelude::{DtoOf, BevyApp, DataTransferConfig, ImportQueue, ImportQueuePlugin};
+            use godot::builtin::Array;
+            use godot::classes::RefCounted;
+            use godot::obj::{Base, Gd};
+            use godot::prelude::{GodotClass, godot_api};
 
-            use godot::prelude::*;
-            use godot::classes::Node;
-            use godot::obj::Base;
-            use godot::global::godot_error;
+            type Config = super::#cfg_path;
+            type Dto = DtoOf<Config>;
 
-            // IMPORTANT:
-            // - BevyApp is in bevy_godot4 crate root (per your fix), not necessarily in prelude.
-            use bevy_godot4::prelude::BevyApp;
-            use bevy_godot4::prelude::DataTransferConfig;
-            use bevy_godot4::prelude::IdentitySubsystem;
-
-            // -----------------------------------------
-            // Types derived from config
-            // -----------------------------------------
-            type __Cfg = super::#cfg_path;
-            type __Msg = <__Cfg as DataTransferConfig>::DataType;
-            type __Dto = <__Cfg as DataTransferConfig>::DtoType;
-
-            // -----------------------------------------
-            // Each Bevy app keeps its own waiting Godot data here.
-            // -----------------------------------------
-            #[derive(Default, Debug)]
-            struct #queue_storage_ident {
-                q: VecDeque<Gd<__Dto>>,
-            }
-
-            impl #queue_storage_ident {
-                fn push(&mut self, dto: Gd<__Dto>) {
-                    self.q.push_back(dto);
-                }
-
-                fn drain_into(
-                    &mut self,
-                    out: &mut MessageWriter<__Msg>,
-                    identity: &mut IdentitySubsystem,
-                ) {
-                    while let Some(dto) = self.q.pop_front() {
-                        // Turn Godot data into a Bevy Message at the boundary.
-                        let msg: __Msg = <__Cfg as DataTransferConfig>::from_dto(&dto, identity);
-                        out.write(msg);
-                    }
-                }
-            }
-
-            #[derive(SystemParam)]
-            struct #queue_write_subsystem_ident<'w, 's> {
-                queue: NonSendMut<'w, #queue_storage_ident>,
-                phantom: std::marker::PhantomData<&'s ()>,
-            }
-
-            impl #queue_write_subsystem_ident<'_, '_> {
-                fn push(&mut self, dto: Gd<__Dto>) {
-                    self.queue.push(dto);
-                }
-
-                fn push_batch(&mut self, dtos: Vec<Gd<__Dto>>) {
-                    for dto in dtos {
-                        self.queue.push(dto);
-                    }
-                }
-            }
-
-            #[derive(SystemParam)]
-            struct #queue_read_subsystem_ident<'w, 's> {
-                queue: NonSendMut<'w, #queue_storage_ident>,
-                phantom: std::marker::PhantomData<&'s ()>,
-            }
-
-            impl #queue_read_subsystem_ident<'_, '_> {
-                fn drain_into(
-                    &mut self,
-                    out: &mut MessageWriter<__Msg>,
-                    identity: &mut IdentitySubsystem,
-                ) {
-                    self.queue.drain_into(out, identity);
-                }
-            }
-
-            // -----------------------------------------
-            // RefCounted Queue Accessor (composable)
-            // -----------------------------------------
             #[derive(GodotClass)]
             #[class(init, base=RefCounted)]
-            pub struct #queue_rc_ident {
-                bevy_app: Option<Gd<BevyApp>>,
-                pending: Vec<Gd<__Dto>>,
-                #[base]
+            pub struct #queue_ident {
+                queue: ImportQueue<Config>,
                 base: Base<RefCounted>,
             }
 
             #[godot_api]
-            impl #queue_rc_ident {
-                /// Attach this queue accessor to a host Node (used to locate parent BevyApp).
-                ///
-                /// Cache lookup result. Call once from some Node's _ready().
+            impl #queue_ident {
                 #[func]
                 pub fn bind_bevy_app(&mut self, app: Gd<BevyApp>) {
-                    self.bevy_app = Some(app);
-                }
-
-                /// Adds one Godot data object to this queue's waiting list.
-                #[func]
-                pub fn enqueue(&mut self, dto: Gd<__Dto>) {
-                    self.pending.push(dto);
-                }
-
-                pub fn enqueue_many(&mut self, dtos: Vec<Gd<__Dto>>) {
-                    self.pending.extend(dtos);
+                    self.queue.bind_bevy_app(app);
                 }
 
                 #[func]
-                pub fn enqueue_batch(&mut self, dtos: Array<Gd<__Dto>>) {
-                    let mut batch: Vec<Gd<__Dto>> = Vec::with_capacity(dtos.len() as usize);
-                    for i in 0..dtos.len() {
-                        if let Some(dto) = dtos.get(i) {
-                            batch.push(dto);
-                        }
-                    }
-                    self.enqueue_many(batch);
+                pub fn enqueue(&mut self, dto: Gd<Dto>) {
+                    self.queue.enqueue(dto);
                 }
 
-                /// Moves waiting Godot data into this Bevy app's queue.
-                /// Call this once per frame, for example from `_process()`.
+                pub fn enqueue_many(&mut self, dto_list: Vec<Gd<Dto>>) {
+                    self.queue.enqueue_many(dto_list);
+                }
+
+                #[func]
+                pub fn enqueue_batch(&mut self, dto_list: Array<Gd<Dto>>) {
+                    self.queue.enqueue_many(dto_list.iter_shared());
+                }
+
                 #[func]
                 pub fn flush(&mut self) {
-                    if self.pending.is_empty() {
-                        return;
-                    }
-
-                    let Some(mut app) = self.bevy_app.as_ref().cloned() else {
-                        godot_error!(
-                            "[ImportQueue:{}] flush() called before bind_bevy_app() (or BevyApp not found)",
-                            stringify!(#cfg_path),
-                        );
-                        return;
-                    };
-
-                    let dtos = std::mem::take(&mut self.pending);
-
-                    // Move this frame's Godot data into the Bevy-side queue.
-                    app.bind_mut().with_world_mut(|world: &mut World| {
-                        if world.get_non_send_resource::<#queue_storage_ident>().is_none() {
-                            world.insert_non_send_resource::<#queue_storage_ident>(#queue_storage_ident::default());
-                        }
-
-                        let mut state: bevy::ecs::system::SystemState<#queue_write_subsystem_ident<'_, '_>> =
-                            bevy::ecs::system::SystemState::new(world);
-                        {
-                            let mut queue = state.get_mut(world);
-                            queue.push_batch(dtos);
-                        }
-                        state.apply(world);
-                    });
+                    self.queue.flush();
                 }
 
                 #[func]
                 pub fn is_attached(&self) -> bool {
-                    self.bevy_app.is_some()
+                    self.queue.is_attached()
                 }
             }
 
-            // -----------------------------------------
-            // Drain system (Bevy-side)
-            // -----------------------------------------
-            fn #drain_fn_ident(
-                mut out: MessageWriter<__Msg>,
-                mut q: #queue_read_subsystem_ident,
-                mut identity: IdentitySubsystem,
-            )
-            where
-                __Cfg: DataTransferConfig,
-                __Msg: Message + Default + Sized,
-                __Dto: GodotClass + godot::obj::NewGd,
-            {
-                q.drain_into(&mut out, &mut identity);
-            }
-
-            // -----------------------------------------
-            // Plugin
-            // -----------------------------------------
             pub struct #plugin_ident;
+
             impl Plugin for #plugin_ident {
                 fn build(&self, app: &mut App) {
-                    // compile-time “config implements DataTransferConfig”
-                    // plus sanity bounds
-                    fn __assert_bounds<C>()
-                    where
-                        C: DataTransferConfig,
-                        <C as DataTransferConfig>::DataType: Message + Default + Sized,
-                        <C as DataTransferConfig>::DtoType: GodotClass + godot::obj::NewGd,
-                    {}
-                    __assert_bounds::<__Cfg>();
-
-                    app.add_message::<__Msg>()
-                        .init_non_send_resource::<#queue_storage_ident>()
-                        .add_systems(FixedPreUpdate, #drain_fn_ident);
+                    app.add_plugins(ImportQueuePlugin::<Config>::default());
                 }
             }
         }
-
-        pub use #module_ident::{ #queue_rc_ident, #plugin_ident };
+        pub use #module_ident::{#queue_ident, #plugin_ident};
     };
-
     expanded.into()
 }

@@ -29,28 +29,32 @@ mod app_action_queue;
 #[cfg(feature = "assets")]
 mod assets;
 mod bevy_app_subsystem;
+mod data_transfer;
 mod debug;
-mod dto;
 mod entity_meta;
 mod entity_registry;
 mod erased_gd;
-mod export_delivery;
 #[doc(hidden)]
 pub mod export_profile;
+mod export_publication;
 /// Queues Bevy values until Godot reads a batch.
 pub mod export_queue;
-mod export_readers;
 mod export_snapshots;
 mod export_values;
 mod import;
 mod initialization;
+mod occurrence_stream;
 mod performance;
-mod presentation;
+mod queue_source;
 mod required_settings;
 mod scene;
 mod scene_tree;
 mod state;
+mod state_publication;
 mod tools;
+mod transfer_types;
+mod update_dispatcher;
+mod update_sources;
 mod utils;
 
 /// The normal imports for game code using this bridge.
@@ -58,59 +62,67 @@ mod utils;
 /// Start with this module instead of importing private bridge files. Its macros
 /// and traits are the supported ways to extend the bridge.
 pub mod prelude {
-    pub use super::app_action_queue::AppAction;
-    pub use super::debug::cuboids::subsystem::{CuboidConfig, DebugCuboidSubsystem};
-    pub use super::debug::debug_manager::{DebugRenderGateSubsystem, EDebugState};
-    pub use super::debug::heatmap::subsystem::{DebugHeatmapSubsystem, HeatmapConfig};
-    pub use super::debug::paths::subsystem::{DebugPathSubsystem, PathConfig};
-    pub use super::debug::plugins::DebugVisualizationPlugin;
-    pub use super::entity_meta::EntityMeta;
-    pub use super::entity_registry::EntityRegistry;
-    pub use super::erased_gd::{ErasedGd, ErasedGdResource};
-    pub use super::export_delivery::{ExportChangeSource, GodotExportDelivery};
-    pub use super::export_readers::{
-        ExportConfig, ExportState, Optional, OptionalDto, ReaderConfig, ReaderInputs, Required,
-        RequiredPair, ValueMappingFn, watch_native_reader, watch_reader,
-    };
-    pub use super::export_snapshots::{ExportSnapshots, NoSnapshot, SnapshotConfig, SnapshotPair};
-    pub use super::export_values::{ExportValue, ExportValueBatch, ExportValueSubscription};
-    pub use super::initialization::{InitializationCoordinator, InitializationPhase};
-    pub use super::presentation::{ScalarPresentationTrack, TransformPresentationTrack};
-    pub use super::required_settings::RequiredSettings;
-    pub use super::scene::GodotScene;
-    pub use super::scene::node_registry::{NodeRegistry, RegistryError};
-    pub use super::scene::registration::{child_services, register_store_on_entry};
-    pub use super::scene::root_scripts::RootScripts;
-    pub use super::scene::scene_root::SceneRoot;
-    pub use super::scene_tree::SceneTreeSubsystem;
-    pub use super::utils::{
-        AsPhysicsSystem, AsVisualSystem, GodotPhysicsFrame, GodotVisualFrame,
-        SystemDeltaTimerSubsystem,
-    };
-    pub use crate::action_framework::{
-        ActionCheckStatus, ActionCheckStatusCodes, ActionInstanceId, ActionParams, ActionStatus,
-        ActionStatusCodes, AllowanceSummary, Check, CheckAdapter, CheckReason, CheckReportLike,
-        Criterion, ExecuteAction, ExecuteResult, ExecutionId,
-    };
-    pub use crate::app::{BevyApp, BevyAppSubsystem};
-    pub use crate::dto::{BuildsDto, DataTransferConfig, WithGatherer, WithStateNode};
-    pub use crate::export_queue::{ExportEventsPlugin, ExportMessagesPlugin, ExportQueue};
-    pub use crate::import::{
-        importers::EntityImporter, plugins::EntityInitializationPlugin,
-        position::plugins::PositionInitializationPlugin, sets::PostEntityInitSet,
-        subsystems::IdentitySubsystem,
-    };
-    pub use crate::performance::layer::{
-        MeasurementTimer, clear_benchmark_capture_gameplay_phase_for_current_scope, measure_work,
-        measurements_enabled, record_system_duration_for_current_scope,
-        set_benchmark_capture_gameplay_phase_for_current_scope,
-        set_benchmark_capture_phase_for_current_scope, set_benchmark_capture_phase_for_scope,
-    };
-    pub use crate::state::{BevyLifecyclePlugin, BevyLifecycleState};
-    pub use crate::tools::collect_children;
-    pub use bevy_godot4_proc_macros::{
-        ExportComponent, ExportComponentNew, ExportEntity, action_pipeline, bevy_app_profiles,
-        export_composed, export_queue, export_reader, import_bundle, import_queue,
-        settings_pipeline, with_state_node,
-    };
+//! The supported imports for game code using the bridge.
+pub use crate::action_framework::{
+    ActionCheckStatus, ActionCheckStatusCodes, ActionInstanceId, ActionParams, ActionStatus,
+    ActionStatusCodes, AllowanceSummary, Check, CheckAdapter, CheckReason, CheckReportLike,
+    Criterion, ExecuteAction, ExecuteResult, ExecutionId,
+};
+pub use crate::initialization::{InitializationCoordinator, InitializationPhase};
+pub use crate::app_action_queue::AppAction;
+pub use crate::state::{BevyLifecyclePlugin, BevyLifecycleState};
+pub use crate::utils::{
+    AsPhysicsSystem, AsVisualSystem, GodotPhysicsFrame, GodotVisualFrame, SystemDeltaTimerSubsystem,
+};
+pub use crate::app::{BevyApp, BevyAppSubsystem};
+pub use crate::data_transfer::{BuildsDto, DataTransferConfig, WithGatherer};
+pub use crate::transfer_types::{DtoOf, TransferDto, TransferSnapshot};
+pub use crate::debug::cuboids::subsystem::{CuboidConfig, DebugCuboidSubsystem};
+pub use crate::debug::debug_manager::{DebugRenderGateSubsystem, EDebugState};
+pub use crate::debug::heatmap::subsystem::{DebugHeatmapSubsystem, HeatmapConfig};
+pub use crate::debug::paths::subsystem::{DebugPathSubsystem, PathConfig};
+pub use crate::debug::plugins::DebugVisualizationPlugin;
+pub use crate::entity_meta::EntityMeta;
+pub use crate::entity_registry::EntityRegistry;
+pub use crate::export_publication::ExportPublication;
+pub use crate::queue_source::QueueSource;
+pub use crate::export_queue::{ExportEventsPlugin, ExportMessagesPlugin, ExportQueue};
+pub use crate::state_publication::StatePublication;
+pub use crate::export_snapshots::SnapshotPair;
+pub use crate::import::queue::{ImportQueue, ImportQueuePlugin};
+pub use crate::required_settings::RequiredSettings;
+pub use crate::import::{
+    importers::EntityImporter, plugins::EntityInitializationPlugin,
+    position::plugins::PositionInitializationPlugin, sets::PostEntityInitSet,
+    subsystems::IdentitySubsystem,
+};
+pub use crate::performance::layer::{
+    MeasurementTimer, clear_benchmark_capture_gameplay_phase_for_current_scope, measure_work,
+    measurements_enabled, record_system_duration_for_current_scope,
+    set_benchmark_capture_gameplay_phase_for_current_scope,
+    set_benchmark_capture_phase_for_current_scope, set_benchmark_capture_phase_for_scope,
+};
+pub use crate::scene::GodotScene;
+pub use crate::tools::collect_children;
+pub use crate::erased_gd::{ErasedGd, ErasedGdResource};
+pub use crate::scene::node_registry::{NodeRegistry, RegistryError};
+pub use crate::scene::registration::{child_services, register_store_on_entry};
+pub use crate::scene::root_scripts::RootScripts;
+pub use crate::scene::scene_root::SceneRoot;
+pub use crate::scene_tree::SceneTreeSubsystem;
+pub use crate::update_dispatcher::{ExportChangeSource, UpdateDispatcher};
+pub use crate::occurrence_stream::OccurrenceStream;
+pub use crate::update_sources::{
+    CombinedStateConfig, ExportConfig, ExportState, Optional, Required, RequiredPair, StateInput,
+    StateInputs, StateMappingFn, StateReadError, read_combined_state, report_state_error,
+    subscribe_source, subscribe_source_id,
+};
+pub use crate::export_values::{ExportValue, ExportValueBatch, UpdateSubscription};
+pub use bevy_godot4_proc_macros::bridge_dto;
+pub use bevy_godot4_proc_macros::{
+    action_pipeline, bevy_app_profiles, combined_state, export_composed, export_queue,
+    import_bundle, import_queue, settings_pipeline, with_state_node,
+};
+pub use godot_apis::updates::{UpdatePayload, UpdateReceiver};
+
 }

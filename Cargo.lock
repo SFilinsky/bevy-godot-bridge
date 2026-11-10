@@ -338,6 +338,7 @@ dependencies = [
  "bevy_godot4_proc_macros",
  "dashmap",
  "godot",
+ "godot-apis",
  "memory-stats",
  "once_cell",
  "tracing",
@@ -1135,6 +1136,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "venial",
+]
+
+[[package]]
+name = "godot-apis"
+version = "0.1.0"
+dependencies = [
+ "godot",
 ]
 
 [[package]]

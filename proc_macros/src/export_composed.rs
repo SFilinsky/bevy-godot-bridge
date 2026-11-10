@@ -113,7 +113,7 @@ impl Parse for Spec {
         for item in items {
             let is_optional = is_option_type(&item);
             let cfg_ty = strip_option(&item);
-            let field_ident = dto_field_ident_from_cfg(&cfg_ty);
+            let field_ident = feature_field_ident_from_cfg(&cfg_ty);
 
             let field_key = field_ident.to_string();
             if !seen_fields.insert(field_key.clone()) {
@@ -188,7 +188,7 @@ fn strip_option(ty: &Type) -> Type {
     ty.clone()
 }
 
-fn dto_field_ident_from_cfg(cfg_ty: &Type) -> Ident {
+fn feature_field_ident_from_cfg(cfg_ty: &Type) -> Ident {
     let raw = quote!(#cfg_ty).to_string();
 
     let base = raw
@@ -339,7 +339,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     .map(|value| value.is_changed())
                     .unwrap_or(false);
 
-                if is_created || #changed_flag || (#binding.is_none() && #state_store_bind.implements(eid_i64)) {
+                if is_created || #changed_flag || (#binding.is_none() && #state_store_bind.queued_implements(eid_i64)) {
                     if let Some(value) = #binding.as_ref() {
                         let did_change = #state_store_bind
                             .upsert_from_data::<#cfg_ty>(eid_i64, &*value, &mut identity, next_revision);
@@ -347,7 +347,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             changed_candidate = true;
                         }
                     } else if !is_created {
-                        if #state_store_bind.implements(eid_i64) {
+                        if #state_store_bind.queued_implements(eid_i64) {
                             measure_export(ExportStage::Removal, || #state_store_bind.remove_optional(eid_i64, next_revision));
                             changed_candidate = true;
                         }
@@ -412,6 +412,28 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
         })
         .collect();
+    // Benchmark counters and removal tests opt in; ordinary builds omit the API and its work.
+    let test_update_notice =
+        cfg!(feature = "bridge-test-api").then(|| quote! { Updated(i64, i64), });
+    let test_update_signal = cfg!(feature = "bridge-test-api").then(|| {
+        quote! {
+            #[signal]
+            fn on_updated(entity_id: i64, revision: i64);
+        }
+    });
+    let test_update_delivery = cfg!(feature = "bridge-test-api").then(|| quote! {
+        EntityNotice::Updated(id, revision) => {
+            if exporter.published_id_set.contains(&id) { exporter.signals().on_updated().emit(id, revision); }
+        },
+    });
+    let test_update_listeners = cfg!(feature = "bridge-test-api").then(|| quote! {
+        let report_updates = !exporter.base().get_signal_connection_list("on_updated").is_empty();
+    });
+    let test_update_enqueue = cfg!(feature = "bridge-test-api").then(|| quote! {
+        else if report_updates {
+            measure_export(ExportStage::Signal, || exporter.enqueue_notice(EntityNotice::Updated(eid_i64, next_revision)));
+        }
+    });
     let expanded = quote! {
         pub mod #module_ident {
             use super::*;
@@ -420,27 +442,35 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use bevy_godot4::prelude::*;
             use bevy_godot4::export_profile::{ExportProfile, Stage as ExportStage, measure as measure_export, query_iter};
             use godot::prelude::*;
+            use godot::classes::Engine;
             use std::collections::{HashMap, HashSet};
             use std::marker::PhantomData;
 
             #[allow(dead_code)]
-            fn __export_composed_requires_with_state_node_for_all_dtos() {
+            fn __export_composed_requires_export_config() {
                 fn assert_cfg<C>()
                 where
-                    C: DataTransferConfig,
-                    <C as DataTransferConfig>::DtoType: WithStateNode,
+                    C: ExportConfig,
                 {
                 }
 
                 #( assert_cfg::<#all_cfg_tys>(); )*
             }
 
-            #( pub type #state_alias_idents = <<#all_cfg_tys as DataTransferConfig>::DtoType as WithStateNode>::StateNode; )*
+            #( pub type #state_alias_idents = <#all_cfg_tys as ExportConfig>::StateNode; )*
             #optional_removed_readers_definition
+            use std::cell::RefCell;
+            use std::rc::Rc;
+            use bevy_godot4::prelude::{ExportPublication, ExportQueue, UpdateDispatcher};
+            enum EntityNotice { Created(i64, i64), #test_update_notice Removed(i64) }
+
             #[derive(GodotClass)]
             #[class(base=Node)]
             pub struct #exporter_ident {
                 revision_cache: HashMap<i64, i64>,
+                published_id_set: HashSet<i64>,
+                outgoing: Rc<RefCell<ExportQueue<EntityNotice>>>,
+                registration: Option<Rc<ExportPublication>>,
                 #[base] base: Base<Node>,
             }
 
@@ -449,8 +479,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[signal]
                 fn on_created(entity_id: i64, revision: i64);
 
-                #[signal]
-                fn on_updated(entity_id: i64, revision: i64);
+                #test_update_signal
 
                 #[signal]
                 fn on_removed(entity_id: i64);
@@ -468,6 +497,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     app.try_get_node_as::<#exporter_ident>(stringify!(#exporter_ident))
                 }
 
+                fn enqueue_notice(&self, notice: EntityNotice) {
+                    self.outgoing.borrow_mut().push(notice);
+                    if let Some(registration) = &self.registration { registration.request(); }
+                }
                 fn cleanup_entity(&mut self, entity_id: i64) {
                     self.revision_cache.remove(&entity_id);
                 }
@@ -475,7 +508,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 #[func]
                 fn get_known_entity_ids(&self) -> PackedInt64Array {
                     let mut out = PackedInt64Array::new();
-                    for entity_id in self.revision_cache.keys() {
+                    for entity_id in &self.published_id_set {
                         out.push(*entity_id);
                     }
                     out
@@ -484,9 +517,45 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             #[godot_api]
             impl INode for #exporter_ident {
+                fn ready(&mut self) {
+                    if Engine::singleton().is_editor_hint() { return; }
+                    let mut delivery = UpdateDispatcher::resolve(&self.base().clone()).expect("exporter needs authored delivery");
+                    let outgoing = Rc::downgrade(&self.outgoing);
+                    let node_id = self.base().instance_id();
+                    self.registration = Some(delivery.bind_mut().register_publication(true, move || {
+                        let Some(outgoing) = outgoing.upgrade() else { return; };
+                        let notice_list: Vec<_> = outgoing.borrow_mut().drain().collect();
+                        // Commit state before scene creation; release the queue before callbacks.
+                        for notice in notice_list {
+                            let Ok(mut exporter) = Gd::<#exporter_ident>::try_from_instance_id(node_id) else { break; };
+                            let mut exporter = exporter.bind_mut();
+                            match notice {
+                                EntityNotice::Created(id, revision) => {
+                                    if !exporter.revision_cache.contains_key(&id) { continue; }
+                                    exporter.published_id_set.insert(id);
+                                    exporter.signals().on_created().emit(id, revision);
+                                }
+                                #test_update_delivery
+                                EntityNotice::Removed(id) => {
+                                    if exporter.published_id_set.remove(&id) { exporter.signals().on_removed().emit(id); }
+                                }
+                            }
+                        }
+                    }));
+                }
+                fn exit_tree(&mut self) {
+                    self.registration = None;
+                    self.revision_cache.clear();
+                    self.published_id_set.clear();
+                    self.outgoing.borrow_mut().drain().for_each(drop);
+                    self.base_mut().request_ready();
+                }
                 fn init(base: Base<Node>) -> Self {
                     Self {
                         revision_cache: HashMap::new(),
+                        published_id_set: HashSet::new(),
+                        outgoing: Rc::new(RefCell::new(ExportQueue::default())),
+                        registration: None,
                         base,
                     }
                 }
@@ -704,23 +773,10 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 #[func]
                 fn _on_created(&mut self, entity_id: i64, revision: i64) {
-                    let Some(mut meta) = self.ensure_spawned_entity_meta(entity_id) else {
+                    if self.ensure_spawned_entity_meta(entity_id).is_none() {
                         return;
-                    };
-
-                    meta.bind_mut().revision = revision;
+                    }
                     self.signals().on_spawned().emit(entity_id, revision);
-                }
-
-                #[func]
-                fn _on_updated(&mut self, entity_id: i64, revision: i64) {
-                    measure_export(ExportStage::GodotRoute, || {
-                        let Some(mut meta) = self.ensure_spawned_entity_meta(entity_id) else {
-                            return;
-                        };
-
-                        meta.bind_mut().revision = revision;
-                    });
                 }
 
                 #[func]
@@ -774,10 +830,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         exporter.connect("on_created", &created);
                     }
 
-                    let updated = Callable::from_object_method(&self.to_gd(), "_on_updated");
-                    if !exporter.is_connected("on_updated", &updated) {
-                        exporter.connect("on_updated", &updated);
-                    }
+
 
                     let removed = Callable::from_object_method(&self.to_gd(), "_on_removed");
                     if !exporter.is_connected("on_removed", &removed) {
@@ -875,6 +928,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 let mut emitted_entity_ids: HashSet<i64> = HashSet::new();
 
+                #test_update_listeners
                 let mut process_entity = |entity: Entity, is_created: bool| {
                     // Removal readers can also contain already-despawned entities.
                     // Check the live snapshot before allocating or recovering an ID.
@@ -898,10 +952,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         measure_export(ExportStage::Deduplicate, || emitted_entity_ids.insert(eid_i64));
 
                         if is_created {
-                            measure_export(ExportStage::Signal, || exporter.signals().on_created().emit(eid_i64, next_revision));
-                        } else {
-                            measure_export(ExportStage::Signal, || exporter.signals().on_updated().emit(eid_i64, next_revision));
-                        }
+                            measure_export(ExportStage::Signal, || exporter.enqueue_notice(EntityNotice::Created(eid_i64, next_revision)));
+                        } #test_update_enqueue
                     }
                 };
 
@@ -928,7 +980,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         if let Some(entity_id) = measure_export(ExportStage::Snapshot, || identity.try_get_identity(entity)) {
                             #( #state_remove_blocks )*
                             measure_export(ExportStage::Removal, || exporter.cleanup_entity(entity_id));
-                            measure_export(ExportStage::Signal, || exporter.signals().on_removed().emit(entity_id));
+                            measure_export(ExportStage::Signal, || exporter.enqueue_notice(EntityNotice::Removed(entity_id)));
                         }
                     }
                 }

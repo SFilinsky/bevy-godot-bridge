@@ -7,10 +7,7 @@
 
 mod action_pipeline;
 mod bevy_app_profiles_impl;
-mod export_component_impl;
-mod export_component_new_impl;
 mod export_composed;
-mod export_entity_impl;
 mod import_bundle;
 mod queue;
 mod settings_pipeline;
@@ -38,40 +35,6 @@ use proc_macro::TokenStream;
 #[proc_macro]
 pub fn bevy_app_profiles(input: TokenStream) -> TokenStream {
     bevy_app_profiles_impl::expand(input)
-}
-
-/// Old way to export a component.
-///
-/// Do not use this in new code. Use `DataTransferConfig`, `with_state_node!`,
-/// and `export_composed!` instead. It remains only so older code still builds.
-#[deprecated(
-    note = "legacy exporter; use DataTransferConfig, with_state_node!, and export_composed! instead"
-)]
-#[proc_macro_derive(ExportComponent, attributes(export_component, export))]
-pub fn export_component(input: TokenStream) -> TokenStream {
-    export_component_impl::expand(input)
-}
-
-/// Old way to export a component.
-///
-/// Do not use this in new code. Use `DataTransferConfig`, `with_state_node!`,
-/// and `export_composed!` instead. It remains only so older code still builds.
-#[deprecated(
-    note = "legacy exporter; use DataTransferConfig, with_state_node!, and export_composed! instead"
-)]
-#[proc_macro_derive(ExportComponentNew)]
-pub fn export_component_new(input: TokenStream) -> TokenStream {
-    export_component_new_impl::expand(input)
-}
-
-/// Old way to export an entity.
-///
-/// Do not use this in new code. Use `export_composed!` instead. It remains only
-/// so older code still builds.
-#[deprecated(note = "legacy exporter; use export_composed! with DataTransferConfig instead")]
-#[proc_macro_derive(ExportEntity, attributes(export_entity))]
-pub fn export_entity(input: TokenStream) -> TokenStream {
-    export_entity_impl::expand(input)
 }
 
 /// Sends selected parts of a Bevy entity to Godot.
@@ -144,12 +107,19 @@ pub fn action_pipeline(input: TokenStream) -> TokenStream {
     action_pipeline::expand(input)
 }
 
-mod export_reader;
+mod bridge_dto;
+mod combined_state;
+
+/// Declare one owned Rust value and generate its typed Godot DTO.
+#[proc_macro_attribute]
+pub fn bridge_dto(args: TokenStream, input: TokenStream) -> TokenStream {
+    bridge_dto::expand(args, input)
+}
 
 /// Declare named inputs to generate reader values, mapping and a Godot watch method.
 /// Add typed outputs and a value_mapping_fn when transforming inputs; omit both
-/// to forward them unchanged. Existing ReaderConfig implementations also work.
+/// to forward them unchanged. Existing CombinedStateConfig implementations also work.
 #[proc_macro]
-pub fn export_reader(input: TokenStream) -> TokenStream {
-    export_reader::expand(input)
+pub fn combined_state(input: TokenStream) -> TokenStream {
+    combined_state::expand(input)
 }

@@ -1,14 +1,15 @@
 //! Declare a reader's inputs once; generate its value fields and Godot callback arguments.
+//! See README.md here for the build-time/runtime split and a complete update example.
 //!
 //! `prefix: Animation, inputs: { attack: Optional<AttackConfig> }` forwards
 //! the input unchanged. Add `outputs: { current: f32 }` and
 //! `value_mapping_fn: |health| Some(HealthValues { current: health.current })`
 //! when preparing different values. Inputs and outputs keep declaration order.
-//! Forwarded fields must support Godot conversion; map plain Rust snapshots to
-//! suitable output fields instead. An optional `label` preserves a profiler name.
+//! Forwarded snapshots generate typed Godot arguments only for script consumers.
+//! An optional `label` preserves a profiler name.
 //!
-//! `config: ExistingReaderConfig, name: ExistingValueUpdates` still exposes a
-//! handwritten config. Both forms accept extra feature-owned `methods`.
+//! `config: ExistingCombinedStateConfig, name: ExistingCombinedStateNode` still exposes a
+//! handwritten config. Consumers connect to the standard subscribe method.
 
 mod declaration;
 mod generation;
