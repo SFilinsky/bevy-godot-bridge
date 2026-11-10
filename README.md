@@ -203,3 +203,37 @@ and Messages keep their ordered queues and are not collapsed into state updates.
 In measured builds, Godot's custom monitor `Bridge/<app ID>/Godot delivery ms`
 shows the separate phase. Queue delay counters count frames and microseconds
 until that phase starts; they do not include interpolation or GPU display delay.
+
+### Shared finite visual transitions
+
+Author one complete presentation scene within the level, normally below
+`RootScripts`. Its `SharedPresentation` root holds registration state; the
+authored `TransformPresentation` and `ScalarPresentation` children each reference
+that root and own their processing callbacks. Discovery uses the existing
+registry and nearest `SceneRoot`, so levels have independent queues.
+A configuration node resolves it once and registers its
+transform destination or numeric property. Keep the returned
+`TransformPresentationTrack` / `ScalarPresentationTrack`, submit start/end
+values with `animate`, and cancel it on tree exit. Dropping a handle also cancels
+it. `stop` withdraws current work while allowing later transitions.
+
+The behavior still owns its authored destination, duration and immediate-update
+policy. Transform tracks run in the authored physics processor.
+Numeric tracks run during idle processing. It advances only active transitions and follows each owner's
+`can_process` pause state. Engine time scale is already included in frame delta.
+New submissions replace older work. Zero duration applies the endpoint once the
+owner can process. Invalid duration is ignored. Cancellation and freed scene
+nodes are checked again before destination writes.
+
+The service releases its Rust borrow before applying values. A property setter
+may cancel another track, register new work, or unload its scene. Work submitted
+during application starts at the next corresponding processing pass. The shared
+loop is sequential on Godot's main thread; scene writes do not run on workers.
+
+Profiled builds expose `Presentation/<instance ID>/physics ms`
+and `Presentation/<instance ID>/idle ms`
+custom monitors. `measurements` / `reset_measurements` provide window totals:
+preparing active values, applying writes plus retiring completed work, pass
+count and write count. These are later visual work, separate from export
+delivery. They do not measure GPU rendering or make Godot nodes contiguous.
+
