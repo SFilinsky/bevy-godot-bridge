@@ -36,7 +36,7 @@ impl<T: Value> Handle<T> {
             return;
         }
         self.stop();
-        self.queue.borrow_mut().push(Transition {
+        self.queue.pending.borrow_mut().push(Transition {
             id: self.id,
             token: self.token.clone(),
             revision: self.token.revision.get(),
@@ -47,6 +47,7 @@ impl<T: Value> Handle<T> {
             duration: duration.max(0.0),
             elapsed: 0.0,
             completed: false,
+            last_clock: self.queue.clock.get(),
         });
     }
     fn stop(&self) {

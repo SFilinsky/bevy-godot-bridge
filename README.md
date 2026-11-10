@@ -218,7 +218,8 @@ values with `animate`, and cancel it on tree exit. Dropping a handle also cancel
 it. `stop` withdraws current work while allowing later transitions.
 
 The behavior still owns its authored destination, duration and immediate-update
-policy. Transform tracks run in the authored physics processor.
+policy. Visual transform tracks advance with physics time and publish once
+before idle consumers.
 Numeric tracks run during idle processing. It advances only active transitions and follows each owner's
 `can_process` pause state. Engine time scale is already included in frame delta.
 New submissions replace older work. Zero duration applies the endpoint once the
@@ -230,7 +231,7 @@ may cancel another track, register new work, or unload its scene. Work submitted
 during application starts at the next corresponding processing pass. The shared
 loop is sequential on Godot's main thread; scene writes do not run on workers.
 
-Profiled builds expose `Presentation/<instance ID>/physics ms`
+Profiled builds expose `Presentation/<instance ID>/frame publication ms`
 and `Presentation/<instance ID>/idle ms`
 custom monitors. `measurements` / `reset_measurements` provide window totals:
 preparing active values, applying writes plus retiring completed work, pass
