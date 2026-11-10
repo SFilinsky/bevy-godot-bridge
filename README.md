@@ -76,7 +76,7 @@ Then author the profile and its app in a scene. The typed `bevy_app` property is
 
 ```text
 GameplayBevyApp
-└── BevyApp
+в””в”Ђв”Ђ BevyApp
 ```
 
 
@@ -150,5 +150,33 @@ exporter records exclusive totals for finding changes, saved-value updates,
 Godot notification and cleanup. Nested child times are charged once. Normal
 builds compile the fine timing implementation out. Compare with probes disabled
 because recording itself has measurable cost. A zero creation/removal row means
-that workload did not exercise it. Godot work inside a listener is synchronous;
-later presentation callbacks need separate measurement.
+that workload did not exercise it. Entity scene listeners run in a separate
+Godot callback after Bevy returns. Include `Godot export: deliver changed features`
+in export totals; later interpolation callbacks still need separate measurement.
+
+### Receive only the features a visual uses
+
+Generated state stores expose `changes()`. Pass these sources to
+`EntityMeta.watch_changes(callback, sources)` and keep the returned subscription
+ID. The callback receives the entity revision only when at least one named
+source changed for that entity. An empty source list receives every entity
+revision. Call `unwatch_changes(id)` when the consuming view leaves the tree.
+Two consumers have independent subscriptions, even when they use the same source.
+
+Author one `ExportDelivery` child under `BevyApp` and assign its `export_delivery` property. Generated spawners queue changed
+entities, then this child invokes visual listeners at the next process priority
+in the same frame. Do not independently pause this child or manually run another
+Bevy update before its delivery: saved current/previous values belong to the
+completed update and are reused by the next one. The phase is sequential on
+Godot's main thread; it does not move scene access onto workers.
+
+Scene creation and removal notifications retain their existing order. Creation
+attaches the authored scene before queuing its initial update. Despawn cancels
+queued updates before starting custom visual cleanup. Optional-feature removal
+also counts as a feature change, even though `get_curr()` now returns null.
+Existing broad `on_change` listeners still run, after filtered listeners. Events
+and Messages keep their ordered queues and are not collapsed into state updates.
+
+In measured builds, Godot's custom monitor `Bridge/<app ID>/Godot delivery ms`
+shows the separate phase. Queue delay counters count frames and microseconds
+until that phase starts; they do not include interpolation or GPU display delay.

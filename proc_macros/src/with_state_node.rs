@@ -6,7 +6,7 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{
     Ident, Path, Result, Token,
     parse::{Parse, ParseStream},
@@ -55,13 +55,16 @@ impl Parse for Spec {
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let Spec { dto, state } = parse_macro_input!(input as Spec);
+    let change_source_ident = format_ident!("{state}ChangeSource");
 
     let expanded = quote! {
         use godot::prelude::*;
+        use bevy_godot4::prelude::ExportChangeSource as #change_source_ident;
 
         #[derive(GodotClass)]
         #[class(base=Node)]
         pub struct #state {
+            change_source: Gd<#change_source_ident>,
             entries: std::collections::HashMap<i64, (Gd<#dto>, Gd<#dto>, Gd<#dto>, i64)>,
             #[base] base: Base<Node>,
         }
@@ -95,6 +98,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     measure_export(ExportStage::FieldCopy, || C::update_dto(prev, data, identity));
                     measure_export(ExportStage::FieldCopy, || C::update_dto(spare, data, identity));
                     *updated_revision = revision;
+                    self.change_source.bind_mut().mark(entity_id, revision);
                     return true;
                 }
 
@@ -115,12 +119,20 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     swap(prev, curr);
                     swap(curr, spare);
                     *updated_revision = revision;
+                    self.change_source.bind_mut().mark(entity_id, revision);
                 });
                 true
             }
 
             pub fn remove_entity(&mut self, entity_id: i64) {
                 self.entries.remove(&entity_id);
+                self.change_source.bind_mut().forget(entity_id);
+            }
+
+            /// Remove an optional capability while retaining its change notification.
+            pub fn remove_optional(&mut self, entity_id: i64, revision: i64) {
+                self.entries.remove(&entity_id);
+                self.change_source.bind_mut().mark(entity_id, revision);
             }
 
             pub fn curr_for(&self, entity_id: i64) -> Option<Gd<#dto>> {
@@ -136,15 +148,17 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             pub fn updated_revision_for(&self, entity_id: i64) -> i64 {
-                self.entries
-                    .get(&entity_id)
-                    .map(|(_curr, _prev, _spare, revision)| *revision)
-                    .unwrap_or(-1)
+                self.change_source.bind().revision_for(entity_id)
             }
         }
 
         #[godot_api]
         impl #state {
+            /// Supply this source when declaring the features a visual needs.
+            #[func]
+            fn changes(&self) -> Gd<#change_source_ident> {
+                self.change_source.clone()
+            }
             #[func]
             fn resolve(owner: Gd<Node>) -> Option<Gd<#state>> {
                 if !owner.is_instance_valid() {
@@ -252,6 +266,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 register_store_on_entry(&base);
                 Self {
                     entries: std::collections::HashMap::new(),
+                    change_source: #change_source_ident::new_gd(),
                     base,
                 }
             }

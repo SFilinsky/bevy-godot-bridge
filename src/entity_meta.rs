@@ -1,3 +1,4 @@
+use crate::export_delivery::ExportChangeSource;
 use godot::global::godot_error;
 use godot::prelude::*;
 
@@ -8,6 +9,9 @@ use godot::prelude::*;
 #[derive(GodotClass)]
 #[class(base=Node)]
 pub struct EntityMeta {
+    subscription_list: Vec<(i64, Callable, Vec<Gd<ExportChangeSource>>)>,
+    next_subscription_id: i64,
+    despawning: bool,
     #[var]
     pub entity_id: i64,
     #[var]
@@ -20,6 +24,76 @@ pub struct EntityMeta {
 
 #[godot_api]
 impl EntityMeta {
+    /// Register only the feature changes this visual needs. Empty sources mean all changes.
+    #[func]
+    fn watch_changes(&mut self, callback: Callable, sources: Array<Gd<ExportChangeSource>>) -> i64 {
+        let id = self.next_subscription_id;
+        self.next_subscription_id += 1;
+        self.subscription_list
+            .push((id, callback, sources.iter_shared().collect()));
+        id
+    }
+
+    #[func]
+    fn unwatch_changes(&mut self, id: i64) {
+        self.subscription_list.retain(|entry| entry.0 != id);
+    }
+
+    /// Number of active visual listeners, useful when checking scene replacement.
+    #[func]
+    fn get_change_listener_count(&self) -> i64 {
+        self.subscription_list.len() as i64
+    }
+
+    pub(crate) fn has_subscription(&self, id: i64) -> bool {
+        self.subscription_list.iter().any(|entry| entry.0 == id)
+    }
+
+    /// Cancel queued updates before a scene starts its own destruction animation.
+    pub fn cancel_updates(&mut self) {
+        self.despawning = true;
+        self.subscription_list.clear();
+    }
+
+    pub(crate) fn accepts_updates(&self) -> bool {
+        !self.despawning
+    }
+
+    /// Internal delivery entry; release all Rust borrows before calling visual code.
+    #[func(gd_self)]
+    pub fn _deliver_changes(mut this: Gd<Self>, revision: i64) {
+        if !this.bind().accepts_updates() {
+            return;
+        }
+        let callback_list = this.bind_mut().callbacks_for(revision);
+        let argument_list = Array::from(&[revision.to_variant()]);
+        for (id, callback) in callback_list {
+            if !this.is_instance_valid() {
+                return;
+            }
+            if this.bind().has_subscription(id) && callback.is_valid() {
+                callback.callv(&argument_list);
+            }
+        }
+        if this.is_instance_valid() && this.bind().accepts_updates() {
+            this.signals().on_change().emit(revision);
+        }
+    }
+
+    pub(crate) fn callbacks_for(&mut self, revision: i64) -> Vec<(i64, Callable)> {
+        self.revision = revision;
+        self.subscription_list
+            .iter()
+            .filter(|entry| {
+                entry.2.is_empty()
+                    || entry
+                        .2
+                        .iter()
+                        .any(|source| source.bind().changed(self.entity_id, revision))
+            })
+            .map(|entry| (entry.0, entry.1.clone()))
+            .collect()
+    }
     #[signal]
     pub fn on_change(revision: i64);
 
@@ -98,6 +172,9 @@ impl INode for EntityMeta {
     fn init(base: Base<Node>) -> Self {
         Self {
             entity_id: -1,
+            subscription_list: Vec::new(),
+            next_subscription_id: 1,
+            despawning: false,
             revision: -1,
             custom_cleanup_enabled: false,
             base,

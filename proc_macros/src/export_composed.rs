@@ -339,7 +339,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     .map(|value| value.is_changed())
                     .unwrap_or(false);
 
-                if is_created || #changed_flag {
+                if is_created || #changed_flag || (#binding.is_none() && #state_store_bind.implements(eid_i64)) {
                     if let Some(value) = #binding.as_ref() {
                         let did_change = #state_store_bind
                             .upsert_from_data::<#cfg_ty>(eid_i64, &*value, &mut identity, next_revision);
@@ -348,7 +348,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         }
                     } else if !is_created {
                         if #state_store_bind.implements(eid_i64) {
-                            measure_export(ExportStage::Removal, || #state_store_bind.remove_entity(eid_i64));
+                            measure_export(ExportStage::Removal, || #state_store_bind.remove_optional(eid_i64, next_revision));
                             changed_candidate = true;
                         }
                     }
@@ -401,44 +401,17 @@ pub fn expand(input: TokenStream) -> TokenStream {
         })
         .collect();
 
-    let opt_removed_apply_blocks: Vec<TokenStream2> = spec
-        .optional
+    let opt_removed_apply_blocks: Vec<TokenStream2> = opt_removed_reader_idents
         .iter()
-        .zip(opt_removed_reader_idents.iter())
-        .map(|(component, removed_reader)| {
-            let state_store = &component.state_store_var_ident;
-
+        .map(|removed_reader| {
             quote! {
                 for entity in query_iter(optional_removed_readers.#removed_reader.read()) {
-                    let Some(entity_id) = measure_export(ExportStage::Snapshot, || identity.try_get_identity(entity)) else {
-                        continue;
-                    };
-
-                    if measure_export(ExportStage::Deduplicate, || removed_entity_ids.contains(&entity_id) || emitted_entity_ids.contains(&entity_id)) {
-                        continue;
-                    }
-
-                    let did_remove = {
-                        let mut state_store_bind = #state_store.bind_mut();
-                        if state_store_bind.implements(entity_id) {
-                            measure_export(ExportStage::Removal, || state_store_bind.remove_entity(entity_id));
-                            true
-                        } else {
-                            false
-                        }
-                    };
-
-                    if did_remove {
-                        let next_revision = exporter.revision_cache.get(&entity_id).copied().unwrap_or(-1) + 1;
-                        exporter.revision_cache.insert(entity_id, next_revision);
-                        measure_export(ExportStage::Signal, || exporter.signals().on_updated().emit(entity_id, next_revision));
-                        measure_export(ExportStage::Deduplicate, || emitted_entity_ids.insert(entity_id));
-                    }
+                    // Revisit the full optional set so simultaneous removals are not lost.
+                    process_entity(entity, false);
                 }
             }
         })
         .collect();
-
     let expanded = quote! {
         pub mod #module_ident {
             use super::*;
@@ -530,6 +503,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 parent_path: NodePath,
                 spawned_roots: HashMap<i64, Gd<Node>>,
                 entity_meta_cache: HashMap<i64, Gd<EntityMeta>>,
+                delivery: Option<Gd<GodotExportDelivery>>,
                 entity_registry: Option<Gd<EntityRegistry>>,
                 parent_node_cache: Option<Gd<Node>>,
                 exported_group_cache: Option<Gd<Node>>,
@@ -706,7 +680,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     if let Some(mut meta) = self.entity_meta_cache.remove(&entity_id) {
                         if meta.is_instance_valid() {
                             custom_cleanup = meta.bind().is_custom_cleanup_enabled();
-                            meta.bind_mut().signals().on_despawning().emit(entity_id);
+                            meta.bind_mut().cancel_updates();
+                            meta.signals().on_despawning().emit(entity_id);
                         }
                     }
 
@@ -734,9 +709,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         return;
                     };
 
-                    let mut meta = meta.bind_mut();
-                    meta.revision = revision;
-                    meta.signals().on_change().emit(revision);
+                    meta.bind_mut().revision = revision;
+                    self.delivery.as_mut().expect("delivery is connected before creation")
+                        .bind_mut().enqueue(meta, revision);
                     self.signals().on_spawned().emit(entity_id, revision);
                 }
 
@@ -747,11 +722,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
                             return;
                         };
 
-                        let mut meta = meta.bind_mut();
-                        meta.revision = revision;
-                        measure_export(ExportStage::GodotListeners, || {
-                            meta.signals().on_change().emit(revision);
-                        });
+                        meta.bind_mut().revision = revision;
+                        self.delivery.as_mut().expect("delivery is connected before updates")
+                            .bind_mut().enqueue(meta, revision);
                     });
                 }
 
@@ -770,6 +743,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         parent_path: NodePath::default(),
                         spawned_roots: HashMap::new(),
                         entity_meta_cache: HashMap::new(),
+                        delivery: None,
                         entity_registry: None,
                         parent_node_cache: None,
                         exported_group_cache: None,
@@ -787,6 +761,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     };
 
                     let owner_node: Gd<Node> = owner.clone().upcast();
+                    self.delivery = Some(owner.bind().export_delivery());
                     self.entity_registry = EntityRegistry::resolve(&owner_node);
                     if self.entity_registry.is_none() {
                         godot_error!(
@@ -908,11 +883,13 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 let mut emitted_entity_ids: HashSet<i64> = HashSet::new();
 
                 let mut process_entity = |entity: Entity, is_created: bool| {
-                    let eid_i64 = measure_export(ExportStage::Snapshot, || identity.get_identity(entity));
-
+                    // Removal readers can also contain already-despawned entities.
+                    // Check the live snapshot before allocating or recovering an ID.
                     let Ok(( #( #req_bindings, )* #( #opt_bindings, )* )) = measure_export(ExportStage::Snapshot, || snapshot.get(entity)) else {
                         return;
                     };
+                    let eid_i64 = measure_export(ExportStage::Snapshot, || identity.get_identity(entity));
+                    if emitted_entity_ids.contains(&eid_i64) { return; }
 
                     let next_revision = measure_export(ExportStage::Bookkeeping, || exporter.revision_cache.get(&eid_i64).copied().unwrap_or(-1) + 1);
                     let mut changed_candidate = false;
@@ -951,12 +928,11 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                let mut removed_entity_ids: HashSet<i64> = HashSet::new();
+                #( #opt_removed_apply_blocks )*
 
                 if any_removed {
                     for entity in query_iter(removed.read()) {
                         if let Some(entity_id) = measure_export(ExportStage::Snapshot, || identity.try_get_identity(entity)) {
-                            measure_export(ExportStage::Deduplicate, || removed_entity_ids.insert(entity_id));
                             #( #state_remove_blocks )*
                             measure_export(ExportStage::Removal, || exporter.cleanup_entity(entity_id));
                             measure_export(ExportStage::Signal, || exporter.signals().on_removed().emit(entity_id));
@@ -964,7 +940,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                #( #opt_removed_apply_blocks )*
+
             }
 
             pub struct #plugin_ident;
