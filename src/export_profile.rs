@@ -35,7 +35,7 @@ pub struct ExportProfile {
 }
 
 impl ExportProfile {
-    /// Enable only in a measured build with EQUILIBRIA_ENTITY_PROFILE=1.
+    /// Enable only in a measured build with BEVY_GODOT_ENTITY_PROFILE=1.
     #[inline]
     pub fn begin(_owner: &'static str) -> Self {
         #[cfg(feature = "bridge-transport-profiling")]
@@ -90,7 +90,7 @@ mod enabled {
         measurements_enabled, record_detail_duration_for_current_scope,
     };
     use std::cell::RefCell;
-    use std::env;
+    use std::env::var;
     use std::sync::OnceLock;
     use std::time::{Duration, Instant};
 
@@ -134,8 +134,7 @@ mod enabled {
 
     pub fn begin(owner: &'static str) -> ExportProfile {
         let active = measurements_enabled()
-            && *REQUESTED
-                .get_or_init(|| env::var("EQUILIBRIA_ENTITY_PROFILE").as_deref() == Ok("1"));
+            && *REQUESTED.get_or_init(|| var("BEVY_GODOT_ENTITY_PROFILE").as_deref() == Ok("1"));
         let previous = if active {
             CURRENT.with(|current| {
                 current.borrow_mut().replace(Batch {
