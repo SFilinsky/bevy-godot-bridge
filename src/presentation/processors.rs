@@ -34,7 +34,7 @@ pub(super) fn validate(root: &Gd<SharedPresentation>) {
     );
 }
 
-/// Applies finite transforms through one authored processing child.
+/// Advances the visual clock and publishes one transform sample per display frame.
 #[derive(GodotClass)]
 #[class(init, base=Node)]
 pub struct TransformPresentation {
@@ -52,25 +52,31 @@ impl INode for TransformPresentation {
             .presentation
             .as_ref()
             .expect("Assign the authored Presentation root");
+        let callback = presentation.callable("_publish_frame");
+        self.base()
+            .get_tree()
+            .expect("processor is in tree")
+            .connect("process_frame", &callback);
         observe! {
-            let name = format!("Presentation/{}/physics ms", presentation.instance_id().to_i64());
-            Performance::singleton().add_custom_monitor(&name, &presentation.callable("_physics_ms"));
+            let name = format!("Presentation/{}/frame publication ms", presentation.instance_id().to_i64());
+            Performance::singleton().add_custom_monitor(&name, &presentation.callable("_frame_ms"));
         }
     }
 
-    #[func(gd_self)]
-    fn physics_process(this: Gd<Self>, delta: f64) {
-        // Release the processor before destination writes can call scripts.
-        let presentation = this.bind().presentation.clone();
-        if let Some(presentation) = presentation {
-            SharedPresentation::advance_transforms(presentation, delta);
+    fn physics_process(&mut self, delta: f64) {
+        // Time advancement does not write transforms or run gameplay.
+        if let Some(presentation) = &self.presentation {
+            presentation.bind().advance_clock(delta);
         }
     }
 
     fn exit_tree(&mut self) {
         let presentation = self.presentation.as_ref().expect("authored presentation");
+        if let Some(mut tree) = self.base().get_tree() {
+            tree.disconnect("process_frame", &presentation.callable("_publish_frame"));
+        }
         observe! {
-            let name = format!("Presentation/{}/physics ms", presentation.instance_id().to_i64());
+            let name = format!("Presentation/{}/frame publication ms", presentation.instance_id().to_i64());
             Performance::singleton().remove_custom_monitor(&name);
         }
     }

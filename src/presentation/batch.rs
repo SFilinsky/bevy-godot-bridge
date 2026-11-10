@@ -6,7 +6,10 @@ use godot::prelude::ToGodot;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-observe! { use std::time::Instant; }
+observe! {
+    use std::time::Instant;
+    use super::probe::writes_enabled;
+}
 
 pub trait Value: Copy {
     type Target: Clone;
@@ -62,6 +65,7 @@ pub struct Transition<T: Value> {
     pub duration: f64,
     pub elapsed: f64,
     pub completed: bool,
+    pub last_clock: f64,
 }
 
 impl<T: Value> Transition<T> {
@@ -74,7 +78,22 @@ impl<T: Value> Transition<T> {
     }
 }
 
-pub type Queue<T> = Rc<RefCell<Vec<Transition<T>>>>;
+/// Shared clock lets render publication combine several physics steps precisely.
+pub struct Inbox<T: Value> {
+    pub pending: RefCell<Vec<Transition<T>>>,
+    pub clock: Cell<f64>,
+}
+
+impl<T: Value> Default for Inbox<T> {
+    fn default() -> Self {
+        Self {
+            pending: RefCell::new(Vec::new()),
+            clock: Cell::new(0.0),
+        }
+    }
+}
+
+pub type Queue<T> = Rc<Inbox<T>>;
 
 #[derive(Default)]
 pub struct Metrics {
@@ -83,6 +102,7 @@ pub struct Metrics {
     write_ms: f64,
     calls: u64,
     writes: u64,
+    evaluations: u64,
 }
 
 impl Metrics {
@@ -92,6 +112,7 @@ impl Metrics {
         result.set("write_ms", self.write_ms);
         result.set("calls", self.calls);
         result.set("writes", self.writes);
+        result.set("evaluations", self.evaluations);
         result
     }
 }
@@ -121,7 +142,7 @@ impl<T: Value> Batch<T> {
         for entry in self.active_list.drain(..) {
             entry.token.alive.set(false);
         }
-        for entry in self.queue.borrow_mut().drain(..) {
+        for entry in self.queue.pending.borrow_mut().drain(..) {
             entry.token.alive.set(false);
         }
         self.index_map.clear();
@@ -129,9 +150,19 @@ impl<T: Value> Batch<T> {
     }
 
     pub fn step(&mut self, delta: f64, service_valid: impl Fn() -> bool) {
+        #[cfg(not(any(
+            all(debug_assertions, feature = "dev-observability"),
+            feature = "profiled-release"
+        )))]
+        let apply_writes = true;
+        observe! { let apply_writes = writes_enabled(); }
         observe! { let started = Instant::now(); }
+        self.queue
+            .clock
+            .set(self.queue.clock.get() + delta.max(0.0));
+        let clock = self.queue.clock.get();
         // Replace only changed transitions; finished destinations leave the hot loop.
-        for entry in self.queue.borrow_mut().drain(..) {
+        for entry in self.queue.pending.borrow_mut().drain(..) {
             if !entry.valid() {
                 continue;
             }
@@ -144,10 +175,16 @@ impl<T: Value> Batch<T> {
         }
         self.output_list.clear();
         for (index, entry) in self.active_list.iter_mut().enumerate() {
+            // A new request starts at submission, even between catch-up physics steps.
+            let elapsed_delta = (clock - entry.last_clock).max(0.0);
+            entry.last_clock = clock;
             if !entry.valid() || !entry.owner.can_process() {
                 continue;
             }
-            entry.elapsed = (entry.elapsed + delta.max(0.0)).min(entry.duration);
+            if elapsed_delta == 0.0 && entry.duration > 0.0 {
+                continue;
+            }
+            entry.elapsed = (entry.elapsed + elapsed_delta).min(entry.duration);
             let weight = if entry.duration > 0.0 {
                 entry.elapsed / entry.duration
             } else {
@@ -164,9 +201,12 @@ impl<T: Value> Batch<T> {
             }
             let entry = &mut self.active_list[index];
             if entry.valid() && entry.owner.can_process() {
-                value.apply(&mut entry.target);
+                if apply_writes {
+                    value.apply(&mut entry.target);
+                    observe! { self.metrics.writes += 1; }
+                }
                 entry.completed = entry.elapsed >= entry.duration;
-                observe! { self.metrics.writes += 1; }
+                observe! { self.metrics.evaluations += 1; }
             }
         }
         // Swap removal keeps the remaining jobs compact and their lookup indices correct.
