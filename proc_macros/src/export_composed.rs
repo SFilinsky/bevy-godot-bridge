@@ -503,7 +503,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 parent_path: NodePath,
                 spawned_roots: HashMap<i64, Gd<Node>>,
                 entity_meta_cache: HashMap<i64, Gd<EntityMeta>>,
-                delivery: Option<Gd<GodotExportDelivery>>,
                 entity_registry: Option<Gd<EntityRegistry>>,
                 parent_node_cache: Option<Gd<Node>>,
                 exported_group_cache: Option<Gd<Node>>,
@@ -710,8 +709,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     };
 
                     meta.bind_mut().revision = revision;
-                    self.delivery.as_mut().expect("delivery is connected before creation")
-                        .bind_mut().enqueue(meta, revision);
                     self.signals().on_spawned().emit(entity_id, revision);
                 }
 
@@ -723,8 +720,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         };
 
                         meta.bind_mut().revision = revision;
-                        self.delivery.as_mut().expect("delivery is connected before updates")
-                            .bind_mut().enqueue(meta, revision);
                     });
                 }
 
@@ -743,7 +738,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                         parent_path: NodePath::default(),
                         spawned_roots: HashMap::new(),
                         entity_meta_cache: HashMap::new(),
-                        delivery: None,
                         entity_registry: None,
                         parent_node_cache: None,
                         exported_group_cache: None,
@@ -761,7 +755,6 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     };
 
                     let owner_node: Gd<Node> = owner.clone().upcast();
-                    self.delivery = Some(owner.bind().export_delivery());
                     self.entity_registry = EntityRegistry::resolve(&owner_node);
                     if self.entity_registry.is_none() {
                         godot_error!(

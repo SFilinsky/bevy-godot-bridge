@@ -1,12 +1,11 @@
-//! Queue changed entities until Godot runs its presentation phase.
+//! Deliver prepared feature values after Bevy returns.
 //!
-//! State stores publish version numbers. Entity scenes declare which stores
-//! their listeners use, so unchanged features never enter GDScript callbacks.
+//! Readers declare their inputs; only changed IDs and initial subscriptions run.
+//! The scheduler has no knowledge of game features or presentation policies.
 
-use crate::export_values::{ExportValue, ExportValueBatch, ValueBatchRegistry};
+use crate::export_values::{ExportValue, ExportValueBatch, PendingValues, ValueBatchRegistry};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::mem::take;
 use std::rc::{Rc, Weak};
 
 use godot::builtin::StringName;
@@ -15,8 +14,8 @@ use godot::obj::{Base, Gd, Singleton, WithBaseField};
 use godot::prelude::{GodotClass, godot_api};
 
 use crate::app::BevyApp;
-use crate::entity_meta::EntityMeta;
 use crate::performance::layer::enter_app_scope;
+use crate::scene::registration::{child_services, register_store_on_entry};
 observe! {
     use std::time::Instant;
     use godot::classes::{Engine, Time};
@@ -28,7 +27,7 @@ observe! {
 #[class(base=RefCounted)]
 pub struct ExportChangeSource {
     revision_map: HashMap<i64, i64>,
-    native_list: Vec<Weak<RefCell<Vec<i64>>>>,
+    native_list: Vec<Weak<RefCell<PendingValues>>>,
     base: Base<RefCounted>,
 }
 
@@ -46,17 +45,15 @@ impl ExportChangeSource {
         });
     }
 
-    pub(crate) fn watch_native(&mut self, pending: &Rc<RefCell<Vec<i64>>>) {
+    pub(crate) fn watch_native(&mut self, pending: &Rc<RefCell<PendingValues>>) {
         self.native_list.push(Rc::downgrade(pending));
     }
 
     /// Forget a destroyed entity; IDs are not reused within the app.
     pub fn forget(&mut self, entity_id: i64) {
+        // A feature can disappear while the entity stays alive (for example a capability).
+        self.mark(entity_id, -1);
         self.revision_map.remove(&entity_id);
-    }
-
-    pub(crate) fn changed(&self, entity_id: i64, revision: i64) -> bool {
-        self.revision_map.get(&entity_id) == Some(&revision)
     }
 
     /// Last change, including removal; generated stores use this for optional values.
@@ -81,21 +78,9 @@ impl IRefCounted for ExportChangeSource {
 #[class(base=Node)]
 pub struct GodotExportDelivery {
     value_batches: ValueBatchRegistry,
-    pending_list: Vec<(Gd<EntityMeta>, i64)>,
-    delivery_list: Vec<(Gd<EntityMeta>, i64)>,
     scope_id: u64,
     last_delivery_ms: f64,
     monitor_name: Option<StringName>,
-    #[cfg(any(
-        all(debug_assertions, feature = "dev-observability"),
-        feature = "profiled-release"
-    ))]
-    pending_usec: u64,
-    #[cfg(any(
-        all(debug_assertions, feature = "dev-observability"),
-        feature = "profiled-release"
-    ))]
-    pending_frame: u64,
     max_delay_usec: u64,
     max_delay_frames: u64,
     base: Base<Node>,
@@ -105,7 +90,12 @@ impl GodotExportDelivery {
     /// Find delivery without borrowing Bevy, including while a new scene becomes ready.
     pub fn resolve(host: &Gd<Node>) -> Option<Gd<Self>> {
         let app = BevyApp::resolve(host).ok()?;
-        app.try_get_node_as::<Self>("ExportDelivery")
+        let mut nodes = child_services::<Self>(app.upcast::<Node>());
+        assert!(
+            nodes.len() == 1,
+            "BevyApp needs exactly one authored export delivery child"
+        );
+        nodes.pop()
     }
     /// Share one native value reader per feature type within this app.
     pub fn value_batch<T: ExportValue>(
@@ -119,26 +109,19 @@ impl GodotExportDelivery {
         self.base_mut().set_process_priority(priority);
     }
 
-    /// Enqueue only changed entities; this does not execute their visual listeners.
-    pub fn enqueue(&mut self, entity: Gd<EntityMeta>, revision: i64) {
-        observe! {
-            if self.pending_list.is_empty() {
-                self.pending_usec = Time::singleton().get_ticks_usec();
-                self.pending_frame = Engine::singleton().get_process_frames();
-            }
-        }
-        self.pending_list.push((entity, revision));
-    }
-
     pub(crate) fn clear(&mut self) {
-        self.pending_list.clear();
-        self.delivery_list.clear();
         self.value_batches = ValueBatchRegistry::default();
     }
 }
 
 #[godot_api]
 impl GodotExportDelivery {
+    /// Count live subscriptions when checking replacement or scene cleanup.
+    #[func]
+    fn subscriber_count(&self, entity_id: i64) -> i64 {
+        self.value_batches.subscriber_count(entity_id) as i64
+    }
+
     #[func]
     fn _last_delivery_ms(&self) -> f64 {
         self.last_delivery_ms
@@ -167,23 +150,12 @@ impl GodotExportDelivery {
 #[godot_api]
 impl INode for GodotExportDelivery {
     fn init(base: Base<Node>) -> Self {
+        register_store_on_entry(&base);
         Self {
             value_batches: ValueBatchRegistry::default(),
-            pending_list: Vec::new(),
-            delivery_list: Vec::new(),
             scope_id: 0,
             last_delivery_ms: 0.0,
             monitor_name: None,
-            #[cfg(any(
-                all(debug_assertions, feature = "dev-observability"),
-                feature = "profiled-release"
-            ))]
-            pending_usec: 0,
-            #[cfg(any(
-                all(debug_assertions, feature = "dev-observability"),
-                feature = "profiled-release"
-            ))]
-            pending_frame: 0,
             max_delay_usec: 0,
             max_delay_frames: 0,
             base,
@@ -208,39 +180,32 @@ impl INode for GodotExportDelivery {
     }
 
     #[func(gd_self)]
-    fn process(mut this: Gd<Self>, _delta: f64) {
+    fn process(this: Gd<Self>, _delta: f64) {
+        Self::deliver_pending(this);
+    }
+}
+
+impl GodotExportDelivery {
+    /// Run the same delivery phase from a controlled test or an explicit scheduler.
+    pub fn deliver_pending(mut this: Gd<Self>) {
         // Take the published work without retaining a Rust borrow across callbacks.
         // A callback may detach its view or unload the entire owning scene.
-        let (mut delivery_list, value_batch_list, scope_id) = {
+        let (value_batch_list, scope_id) = {
             let mut owner = this.bind_mut();
             owner.last_delivery_ms = 0.0;
-            if owner.pending_list.is_empty() && !owner.value_batches.pending() {
+            if !owner.value_batches.pending() {
                 return;
             }
             observe! {
-                if !owner.pending_list.is_empty() {
-                owner.max_delay_usec = owner.max_delay_usec.max(Time::singleton().get_ticks_usec().saturating_sub(owner.pending_usec));
-                owner.max_delay_frames = owner.max_delay_frames.max(Engine::singleton().get_process_frames().saturating_sub(owner.pending_frame));
+                if let Some((usec, frame)) = owner.value_batches.pending_since() {
+                owner.max_delay_usec = owner.max_delay_usec.max(Time::singleton().get_ticks_usec().saturating_sub(usec));
+                owner.max_delay_frames = owner.max_delay_frames.max(Engine::singleton().get_process_frames().saturating_sub(frame));
                 }
             }
-            let delivery_list = take(&mut owner.pending_list);
-            owner.pending_list = take(&mut owner.delivery_list);
-            (
-                delivery_list,
-                owner.value_batches.deliveries(),
-                owner.scope_id,
-            )
+            (owner.value_batches.deliveries(), owner.scope_id)
         };
         let _scope = enter_app_scope(scope_id);
         observe! { let started = Instant::now(); }
-        for (entity, revision) in delivery_list.drain(..) {
-            if !this.is_instance_valid() || !this.is_inside_tree() {
-                break;
-            }
-            if entity.is_instance_valid() {
-                EntityMeta::_deliver_changes(entity, revision);
-            }
-        }
         if this.is_instance_valid() {
             let delivery_owner = this.clone().upcast::<Node>();
             for batch in value_batch_list {
@@ -254,7 +219,6 @@ impl INode for GodotExportDelivery {
         }
         if this.is_instance_valid() {
             let mut owner = this.bind_mut();
-            owner.delivery_list = delivery_list;
             observe! {
                 let duration = started.elapsed();
                 owner.last_delivery_ms = duration.as_secs_f64() * 1000.0;

@@ -1,4 +1,5 @@
 use bevy::prelude::{App, Event, Message};
+use bevy_godot4::prelude::NoSnapshot;
 use bevy_godot4::prelude::{
     DataTransferConfig, ExportEventsPlugin, ExportMessagesPlugin, ExportQueue, IdentitySubsystem,
 };
@@ -27,6 +28,7 @@ struct TestImmediateNotificationTransferConfig;
 impl DataTransferConfig for TestNotificationTransferConfig {
     type DataType = TestNotification;
     type DtoType = TestNotificationDto;
+    type Snapshot = NoSnapshot;
 
     fn update_dto(
         _dto: &mut Gd<Self::DtoType>,
@@ -46,6 +48,7 @@ impl DataTransferConfig for TestNotificationTransferConfig {
 impl DataTransferConfig for AlternateTestNotificationTransferConfig {
     type DataType = TestNotification;
     type DtoType = TestNotificationDto;
+    type Snapshot = NoSnapshot;
 
     fn update_dto(
         _dto: &mut Gd<Self::DtoType>,
@@ -65,6 +68,7 @@ impl DataTransferConfig for AlternateTestNotificationTransferConfig {
 impl DataTransferConfig for TestImmediateNotificationTransferConfig {
     type DataType = TestImmediateNotification;
     type DtoType = TestNotificationDto;
+    type Snapshot = NoSnapshot;
 
     fn update_dto(
         _dto: &mut Gd<Self::DtoType>,

@@ -531,7 +531,10 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
 
             pub struct #report_transfer_config_name;
 
+            use bevy_godot4::prelude::NoSnapshot;
             impl DataTransferConfig for #report_transfer_config_name {
+                type Snapshot = NoSnapshot;
+
                 type DataType = #check_report_name;
                 type DtoType = #check_report_dto_name;
                 const USES_DEFAULT_OUTBOUND_DTO_BUILD: bool = false;

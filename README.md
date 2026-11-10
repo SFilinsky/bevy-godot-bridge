@@ -76,9 +76,11 @@ Then author the profile and its app in a scene. The typed `bevy_app` property is
 
 ```text
 GameplayBevyApp
-в””в”Ђв”Ђ BevyApp
+└── BevyApp
+    └── ExportDelivery (GodotExportDelivery)
 ```
 
+Assign the delivery child to BevyApp's `export_delivery` property; it delivers scene updates after Bevy finishes.
 
 ## The Concept
 
@@ -141,107 +143,3 @@ With a native solution, the workflow would be more straightforward.
 Look up a Bevy app from the host node that needs it. The nearest scene root owns the lookup. Apps, coordinators and generated state stores register with Godot, which updates their group membership on tree entry and exit. A state store must be a direct child of the resolved app. Missing or duplicate providers keep their existing diagnostics.
 
 While a scene is entering, later siblings may already be parented without appearing in a live group. The root takes a temporary snapshot of its authored app and coordinator candidates. Detached scenes and partially mounted branches use scoped discovery. Callers can keep the resolved reference for their own lifetime. Rebind when the provider or owning scope changes.
-
-### Following entity export costs
-
-Enable `bridge-transport-profiling` only in a measured development/profiled
-build, then set `EQUILIBRIA_ENTITY_PROFILE=1` for entity stage timings. The
-exporter records exclusive totals for finding changes, saved-value updates,
-Godot notification and cleanup. Nested child times are charged once. Normal
-builds compile the fine timing implementation out. Compare with probes disabled
-because recording itself has measurable cost. A zero creation/removal row means
-that workload did not exercise it. Entity scene listeners run in a separate
-Godot callback after Bevy returns. Include `Godot export: deliver changed features`
-in export totals; later interpolation callbacks still need separate measurement.
-
-### Receive only the features a visual uses
-
-Generated state stores expose `changes()`. Pass these sources to
-`EntityMeta.watch_changes(callback, sources)` and keep the returned subscription
-ID. The callback receives the entity revision only when at least one named
-source changed for that entity. An empty source list receives every entity
-revision. Call `unwatch_changes(id)` when the consuming view leaves the tree.
-Two consumers have independent subscriptions, even when they use the same source.
-
-Native integrations can use `ExportValueBatch<T>` when several views need the
-same plain values. Give each feature a distinct small `Copy` value type that
-implements `ExportValue`, with a typed callback argument conversion. Resolve
-`GodotExportDelivery` from the authored host, then obtain its `value_batch`.
-The first registration supplies that feature's sources and reader; later views
-share it within the same app. Do not use the same value type for different input
-schemas in one app.
-
-Keep the `ExportValueSubscription` returned by `watch` in the authored behavior
-and call `cancel` when the behavior exits the tree. Dropping it also cancels.
-Registration queues the initial value. Changed input sources queue entity IDs;
-delivery combines them, reads each affected entity once into a reusable value
-buffer, then invokes its subscribed views. Cancellation, freed views and scene
-unloading are checked again before each call. No callback retains a Rust borrow
-of the batch or Bevy app. `None` from the reader means no value to publish; a
-feature that clears a display on removal should publish an explicit absent value.
-
-In profiled builds, `Godot values: read <feature>` and
-`Godot values: apply <feature>` split native collection from argument preparation
-and script application. These rows are children of the total Godot delivery row;
-do not add them to that total a second time. Existing entity subscriptions remain
-useful for sparse state and consumers that need the saved object API.
-
-Author one `ExportDelivery` child under `BevyApp` and assign its `export_delivery` property. Generated spawners queue changed
-entities, then this child invokes visual listeners at the next process priority
-in the same frame. Do not independently pause this child or manually run another
-Bevy update before its delivery: saved current/previous values belong to the
-completed update and are reused by the next one. The phase is sequential on
-Godot's main thread; it does not move scene access onto workers.
-
-Scene creation and removal notifications retain their existing order. Creation
-attaches the authored scene before queuing its initial update. Despawn cancels
-queued updates before starting custom visual cleanup. Optional-feature removal
-also counts as a feature change, even though `get_curr()` now returns null.
-Existing broad `on_change` listeners still run, after filtered listeners. Events
-and Messages keep their ordered queues and are not collapsed into state updates.
-
-In measured builds, Godot's custom monitor `Bridge/<app ID>/Godot delivery ms`
-shows the separate phase. Queue delay counters count frames and microseconds
-until that phase starts; they do not include interpolation or GPU display delay.
-
-### Shared finite visual transitions
-
-Author one complete presentation scene within the level, normally below
-`RootScripts`. Its `SharedPresentation` root holds registration state; the
-authored `TransformPresentation` and `ScalarPresentation` children each reference
-that root and own their processing callbacks. Discovery uses the existing
-registry and nearest `SceneRoot`, so levels have independent queues.
-A configuration node resolves it once and registers its
-transform destination or numeric property. Keep the returned
-`TransformPresentationTrack` / `ScalarPresentationTrack`, submit start/end
-values with `animate`, and cancel it on tree exit. Dropping a handle also cancels
-it. `stop` withdraws current work while allowing later transitions.
-
-The behavior still owns its authored destination, duration and immediate-update
-policy. Visual transform tracks advance with physics time and publish once
-before idle consumers.
-Numeric tracks run during idle processing. It advances only active transitions and follows each owner's
-`can_process` pause state. Engine time scale is already included in frame delta.
-New submissions replace older work. Zero duration applies the endpoint once the
-owner can process. Invalid duration is ignored. Cancellation and freed scene
-nodes are checked again before destination writes.
-
-The service releases its Rust borrow before applying values. A property setter
-may cancel another track, register new work, or unload its scene. Work submitted
-during application starts at the next corresponding processing pass. The shared
-loop is sequential on Godot's main thread; scene writes do not run on workers.
-
-Profiled builds expose `Presentation/<instance ID>/frame publication ms`
-and `Presentation/<instance ID>/idle ms`
-custom monitors. `measurements` / `reset_measurements` provide window totals:
-preparing active values, applying writes plus retiring completed work, pass
-count and write count. These are later visual work, separate from export
-delivery. They do not measure GPU rendering or make Godot nodes contiguous.
-
-Native consumers can use `ExportValueBatch::watch_native` and a track's
-`native_receiver()`. Release the track's Godot borrow before calling the
-receiver: scene getters and setters may cancel or replace work. Godot pushes
-transform policy through `configure_updates` and numeric duration through
-`configure_duration`. Keep the Godot track alive and cancel it on owner exit;
-native receiver copies do not keep a dropped track active.
-
