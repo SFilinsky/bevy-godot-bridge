@@ -65,6 +65,7 @@ pub struct Transition<T: Value> {
     pub duration: f64,
     pub elapsed: f64,
     pub completed: bool,
+    pub has_published: bool,
     pub last_clock: f64,
 }
 
@@ -181,7 +182,8 @@ impl<T: Value> Batch<T> {
             if !entry.valid() || !entry.owner.can_process() {
                 continue;
             }
-            if elapsed_delta == 0.0 && entry.duration > 0.0 {
+            // A replacement must publish its start even before another physics tick.
+            if elapsed_delta == 0.0 && entry.duration > 0.0 && entry.has_published {
                 continue;
             }
             entry.elapsed = (entry.elapsed + elapsed_delta).min(entry.duration);
@@ -206,6 +208,7 @@ impl<T: Value> Batch<T> {
                     observe! { self.metrics.writes += 1; }
                 }
                 entry.completed = entry.elapsed >= entry.duration;
+                entry.has_published = true;
                 observe! { self.metrics.evaluations += 1; }
             }
         }
