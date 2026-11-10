@@ -238,3 +238,10 @@ preparing active values, applying writes plus retiring completed work, pass
 count and write count. These are later visual work, separate from export
 delivery. They do not measure GPU rendering or make Godot nodes contiguous.
 
+Native consumers can use `ExportValueBatch::watch_native` and a track's
+`native_receiver()`. Release the track's Godot borrow before calling the
+receiver: scene getters and setters may cancel or replace work. Godot pushes
+transform policy through `configure_updates` and numeric duration through
+`configure_duration`. Keep the Godot track alive and cancel it on owner exit;
+native receiver copies do not keep a dropped track active.
+
