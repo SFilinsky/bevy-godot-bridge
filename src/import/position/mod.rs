@@ -4,6 +4,7 @@ pub mod intentions {
     use crate::dto::DataTransferConfig;
     use crate::import::subsystems::IdentitySubsystem;
     use bevy::prelude::{Message, Vec3};
+    use bevy_godot4::prelude::NoSnapshot;
     use bevy_godot4_proc_macros::import_queue;
     use godot::obj::Base;
     use godot::prelude::*;
@@ -34,6 +35,7 @@ pub mod intentions {
     impl DataTransferConfig for InitializePositionIntentionTransferConfig {
         type DataType = InitializePositionIntention;
         type DtoType = InitializePositionIntentionDto;
+        type Snapshot = NoSnapshot;
 
         fn update_dto(
             dto: &mut Gd<Self::DtoType>,

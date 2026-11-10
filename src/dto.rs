@@ -9,6 +9,7 @@ use std::cell::{Cell, RefCell};
 #[cfg(feature = "bridge-transport-profiling")]
 use std::time::{Duration, Instant};
 
+use crate::export_snapshots::SnapshotConfig;
 use crate::import::subsystems::IdentitySubsystem;
 use godot::obj::NewGd;
 use godot::prelude::{Gd, GodotClass, Node, RefCounted};
@@ -138,6 +139,8 @@ enum OutboundDtoBuildStage {
 pub trait DataTransferConfig {
     type DataType: Default + Sized;
     type DtoType: GodotClass + NewGd;
+    /// Published Rust copy, or `NoSnapshot` to read the DTO directly.
+    type Snapshot: SnapshotConfig<Self::DtoType>;
 
     /// Says whether this config uses the default [`Self::from_data`] method.
     ///

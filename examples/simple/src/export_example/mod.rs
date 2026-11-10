@@ -1,8 +1,9 @@
 //! Minimal demo of how to export data from Bevy to Godot.
 
 use bevy::prelude::*;
+use bevy_godot4::prelude::NoSnapshot;
 use bevy_godot4::prelude::{
-    export_composed, with_state_node, DataTransferConfig, IdentitySubsystem,
+    DataTransferConfig, IdentitySubsystem, export_composed, with_state_node,
 };
 use godot::prelude::*;
 
@@ -37,6 +38,7 @@ struct TransformExportConfig;
 impl DataTransferConfig for TransformExportConfig {
     type DataType = Transform;
     type DtoType = TransformDto;
+    type Snapshot = NoSnapshot;
 
     fn update_data(
         dto: &Gd<Self::DtoType>,
@@ -60,7 +62,7 @@ impl DataTransferConfig for TransformExportConfig {
 }
 
 with_state_node! {
-    dto: TransformDto,
+    config: TransformExportConfig,
     state: TransformStateNode,
 }
 

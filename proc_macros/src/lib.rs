@@ -143,3 +143,13 @@ pub fn with_state_node(input: TokenStream) -> TokenStream {
 pub fn action_pipeline(input: TokenStream) -> TokenStream {
     action_pipeline::expand(input)
 }
+
+mod export_reader;
+
+/// Declare named inputs to generate reader values, mapping and a Godot watch method.
+/// Add typed outputs and a value_mapping_fn when transforming inputs; omit both
+/// to forward them unchanged. Existing ReaderConfig implementations also work.
+#[proc_macro]
+pub fn export_reader(input: TokenStream) -> TokenStream {
+    export_reader::expand(input)
+}

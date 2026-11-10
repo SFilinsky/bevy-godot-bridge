@@ -39,6 +39,8 @@ mod export_delivery;
 pub mod export_profile;
 /// Queues Bevy values until Godot reads a batch.
 pub mod export_queue;
+mod export_readers;
+mod export_snapshots;
 mod export_values;
 mod import;
 mod initialization;
@@ -66,6 +68,11 @@ pub mod prelude {
     pub use super::entity_registry::EntityRegistry;
     pub use super::erased_gd::{ErasedGd, ErasedGdResource};
     pub use super::export_delivery::{ExportChangeSource, GodotExportDelivery};
+    pub use super::export_readers::{
+        ExportConfig, ExportState, Optional, OptionalDto, ReaderConfig, ReaderInputs, Required,
+        RequiredPair, ValueMappingFn, watch_native_reader, watch_reader,
+    };
+    pub use super::export_snapshots::{ExportSnapshots, NoSnapshot, SnapshotConfig, SnapshotPair};
     pub use super::export_values::{ExportValue, ExportValueBatch, ExportValueSubscription};
     pub use super::initialization::{InitializationCoordinator, InitializationPhase};
     pub use super::presentation::{ScalarPresentationTrack, TransformPresentationTrack};
@@ -103,7 +110,7 @@ pub mod prelude {
     pub use crate::tools::collect_children;
     pub use bevy_godot4_proc_macros::{
         ExportComponent, ExportComponentNew, ExportEntity, action_pipeline, bevy_app_profiles,
-        export_composed, export_queue, import_bundle, import_queue, settings_pipeline,
-        with_state_node,
+        export_composed, export_queue, export_reader, import_bundle, import_queue,
+        settings_pipeline, with_state_node,
     };
 }

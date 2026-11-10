@@ -328,6 +328,8 @@ pub fn expand(input: TokenStream) -> TokenStream {
             pub struct #message_transfer_config_ident;
 
             impl DataTransferConfig for #message_transfer_config_ident {
+                type Snapshot = NoSnapshot;
+
                 type DataType = #message_type_path;
                 type DtoType = #message_dto_ident;
 

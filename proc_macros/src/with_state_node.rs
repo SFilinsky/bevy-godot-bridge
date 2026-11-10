@@ -14,13 +14,13 @@ use syn::{
 };
 
 struct Spec {
-    dto: Path,
+    config: Path,
     state: Ident,
 }
 
 impl Parse for Spec {
     fn parse(input: ParseStream) -> Result<Self> {
-        let mut dto: Option<Path> = None;
+        let mut config: Option<Path> = None;
         let mut state: Option<Ident> = None;
 
         while !input.is_empty() {
@@ -28,12 +28,12 @@ impl Parse for Spec {
             input.parse::<Token![:]>()?;
 
             match key.to_string().as_str() {
-                "dto" => dto = Some(input.parse()?),
+                "config" => config = Some(input.parse()?),
                 "state" => state = Some(input.parse()?),
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!("unknown key `{other}`; expected `dto` or `state`"),
+                        format!("unknown key `{other}`; expected `config` or `state`"),
                     ));
                 }
             }
@@ -44,8 +44,9 @@ impl Parse for Spec {
         }
 
         Ok(Self {
-            dto: dto
-                .ok_or_else(|| syn::Error::new(Span::call_site(), "missing `dto: SomeDtoType`"))?,
+            config: config.ok_or_else(|| {
+                syn::Error::new(Span::call_site(), "missing `config: TransferConfig`")
+            })?,
             state: state.ok_or_else(|| {
                 syn::Error::new(Span::call_site(), "missing `state: SomeStateNode`")
             })?,
@@ -54,22 +55,69 @@ impl Parse for Spec {
 }
 
 pub fn expand(input: TokenStream) -> TokenStream {
-    let Spec { dto, state } = parse_macro_input!(input as Spec);
+    let Spec { config, state } = parse_macro_input!(input as Spec);
+    let config_trait = format_ident!("{state}TransferConfig");
+    let export_config_trait = format_ident!("{state}ExportConfig");
+    let export_state_trait = format_ident!("{state}ExportState");
+    let dto = quote! { <#config as #config_trait>::DtoType };
     let change_source_ident = format_ident!("{state}ChangeSource");
+    let prepared_ident = format_ident!("{state}PreparedValue");
+    let value_trait_ident = format_ident!("{state}ExportValue");
+    let meta_ident = format_ident!("{state}EntityMeta");
+    let subscription_ident = format_ident!("{state}ValueSubscription");
+    let snapshots_ident = format_ident!("{state}Snapshots");
+    let pair_ident = format_ident!("{state}SnapshotPair");
+    let snapshot = quote! { <#config as #config_trait>::Snapshot };
+    let snapshot_imports = quote! {
+        use bevy_godot4::prelude::{SnapshotConfig as #snapshots_ident, SnapshotPair as #pair_ident};
+    };
+    let snapshot_field = quote! { snapshots: <#snapshot as #snapshots_ident<#dto>>::Store, };
+    let snapshot_init = quote! { snapshots: Default::default(), };
+    let snapshot_publish = quote! {
+        <#snapshot as #snapshots_ident<#dto>>::publish(&mut self.snapshots, entity_id, curr);
+    };
+    let snapshot_remove = quote! {
+        <#snapshot as #snapshots_ident<#dto>>::remove(&mut self.snapshots, entity_id);
+    };
+    let snapshot_read = quote! {
+        /// Read the config's published values; DTO-only configs reuse their existing objects.
+        pub fn native_values_for(&self, entity_id: i64) -> Option<#pair_ident<<#snapshot as #snapshots_ident<#dto>>::Value>> {
+            <#snapshot as #snapshots_ident<#dto>>::read(&self.snapshots, entity_id, || {
+                Some(#pair_ident { current: self.curr_for(entity_id)?, previous: self.prev_for(entity_id)? })
+            })
+        }
+    };
 
     let expanded = quote! {
         use godot::prelude::*;
+        use bevy_godot4::prelude::{DataTransferConfig as #config_trait, ExportConfig as #export_config_trait, ExportState as #export_state_trait};
         use bevy_godot4::prelude::ExportChangeSource as #change_source_ident;
+        use bevy_godot4::prelude::ExportValue as #value_trait_ident;
+        use bevy_godot4::prelude::{EntityMeta as #meta_ident, ExportValueSubscription as #subscription_ident};
+        #snapshot_imports
+
+        #[derive(Clone)]
+        struct #prepared_ident(Option<Gd<#dto>>);
+
+        impl #value_trait_ident for #prepared_ident {
+            const NAME: &'static str = stringify!(#state);
+            fn write_arguments(self, arguments: &mut Array<Variant>) {
+                arguments.clear();
+                arguments.push(&self.0.to_variant());
+            }
+        }
 
         #[derive(GodotClass)]
         #[class(base=Node)]
         pub struct #state {
+            #snapshot_field
             change_source: Gd<#change_source_ident>,
             entries: std::collections::HashMap<i64, (Gd<#dto>, Gd<#dto>, Gd<#dto>, i64)>,
             #[base] base: Base<Node>,
         }
 
         impl #state {
+            #snapshot_read
             pub fn upsert_from_data<C>(
                 &mut self,
                 entity_id: i64,
@@ -88,7 +136,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
                 // Keep allocation separate from looking up an existing triple of objects.
                 let entry = measure_export(ExportStage::StoreLookup, || self.entries.entry(entity_id).or_insert_with(|| {
-                    measure_export(ExportStage::ObjectCreation, || (#dto::new_gd(), #dto::new_gd(), #dto::new_gd(), -1))
+                    measure_export(ExportStage::ObjectCreation, || (<#dto>::new_gd(), <#dto>::new_gd(), <#dto>::new_gd(), -1))
                 }));
 
                 let (curr, prev, spare, updated_revision) = entry;
@@ -98,6 +146,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     measure_export(ExportStage::FieldCopy, || C::update_dto(prev, data, identity));
                     measure_export(ExportStage::FieldCopy, || C::update_dto(spare, data, identity));
                     *updated_revision = revision;
+                    #snapshot_publish
                     self.change_source.bind_mut().mark(entity_id, revision);
                     return true;
                 }
@@ -119,18 +168,21 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     swap(prev, curr);
                     swap(curr, spare);
                     *updated_revision = revision;
+                    #snapshot_publish
                     self.change_source.bind_mut().mark(entity_id, revision);
                 });
                 true
             }
 
             pub fn remove_entity(&mut self, entity_id: i64) {
+                #snapshot_remove
                 self.entries.remove(&entity_id);
                 self.change_source.bind_mut().forget(entity_id);
             }
 
             /// Remove an optional capability while retaining its change notification.
             pub fn remove_optional(&mut self, entity_id: i64, revision: i64) {
+                #snapshot_remove
                 self.entries.remove(&entity_id);
                 self.change_source.bind_mut().mark(entity_id, revision);
             }
@@ -154,6 +206,26 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
         #[godot_api]
         impl #state {
+            /// Receive this feature's current value after Bevy returns, or null on removal.
+            /// The shared reader runs once per changed entity, including initial delivery.
+            #[func(gd_self)]
+            fn watch_values(
+                this: Gd<Self>, host: Gd<Node>,
+                entity: Gd<#meta_ident>, callback: Callable,
+            ) -> Gd<#subscription_ident> {
+                use bevy_godot4::prelude::{ExportValueBatch, GodotExportDelivery};
+                let source = this.bind().change_source.clone();
+                let mut delivery = GodotExportDelivery::resolve(&host)
+                    .expect("value subscriber belongs to an authored Bevy app");
+                let batch = delivery.bind_mut().value_batch(move || {
+                    ExportValueBatch::new(&[source], move |id| {
+                        if !this.is_instance_valid() { return None; }
+                        Some(#prepared_ident(this.bind().curr_for(id)))
+                    })
+                });
+                batch.watch(host, entity, callback)
+            }
+
             /// Supply this source when declaring the features a visual needs.
             #[func]
             fn changes(&self) -> Gd<#change_source_ident> {
@@ -265,11 +337,28 @@ pub fn expand(input: TokenStream) -> TokenStream {
                 use bevy_godot4::prelude::register_store_on_entry;
                 register_store_on_entry(&base);
                 Self {
+                    #snapshot_init
                     entries: std::collections::HashMap::new(),
                     change_source: #change_source_ident::new_gd(),
                     base,
                 }
             }
+        }
+
+        impl #export_config_trait for #config {
+            type StateNode = #state;
+        }
+
+        impl #export_state_trait<#config> for #state {
+            fn resolve_store(host: Gd<Node>) -> Option<Gd<Self>> { Self::resolve(host) }
+            fn change_source(&self) -> Gd<#change_source_ident> { self.changes() }
+            fn read_current(&self, id: i64) -> Option<<#snapshot as #snapshots_ident<#dto>>::Value> {
+                <#snapshot as #snapshots_ident<#dto>>::read_current(&self.snapshots, id, || self.curr_for(id))
+            }
+            fn read_values(&self, id: i64) -> Option<#pair_ident<<#snapshot as #snapshots_ident<#dto>>::Value>> {
+                self.native_values_for(id)
+            }
+            fn read_dto(&self, id: i64) -> Option<Gd<#dto>> { self.curr_for(id) }
         }
 
         impl bevy_godot4::prelude::WithStateNode for #dto {

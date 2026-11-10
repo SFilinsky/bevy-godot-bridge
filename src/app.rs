@@ -116,14 +116,6 @@ pub struct BevyApp {
 }
 
 impl BevyApp {
-    /// Return the explicitly assigned delivery child for generated entity notifications.
-    pub fn export_delivery(&self) -> Gd<GodotExportDelivery> {
-        self.export_delivery
-            .as_ref()
-            .expect("assign the delivery child")
-            .clone()
-    }
-
     /// Raw update observations for independent readers; absent from production collection.
     pub(crate) fn update_timings(&self, after_sequence: i64) -> Gd<BevyUpdateSnapshot> {
         observe! { return BevyUpdateSnapshot::read(&self.update_history, after_sequence); }
