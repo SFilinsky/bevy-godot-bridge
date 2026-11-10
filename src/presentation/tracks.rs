@@ -1,5 +1,6 @@
 //! Retained scene handles submit plain values, without creating an animation object.
 use super::batch::{Queue, ScalarValue, Token, TransformValue, Transition, Value};
+use super::sampling::TransitionState;
 use godot::builtin::{StringName, Transform3D};
 use godot::classes::{Node, Node3D, RefCounted};
 use godot::obj::{Base, Gd};
@@ -42,13 +43,15 @@ impl<T: Value> Handle<T> {
             revision: self.token.revision.get(),
             owner: self.owner.clone(),
             target: self.target.clone(),
-            start,
-            end,
-            duration: duration.max(0.0),
-            elapsed: 0.0,
+            state: TransitionState {
+                start,
+                end,
+                duration: duration.max(0.0),
+                elapsed: 0.0,
+                has_published: false,
+                last_clock: self.queue.clock.get(),
+            },
             completed: false,
-            has_published: false,
-            last_clock: self.queue.clock.get(),
         });
     }
     fn stop(&self) {

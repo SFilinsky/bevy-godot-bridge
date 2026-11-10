@@ -7,6 +7,7 @@
 
 mod batch;
 mod processors;
+mod sampling;
 mod tracks;
 observe! { mod probe; }
 
@@ -19,7 +20,6 @@ use godot::global::godot_error;
 use godot::obj::{Base, Gd, WithBaseField};
 use godot::prelude::{GodotClass, godot_api};
 use processors::validate as validate_processors;
-use std::mem::take;
 pub use tracks::{ScalarPresentationTrack, TransformPresentationTrack};
 observe! {
     use probe::target_for;
@@ -96,31 +96,6 @@ impl SharedPresentation {
     fn _idle_ms(&self) -> f64 {
         self.scalar.metrics.last_ms
     }
-
-    #[func(gd_self)]
-    fn _publish_frame(mut this: Gd<Self>) {
-        // Publish once before idle consumers read positions, without advancing physics time again.
-        let (mut batch, epoch) = {
-            let mut service = this.bind_mut();
-            // Fast displays may render repeatedly without a physics step or new request.
-            let clock = service.transform.queue.clock.get();
-            if clock == service.last_frame_clock
-                && service.transform.queue.pending.borrow().is_empty()
-            {
-                return;
-            }
-            service.last_frame_clock = clock;
-            let batch = take(&mut service.transform);
-            service.transform.queue = batch.queue.clone();
-            (batch, service.epoch)
-        };
-        batch.step(0.0, || {
-            this.is_instance_valid() && this.is_inside_tree() && this.bind().epoch == epoch
-        });
-        if this.is_instance_valid() && this.bind().epoch == epoch {
-            this.bind_mut().transform = batch;
-        }
-    }
 }
 
 #[godot_api]
@@ -143,27 +118,5 @@ impl INode for SharedPresentation {
     }
     fn ready(&mut self) {
         validate_processors(&self.to_gd());
-    }
-}
-
-impl SharedPresentation {
-    pub(super) fn advance_clock(&self, delta: f64) {
-        let clock = &self.transform.queue.clock;
-        clock.set(clock.get() + delta.max(0.0));
-    }
-
-    pub(super) fn advance_numbers(mut this: Gd<Self>, delta: f64) {
-        let (mut batch, epoch) = {
-            let mut service = this.bind_mut();
-            let batch = take(&mut service.scalar);
-            service.scalar.queue = batch.queue.clone();
-            (batch, service.epoch)
-        };
-        batch.step(delta, || {
-            this.is_instance_valid() && this.is_inside_tree() && this.bind().epoch == epoch
-        });
-        if this.is_instance_valid() && this.bind().epoch == epoch {
-            this.bind_mut().scalar = batch;
-        }
     }
 }
