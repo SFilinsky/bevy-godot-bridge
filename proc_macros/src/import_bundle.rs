@@ -131,6 +131,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
     // DTO wrapper name (scoped within module, so collisions are unlikely)
     let message_dto_ident = format_ident!("{}Dto", message_type_ident);
+    let message_snapshot_ident = format_ident!("{}Snapshot", message_type_ident);
 
     // Field names derived from TransferConfig names
     let mut message_field_idents: Vec<Ident> = Vec::new();
@@ -147,14 +148,15 @@ pub fn expand(input: TokenStream) -> TokenStream {
         ));
     }
 
-    // DTO fields: <field>: Gd<<Cfg as DataTransferConfig>::DtoType>
+    // Snapshot fields generate corresponding typed DTO fields.
     let dto_fields: Vec<TokenStream2> = components
         .iter()
         .zip(message_field_idents.iter())
         .map(|(transfer_config_path, message_field_ident)| {
             quote! {
                 #[var]
-                pub #message_field_ident: godot::prelude::Gd<<#transfer_config_path as DataTransferConfig>::DtoType>
+                #[nested]
+                pub #message_field_ident: <#transfer_config_path as DataTransferConfig>::Snapshot
             }
         })
         .collect();
@@ -166,8 +168,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
         .zip(gatherer_path_field_idents.iter())
         .map(|((transfer_config_path, message_field_ident), gatherer_path_field_ident)| {
             quote! {
-                let #message_field_ident: godot::prelude::Gd<<#transfer_config_path as DataTransferConfig>::DtoType> = {
-                    type DtoType = <#transfer_config_path as DataTransferConfig>::DtoType;
+                let #message_field_ident: godot::prelude::Gd<DtoOf<#transfer_config_path>> = {
+
+                    type DtoType = DtoOf<#transfer_config_path>;
                     type GathererType = <DtoType as WithGatherer>::Gatherer;
 
                     // Compile-time: GathererType must implement BuildsDto<DtoType>
@@ -238,7 +241,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
     // Message field presence + type checks.
     //
-    // These checks deliberately “touch” the message fields so:
+    // These checks deliberately РІР‚СљtouchРІР‚Сњ the message fields so:
     // - missing field -> error: no field `...` on type `SpawnBarracks`
     // - type mismatch -> error points at expected type (`<Cfg as DataTransferConfig>::DataType`)
     //
@@ -255,14 +258,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
     // DataTransferConfig::update_data mapping:
     // For each field:
-    //   <Cfg as DataTransferConfig>::update_data(&dto.field, &mut message.field)
+    //   <Cfg as DataTransferConfig>::update_data(&snapshot.field, &mut message.field)
     let transfer_update_message_fields: Vec<TokenStream2> = components
         .iter()
         .zip(message_field_idents.iter())
         .map(|(transfer_config_path, message_field_ident)| {
             quote! {
                 <#transfer_config_path as DataTransferConfig>::update_data(
-                    &dto_wrapper_bind.#message_field_ident,
+                    &snapshot_fields.#message_field_ident,
                     &mut message_instance.#message_field_ident,
                     identity,
                 );
@@ -270,14 +273,14 @@ pub fn expand(input: TokenStream) -> TokenStream {
         })
         .collect();
 
-    // DataTransferConfig::update_dto mapping (useful if you ever want Bevy->Godot for debugging / preview)
-    let transfer_update_dto_fields: Vec<TokenStream2> = components
+    // DataTransferConfig::update_snapshot mapping (useful if you ever want Bevy->Godot for debugging / preview)
+    let transfer_update_snapshot_fields: Vec<TokenStream2> = components
         .iter()
         .zip(message_field_idents.iter())
         .map(|(transfer_config_path, message_field_ident)| {
             quote! {
-                <#transfer_config_path as DataTransferConfig>::update_dto(
-                    &mut dto_wrapper_bind.#message_field_ident,
+                <#transfer_config_path as DataTransferConfig>::update_snapshot(
+                    &mut snapshot_fields.#message_field_ident,
                     &message_instance.#message_field_ident,
                     identity,
                 );
@@ -313,14 +316,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
             // -----------------------------------------------------------------
             // Godot DTO wrapper for the gameplay message
             // -----------------------------------------------------------------
-            #[derive(GodotClass, Debug)]
-            #[class(init, base=RefCounted)]
-            pub struct #message_dto_ident {
-                #( #dto_fields, )*
-
-                #[base]
-                base: Base<RefCounted>,
-            }
+            #[bridge_dto(#message_dto_ident)]
+            #[derive(Debug)]
+            pub struct #message_snapshot_ident { #( #dto_fields, )* }
 
             // -----------------------------------------------------------------
             // Transfer config: Godot DTO wrapper <-> gameplay Message
@@ -328,28 +326,28 @@ pub fn expand(input: TokenStream) -> TokenStream {
             pub struct #message_transfer_config_ident;
 
             impl DataTransferConfig for #message_transfer_config_ident {
-                type Snapshot = NoSnapshot;
+                type Snapshot = #message_snapshot_ident;
 
                 type DataType = #message_type_path;
-                type DtoType = #message_dto_ident;
 
-                fn update_dto(
-                    dto: &mut Gd<Self::DtoType>,
+
+                fn update_snapshot(
+                    snapshot: &mut Self::Snapshot,
                     data: &Self::DataType,
                     identity: &mut IdentitySubsystem,
                 ) {
-                    let mut dto_wrapper_bind = dto.bind_mut();
+                    let snapshot_fields = snapshot;
                     let message_instance: &Self::DataType = data;
 
-                    #( #transfer_update_dto_fields )*
+                    #( #transfer_update_snapshot_fields )*
                 }
 
                 fn update_data(
-                    dto: &Gd<Self::DtoType>,
+                    snapshot: &Self::Snapshot,
                     data: &mut Self::DataType,
                     identity: &mut IdentitySubsystem,
                 ) {
-                    let dto_wrapper_bind = dto.bind();
+                    let snapshot_fields = snapshot;
                     let message_instance: &mut Self::DataType = data;
 
                     #( #transfer_update_message_fields )*
@@ -357,7 +355,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
 
             // -----------------------------------------------------------------
-            // Queue injection (drains DTO into gameplay Message before update)
+            // Queue injection (drains captured snapshots into gameplay messages before update)
             // -----------------------------------------------------------------
             bevy_godot4::prelude::import_queue! {
                 config: #message_transfer_config_ident,
@@ -369,7 +367,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             #[allow(dead_code)]
             fn __assert_with_gatherer_bounds() {
                 fn assert_with_gatherer<T: WithGatherer>() {}
-                #( assert_with_gatherer::<<#components as DataTransferConfig>::DtoType>(); )*
+                #( assert_with_gatherer::<DtoOf<#components>>(); )*
             }
 
             // -----------------------------------------------------------------

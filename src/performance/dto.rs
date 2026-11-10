@@ -4,7 +4,7 @@ use super::allowed;
 use crate::app::BevyApp;
 use crate::performance::update_snapshot::BevyUpdateSnapshot;
 use godot::builtin::{Array, GString};
-use godot::classes::{INode, Node, RefCounted};
+use godot::classes::{INode, Node};
 use godot::obj::{Base, Gd, NewGd};
 use godot::prelude::*;
 
@@ -12,14 +12,12 @@ use crate::performance::layer::{
     AppScopeId, GLOBAL_APP_SCOPE_ID, SystemMetricsEntry, get_sorted_metrics,
     get_sorted_metrics_for_scope,
 };
+use bevy_godot4::prelude::bridge_dto;
 
 /// One system's timings, ready for Godot.
-#[derive(GodotClass)]
-#[class(init, base = RefCounted)]
-pub struct SystemPerformanceEntryDto {
-    #[base]
-    base: Base<RefCounted>,
-
+#[bridge_dto(SystemPerformanceEntryDto)]
+#[derive(Debug)]
+pub struct SystemPerformanceEntrySnapshot {
     /// Name (Bevy span `name` field).
     #[var]
     pub name: GString,

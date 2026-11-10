@@ -120,7 +120,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
             type SettingsTransferConfig = #cfg_path;
             type SettingsMessage = <SettingsTransferConfig as DataTransferConfig>::DataType;
-            type SettingsDto = <SettingsTransferConfig as DataTransferConfig>::DtoType;
+            type SettingsDto = DtoOf<SettingsTransferConfig>;
 
             bevy_godot4::prelude::import_queue! {
                 config: #cfg_path,

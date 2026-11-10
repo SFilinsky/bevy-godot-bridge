@@ -77,10 +77,10 @@ Then author the profile and its app in a scene. The typed `bevy_app` property is
 ```text
 GameplayBevyApp
 └── BevyApp
-    └── ExportDelivery (GodotExportDelivery)
+    └── UpdateDispatcher (UpdateDispatcher)
 ```
 
-Assign the delivery child to BevyApp's `export_delivery` property; it delivers scene updates after Bevy finishes.
+Assign the delivery child to BevyApp's `update_dispatcher` property; it delivers scene updates after Bevy finishes.
 
 ## The Concept
 

@@ -66,7 +66,7 @@ impl BevyAppSubsystem<'_, '_> {
 }
 
 #[doc(hidden)]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct BevyAppIdAllocatorRef(pub(crate) Arc<AtomicI64>);
 
 impl BevyAppIdAllocatorRef {

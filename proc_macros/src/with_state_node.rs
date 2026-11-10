@@ -4,6 +4,7 @@
 //! node stores the current and previous values. It also lets Godot ask, with a
 //! normal typed call, whether an entity has this feature.
 
+use heck::ToSnakeCase;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{format_ident, quote};
@@ -56,315 +57,168 @@ impl Parse for Spec {
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let Spec { config, state } = parse_macro_input!(input as Spec);
+    let module = format_ident!("{}_publication", state.to_string().to_snake_case());
+    let config_path = if config.leading_colon.is_some()
+        || config
+            .segments
+            .first()
+            .is_some_and(|part| part.ident == "crate")
+    {
+        quote!(#config)
+    } else {
+        quote!(super::#config)
+    };
+    let config: Path = syn::parse_quote!(Config);
     let config_trait = format_ident!("{state}TransferConfig");
-    let export_config_trait = format_ident!("{state}ExportConfig");
-    let export_state_trait = format_ident!("{state}ExportState");
-    let dto = quote! { <#config as #config_trait>::DtoType };
-    let change_source_ident = format_ident!("{state}ChangeSource");
-    let prepared_ident = format_ident!("{state}PreparedValue");
-    let value_trait_ident = format_ident!("{state}ExportValue");
-    let meta_ident = format_ident!("{state}EntityMeta");
-    let subscription_ident = format_ident!("{state}ValueSubscription");
-    let snapshots_ident = format_ident!("{state}Snapshots");
-    let pair_ident = format_ident!("{state}SnapshotPair");
-    let snapshot = quote! { <#config as #config_trait>::Snapshot };
-    let snapshot_imports = quote! {
-        use bevy_godot4::prelude::{SnapshotConfig as #snapshots_ident, SnapshotPair as #pair_ident};
-    };
-    let snapshot_field = quote! { snapshots: <#snapshot as #snapshots_ident<#dto>>::Store, };
-    let snapshot_init = quote! { snapshots: Default::default(), };
-    let snapshot_publish = quote! {
-        <#snapshot as #snapshots_ident<#dto>>::publish(&mut self.snapshots, entity_id, curr);
-    };
-    let snapshot_remove = quote! {
-        <#snapshot as #snapshots_ident<#dto>>::remove(&mut self.snapshots, entity_id);
-    };
-    let snapshot_read = quote! {
-        /// Read the config's published values; DTO-only configs reuse their existing objects.
-        pub fn native_values_for(&self, entity_id: i64) -> Option<#pair_ident<<#snapshot as #snapshots_ident<#dto>>::Value>> {
-            <#snapshot as #snapshots_ident<#dto>>::read(&self.snapshots, entity_id, || {
-                Some(#pair_ident { current: self.curr_for(entity_id)?, previous: self.prev_for(entity_id)? })
-            })
+    let prepared = format_ident!("{state}PreparedValue");
+    // Tests can inspect removal versions without adding a gameplay-facing method.
+    let test_revision_read = cfg!(feature = "bridge-test-api").then(|| {
+        quote! {
+            #[func]
+            fn is_updated_in_revision(&self, id: i64, revision: i64) -> bool {
+                self.change_source.bind().revision_for(id) == revision
+            }
         }
-    };
-
+    });
     let expanded = quote! {
         use godot::prelude::*;
-        use bevy_godot4::prelude::{DataTransferConfig as #config_trait, ExportConfig as #export_config_trait, ExportState as #export_state_trait};
-        use bevy_godot4::prelude::ExportChangeSource as #change_source_ident;
-        use bevy_godot4::prelude::ExportValue as #value_trait_ident;
-        use bevy_godot4::prelude::{EntityMeta as #meta_ident, ExportValueSubscription as #subscription_ident};
-        #snapshot_imports
+        use godot::classes::Engine;
+        use godot::meta::ToGodot;
+        use bevy_godot4::prelude::{DtoOf, DataTransferConfig as #config_trait, ExportConfig, ExportState,
+            ExportChangeSource, ExportPublication, UpdateDispatcher, StatePublication, SnapshotPair,
+            ExportValue, UpdatePayload, UpdateReceiver, EntityMeta, UpdateSubscription, ExportValueBatch, IdentitySubsystem,
+            register_store_on_entry, child_services, BevyApp, StateReadError, report_state_error};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use bevy_godot4::export_profile::{Stage as ExportStage, measure as measure_export};
 
         #[derive(Clone)]
-        struct #prepared_ident(Option<Gd<#dto>>);
-
-        impl #value_trait_ident for #prepared_ident {
+        struct #prepared(Option<<#config as #config_trait>::Snapshot>);
+        impl ExportValue for #prepared {
             const NAME: &'static str = stringify!(#state);
-            fn write_arguments(self, arguments: &mut Array<Variant>) {
+        }
+        impl UpdatePayload for #prepared {
+            type Fields = (Option<<#config as #config_trait>::Snapshot>,);
+            fn into_fields(self) -> Self::Fields { (self.0,) }
+            fn write_arguments(&self, arguments: &mut Array<Variant>) {
                 arguments.clear();
-                arguments.push(&self.0.to_variant());
+                arguments.push(&self.0.as_ref().map(ToGodot::to_godot_owned).to_variant());
             }
         }
 
         #[derive(GodotClass)]
         #[class(base=Node)]
         pub struct #state {
-            #snapshot_field
-            change_source: Gd<#change_source_ident>,
-            entries: std::collections::HashMap<i64, (Gd<#dto>, Gd<#dto>, Gd<#dto>, i64)>,
+            publication: Rc<RefCell<StatePublication<<#config as #config_trait>::Snapshot>>>,
+            registration: Option<Rc<ExportPublication>>,
+            change_source: Gd<ExportChangeSource>,
             #[base] base: Base<Node>,
         }
 
         impl #state {
-            #snapshot_read
-            pub fn upsert_from_data<C>(
-                &mut self,
-                entity_id: i64,
-                data: &C::DataType,
-                identity: &mut bevy_godot4::prelude::IdentitySubsystem,
-                revision: i64,
-            ) -> bool
-            where
-                C: bevy_godot4::prelude::DataTransferConfig<DtoType = #dto>,
-                #dto: PartialEq,
-            {
-                use bevy_godot4::export_profile::{Stage as ExportStage, measure as measure_export};
-                if entity_id < 0 {
-                    return false;
-                }
-
-                // Keep allocation separate from looking up an existing triple of objects.
-                let entry = measure_export(ExportStage::StoreLookup, || self.entries.entry(entity_id).or_insert_with(|| {
-                    measure_export(ExportStage::ObjectCreation, || (<#dto>::new_gd(), <#dto>::new_gd(), <#dto>::new_gd(), -1))
-                }));
-
-                let (curr, prev, spare, updated_revision) = entry;
-
-                if *updated_revision < 0 {
-                    measure_export(ExportStage::FieldCopy, || C::update_dto(curr, data, identity));
-                    measure_export(ExportStage::FieldCopy, || C::update_dto(prev, data, identity));
-                    measure_export(ExportStage::FieldCopy, || C::update_dto(spare, data, identity));
-                    *updated_revision = revision;
-                    #snapshot_publish
-                    self.change_source.bind_mut().mark(entity_id, revision);
-                    return true;
-                }
-
-                measure_export(ExportStage::FieldCopy, || C::update_dto(spare, data, identity));
-
-                let same_value = measure_export(ExportStage::Equality, || {
-                    let curr_bound = curr.bind();
-                    let spare_bound = spare.bind();
-                    *curr_bound == *spare_bound
-                });
-
-                if same_value {
-                    return false;
-                }
-
-                measure_export(ExportStage::Bookkeeping, || {
-                    use std::mem::swap;
-                    swap(prev, curr);
-                    swap(curr, spare);
-                    *updated_revision = revision;
-                    #snapshot_publish
-                    self.change_source.bind_mut().mark(entity_id, revision);
-                });
-                true
+            pub fn upsert_from_data<C>(&mut self, entity_id: i64, data: &C::DataType, identity: &mut IdentitySubsystem, revision: i64) -> bool
+            where C: #config_trait<Snapshot = <#config as #config_trait>::Snapshot> {
+                // Copy source data before queuing; do not create or mutate a Godot DTO.
+                let value = measure_export(ExportStage::FieldCopy, || C::snapshot_from_data(data, identity));
+                self.enqueue_snapshot(entity_id, value, revision)
             }
-
-            pub fn remove_entity(&mut self, entity_id: i64) {
-                #snapshot_remove
-                self.entries.remove(&entity_id);
-                self.change_source.bind_mut().forget(entity_id);
+            pub fn enqueue_snapshot(&mut self, id: i64, value: <#config as #config_trait>::Snapshot, revision: i64) -> bool {
+                let changed = measure_export(ExportStage::Equality, || self.publication.borrow_mut().enqueue(id, value, revision));
+                if changed { self.request_publication(); }
+                changed
             }
+            pub fn remove_entity(&mut self, id: i64) { self.publication.borrow_mut().remove(id, -1, true); self.request_publication(); }
+            pub fn remove_optional(&mut self, id: i64, revision: i64) { self.publication.borrow_mut().remove(id, revision, false); self.request_publication(); }
+            fn request_publication(&self) { if let Some(registration) = &self.registration { registration.request(); } }
+            pub fn queued_implements(&self, id: i64) -> bool { self.publication.borrow().queued_contains(id) }
+            pub fn curr_for(&self, id: i64) -> Option<Gd<DtoOf<#config>>> { self.publication.borrow().current_dto(id) }
+            pub fn prev_for(&self, id: i64) -> Option<Gd<DtoOf<#config>>> { self.publication.borrow().previous_dto(id) }
+            pub fn native_values_for(&self, id: i64) -> Option<SnapshotPair<<#config as #config_trait>::Snapshot>> { self.publication.borrow().pair(id) }
 
-            /// Remove an optional capability while retaining its change notification.
-            pub fn remove_optional(&mut self, entity_id: i64, revision: i64) {
-                #snapshot_remove
-                self.entries.remove(&entity_id);
-                self.change_source.bind_mut().mark(entity_id, revision);
-            }
-
-            pub fn curr_for(&self, entity_id: i64) -> Option<Gd<#dto>> {
-                self.entries
-                    .get(&entity_id)
-                    .map(|(curr, _prev, _spare, _revision)| curr.clone())
-            }
-
-            pub fn prev_for(&self, entity_id: i64) -> Option<Gd<#dto>> {
-                self.entries
-                    .get(&entity_id)
-                    .map(|(_curr, prev, _spare, _revision)| prev.clone())
-            }
-
-            pub fn updated_revision_for(&self, entity_id: i64) -> i64 {
-                self.change_source.bind().revision_for(entity_id)
-            }
         }
 
         #[godot_api]
         impl #state {
-            /// Receive this feature's current value after Bevy returns, or null on removal.
-            /// The shared reader runs once per changed entity, including initial delivery.
-            #[func(gd_self)]
-            fn watch_values(
-                this: Gd<Self>, host: Gd<Node>,
-                entity: Gd<#meta_ident>, callback: Callable,
-            ) -> Gd<#subscription_ident> {
-                use bevy_godot4::prelude::{ExportValueBatch, GodotExportDelivery};
-                let source = this.bind().change_source.clone();
-                let mut delivery = GodotExportDelivery::resolve(&host)
-                    .expect("value subscriber belongs to an authored Bevy app");
-                let batch = delivery.bind_mut().value_batch(move || {
-                    ExportValueBatch::new(&[source], move |id| {
-                        if !this.is_instance_valid() { return None; }
-                        Some(#prepared_ident(this.bind().curr_for(id)))
-                    })
-                });
-                batch.watch(host, entity, callback)
-            }
-
-            /// Supply this source when declaring the features a visual needs.
             #[func]
-            fn changes(&self) -> Gd<#change_source_ident> {
-                self.change_source.clone()
+            pub fn subscribe(&self, host: Gd<Node>, entity: Gd<EntityMeta>, receiver: Gd<UpdateReceiver>) -> Option<Gd<UpdateSubscription>> {
+                let id = entity.bind().entity_id;
+                self.subscribe_for(host, id, Some(entity), receiver)
             }
             #[func]
-            fn resolve(owner: Gd<Node>) -> Option<Gd<#state>> {
-                if !owner.is_instance_valid() {
+            pub fn subscribe_id(&self, host: Gd<Node>, id: i64, receiver: Gd<UpdateReceiver>) -> Option<Gd<UpdateSubscription>> {
+                self.subscribe_for(host, id, None, receiver)
+            }
+            fn subscribe_for(&self, host: Gd<Node>, id: i64, entity: Option<Gd<EntityMeta>>, receiver: Gd<UpdateReceiver>) -> Option<Gd<UpdateSubscription>> {
+                // Reject a wiring mistake immediately, before saving a receiver.
+                if !self.implements(id) {
+                    report_state_error(stringify!(#state), id, &StateReadError::missing::<#config>());
                     return None;
                 }
-
-                let Ok(app) = bevy_godot4::prelude::BevyApp::resolve(&owner) else {
-                    return None;
-                };
-
-                use bevy_godot4::prelude::child_services;
+                let mut delivery = UpdateDispatcher::resolve(&host).expect("state subscription needs an authored UpdateDispatcher");
+                let source = self.change_source.clone();
+                let publication = Rc::downgrade(&self.publication);
+                let batch = delivery.bind_mut().value_batch(move || ExportValueBatch::new(&[source], move |id| {
+                    let publication = publication.upgrade()?;
+                    let value = publication.borrow().current(id);
+                    Some(#prepared(value))
+                }));
+                batch.subscribe_for(host, id, entity, receiver)
+            }
+            #[func]
+            pub fn resolve(owner: Gd<Node>) -> Option<Gd<Self>> {
+                if !owner.is_instance_valid() { return None; }
+                let app = BevyApp::resolve(&owner).ok()?;
                 let mut found = child_services::<Self>(app.upcast::<Node>());
-
-                if found.len() > 1 {
-                    panic!(
-                        "Multiple {} nodes found under the owner node; expected exactly one singleton store",
-                        stringify!(#state)
-                    );
-                }
-
+                assert!(found.len() <= 1, "author one store per feature");
                 found.pop()
             }
-
             #[func]
-            fn implements(&self, entity_id: i64) -> bool {
-                self.entries.contains_key(&entity_id)
-            }
-
+            pub fn implements(&self, id: i64) -> bool { self.publication.borrow().contains(id) }
             #[func]
-            fn is_implemented_by_id(&self, entity_id: i64) -> bool {
-                if entity_id < 0 {
-                    return false;
-                }
-
-                self.implements(entity_id)
-            }
-
+            fn get_current(&self, id: i64) -> Option<Gd<DtoOf<#config>>> { self.curr_for(id) }
             #[func]
-            fn is_implemented_by(&self, entity_meta: Gd<bevy_godot4::prelude::EntityMeta>) -> bool {
-                let Some(entity_id) = Self::entity_id_from_meta(&entity_meta) else {
-                    return false;
-                };
-
-                self.implements(entity_id)
-            }
-
-            fn entity_id_from_meta(entity_meta: &Gd<bevy_godot4::prelude::EntityMeta>) -> Option<i64> {
-                if !entity_meta.is_instance_valid() {
-                    return None;
-                }
-
-                let entity_id = {
-                    let bound = entity_meta.bind();
-                    bound.entity_id
-                };
-
-                if entity_id < 0 {
-                    return None;
-                }
-
-                Some(entity_id)
-            }
-
-            #[func]
-            fn get_state(&self, entity_id: i64) -> Option<Gd<#dto>> {
-                self.curr_for(entity_id)
-            }
-
-            #[func]
-            fn get_curr(&self, entity_id: i64) -> Option<Gd<#dto>> {
-                self.curr_for(entity_id)
-            }
-
-            #[func]
-            fn get_prev(&self, entity_id: i64) -> Option<Gd<#dto>> {
-                self.prev_for(entity_id)
-            }
-
-            #[func]
-            fn is_updated_in_revision(&self, entity_id: i64, revision: i64) -> bool {
-                self.updated_revision_for(entity_id) == revision
-            }
-
-            #[func]
-            fn get_capability(entity_meta: Gd<bevy_godot4::prelude::EntityMeta>) -> Option<Gd<#state>> {
-                let Some(entity_id) = Self::entity_id_from_meta(&entity_meta) else {
-                    return None;
-                };
-
-                let store = Self::resolve(entity_meta.clone().upcast::<Node>())?;
-
-                if store.bind().implements(entity_id) {
-                    Some(store)
-                } else {
-                    None
-                }
-            }
+            fn get_previous(&self, id: i64) -> Option<Gd<DtoOf<#config>>> { self.prev_for(id) }
+            #test_revision_read
 
         }
 
         #[godot_api]
         impl INode for #state {
             fn init(base: Base<Node>) -> Self {
-                use bevy_godot4::prelude::register_store_on_entry;
                 register_store_on_entry(&base);
-                Self {
-                    #snapshot_init
-                    entries: std::collections::HashMap::new(),
-                    change_source: #change_source_ident::new_gd(),
-                    base,
-                }
+                Self { publication: Rc::new(RefCell::new(StatePublication::default())), registration: None, change_source: ExportChangeSource::new_gd(), base }
+            }
+            fn ready(&mut self) {
+                if Engine::singleton().is_editor_hint() { return; }
+                let mut delivery = UpdateDispatcher::resolve(&self.base().clone()).expect("state store needs authored delivery");
+                let publication = Rc::downgrade(&self.publication);
+                let source = self.change_source.clone();
+                let changed = RefCell::new(Vec::new());
+                self.registration = Some(delivery.bind_mut().register_publication(false, move || {
+                    let Some(publication) = publication.upgrade() else { return; };
+                    let mut changed = changed.borrow_mut();
+                    publication.borrow_mut().publish(&mut changed);
+                    let mut source_handle = source.clone();
+                    let mut source = source_handle.bind_mut();
+                    for (id, revision, forget) in changed.drain(..) {
+                        if forget { source.forget(id); } else { source.mark(id, revision); }
+                    }
+                }));
+            }
+            fn exit_tree(&mut self) {
+                self.registration = None;
+                self.publication = Rc::new(RefCell::new(StatePublication::default()));
+                self.change_source = ExportChangeSource::new_gd();
+                self.base_mut().request_ready();
             }
         }
-
-        impl #export_config_trait for #config {
-            type StateNode = #state;
-        }
-
-        impl #export_state_trait<#config> for #state {
+        impl ExportConfig for #config { type StateNode = #state; }
+        impl ExportState<#config> for #state {
             fn resolve_store(host: Gd<Node>) -> Option<Gd<Self>> { Self::resolve(host) }
-            fn change_source(&self) -> Gd<#change_source_ident> { self.changes() }
-            fn read_current(&self, id: i64) -> Option<<#snapshot as #snapshots_ident<#dto>>::Value> {
-                <#snapshot as #snapshots_ident<#dto>>::read_current(&self.snapshots, id, || self.curr_for(id))
-            }
-            fn read_values(&self, id: i64) -> Option<#pair_ident<<#snapshot as #snapshots_ident<#dto>>::Value>> {
-                self.native_values_for(id)
-            }
-            fn read_dto(&self, id: i64) -> Option<Gd<#dto>> { self.curr_for(id) }
-        }
-
-        impl bevy_godot4::prelude::WithStateNode for #dto {
-            type StateNode = #state;
+            fn change_source(&self) -> Gd<ExportChangeSource> { self.change_source.clone() }
+            fn read_current(&self, id: i64) -> Option<<#config as #config_trait>::Snapshot> { self.publication.borrow().current(id) }
+            fn read_values(&self, id: i64) -> Option<SnapshotPair<<#config as #config_trait>::Snapshot>> { self.native_values_for(id) }
         }
     };
-
-    expanded.into()
+    quote! { mod #module { type Config = #config_path; #expanded } pub use #module::#state; }.into()
 }

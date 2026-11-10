@@ -1,11 +1,10 @@
 //! Minimal demo of how to export data from Bevy to Godot.
 
-use bevy::prelude::*;
-use bevy_godot4::prelude::NoSnapshot;
+use bevy::prelude::{App, Component, Plugin, Transform, Vec3};
 use bevy_godot4::prelude::{
-    DataTransferConfig, IdentitySubsystem, export_composed, with_state_node,
+    DataTransferConfig, IdentitySubsystem, bridge_dto, export_composed, with_state_node,
 };
-use godot::prelude::*;
+use godot::builtin::Vector3;
 
 // -----------------------------------------------------------------------------
 // 1) Tag component to scope "Unit" entities
@@ -14,50 +13,41 @@ use godot::prelude::*;
 pub struct UnitComposedTag;
 
 // -----------------------------------------------------------------------------
-// 2) DTO for Transform (what Godot receives)
-//    IMPORTANT: derive PartialEq so the macro can compare prev/curr DTOs
+// 2) Capture a Rust value; generate its Godot DTO from the same fields.
+//    PartialEq lets the store skip positions that have not changed.
 // -----------------------------------------------------------------------------
-#[derive(GodotClass, Debug)]
-#[class(init, base = RefCounted)]
-pub struct TransformDto {
+#[bridge_dto(TransformDto)]
+#[derive(Debug, PartialEq)]
+pub struct TransformSnapshot {
     /// World position (we only export translation in this demo)
     #[var]
     pub translation: Vector3,
-
-    #[base]
-    base: Base<RefCounted>,
-}
-
-impl PartialEq for TransformDto {
-    fn eq(&self, other: &Self) -> bool {
-        self.translation == other.translation
-    }
 }
 
 struct TransformExportConfig;
 impl DataTransferConfig for TransformExportConfig {
     type DataType = Transform;
-    type DtoType = TransformDto;
-    type Snapshot = NoSnapshot;
+
+    type Snapshot = TransformSnapshot;
 
     fn update_data(
-        dto: &Gd<Self::DtoType>,
+        snapshot: &Self::Snapshot,
         data: &mut Self::DataType,
         _identity: &mut IdentitySubsystem,
     ) {
-        let d = dto.bind();
-        data.translation.x = d.translation.x;
-        data.translation.y = d.translation.y;
-        data.translation.z = d.translation.z;
+        // Apply a captured position without reading a Godot object.
+        let position = snapshot.translation;
+        data.translation = Vec3::new(position.x, position.y, position.z);
     }
 
-    fn update_dto(
-        dto: &mut Gd<Self::DtoType>,
+    fn update_snapshot(
+        snapshot: &mut Self::Snapshot,
         data: &Self::DataType,
         _identity: &mut IdentitySubsystem,
     ) {
-        let mut d = dto.bind_mut();
-        d.translation = Vector3::new(data.translation.x, data.translation.y, data.translation.z);
+        // Capture the position now; create a DTO only when a script reads it.
+        let position = data.translation;
+        snapshot.translation = Vector3::new(position.x, position.y, position.z);
     }
 }
 
@@ -84,6 +74,7 @@ impl Plugin for ExportBindingsPlugin {
 }
 
 // -----------------------------------------------------------------------------
-// 4) Attach UnitComposedEntityExporter Nodes
-//    To BevyApp and use signals to read entity updates.
+// 4) Author UnitComposedEntityExporter and UpdateDispatcher below BevyApp.
+//    Creation/removal signals discover entities. Subscribe to TransformStateNode
+//    for position values; retain and cancel the subscription with its consumer.
 // -----------------------------------------------------------------------------

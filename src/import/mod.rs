@@ -4,6 +4,7 @@
 //! the matching entity in startup order.
 
 pub mod position;
+pub(crate) mod queue;
 pub mod components {
     use bevy::prelude::Component;
 
@@ -15,11 +16,13 @@ pub mod components {
 
 pub mod subsystems {
     use super::components::GodotIdentity;
-    use crate::app::BevyAppSubsystem;
+    use crate::bevy_app_subsystem::BevyAppIdAllocatorRef;
     use bevy::ecs::entity::Entities;
     use bevy::ecs::system::SystemParam;
+    use bevy::prelude::NonSend;
     use bevy::prelude::{Commands, Entity, Query, ResMut, Resource};
     use std::collections::HashMap;
+    use std::sync::atomic::Ordering;
 
     #[derive(Resource, Default, Debug)]
     pub(crate) struct IdentityRegistry {
@@ -36,7 +39,7 @@ pub mod subsystems {
         identities: Query<'w, 's, (Entity, &'static GodotIdentity)>,
         registry: ResMut<'w, IdentityRegistry>,
         entities: &'w Entities,
-        app: BevyAppSubsystem<'w, 's>,
+        allocator: NonSend<'w, BevyAppIdAllocatorRef>,
         commands: Commands<'w, 's>,
     }
 
@@ -75,7 +78,7 @@ pub mod subsystems {
                 return id;
             }
 
-            let id = self.app.alloc_entity_id();
+            let id = self.allocator.0.fetch_add(1, Ordering::Relaxed);
             self.bind_identity(entity, id);
             id
         }
@@ -124,10 +127,10 @@ pub mod subsystems {
 pub mod intentions {
     use crate::import::subsystems::IdentitySubsystem;
     use bevy::prelude::Message;
-    use bevy_godot4::dto::DataTransferConfig;
-    use bevy_godot4::prelude::NoSnapshot;
+    use bevy_godot4::data_transfer::DataTransferConfig;
+
+    use bevy_godot4::prelude::bridge_dto;
     use bevy_godot4_proc_macros::import_queue;
-    use godot::obj::Base;
     use godot::prelude::*;
 
     /// One-time request to create a Bevy entity for an authored Godot node.
@@ -138,44 +141,39 @@ pub mod intentions {
     }
 
     /// Godot-facing DTO for [`InitializeEntityIntention`].
-    #[derive(GodotClass, Debug)]
-    #[class(init, base=RefCounted)]
-    pub struct InitializeEntityIntentionDto {
+    #[bridge_dto(InitializeEntityIntentionDto)]
+    #[derive(Debug)]
+    pub struct InitializeEntityIntentionSnapshot {
         #[var]
         pub godot_id: i64,
 
         #[var]
         pub name: GString,
-
-        #[base]
-        base: Base<RefCounted>,
     }
 
     /// DTO mapping used by the generated entity-initialization import queue.
     pub struct InitializeEntityIntentionTransferConfig;
     impl DataTransferConfig for InitializeEntityIntentionTransferConfig {
         type DataType = InitializeEntityIntention;
-        type DtoType = InitializeEntityIntentionDto;
-        type Snapshot = NoSnapshot;
 
-        fn update_dto(
-            dto: &mut Gd<Self::DtoType>,
+        type Snapshot = InitializeEntityIntentionSnapshot;
+
+        fn update_snapshot(
+            snapshot: &mut Self::Snapshot,
             data: &Self::DataType,
             _identity: &mut IdentitySubsystem,
         ) {
-            let mut d = dto.bind_mut();
-            d.godot_id = data.godot_id;
-            d.name = GString::from(data.name.as_str());
+            snapshot.godot_id = data.godot_id;
+            snapshot.name = GString::from(data.name.as_str());
         }
 
         fn update_data(
-            dto: &Gd<Self::DtoType>,
+            snapshot: &Self::Snapshot,
             data: &mut Self::DataType,
             _identity: &mut IdentitySubsystem,
         ) {
-            let d = dto.bind();
-            data.godot_id = d.godot_id;
-            data.name = d.name.to_string();
+            data.godot_id = snapshot.godot_id;
+            data.name = snapshot.name.to_string();
         }
     }
 

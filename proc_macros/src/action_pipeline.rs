@@ -144,7 +144,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
     let check_runner_subsystem_name =
         format_ident!("{}ActionCheckRunnerSubsystem", action_name_ident);
     let check_refresh_timing_name = format_ident!("{}ActionCheckRefreshTiming", action_name_ident);
-    let instance_name = format_ident!("{}ActionInstanceDto", action_name_ident);
+    let instance_name = format_ident!("{}ActionInstance", action_name_ident);
     let node_name = format_ident!("{}ActionNode", action_name_ident);
     let check_report_name = format_ident!("{}ActionCheckReport", action_name_ident);
     let check_report_dto_name = format_ident!("{}ActionCheckReportDto", action_name_ident);
@@ -253,27 +253,31 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
     } else {
         (1_u64 << checks.len()) - 1
     };
-    let check_refresh_inits = checks.iter().enumerate().map(|(index, c)| {
-        let name = &c.name;
-        let mapper = &c.mapper_type;
-        let var = format_ident!("{}_check_subsystem", c.name);
-        let p_method = format_ident!("p{}", index);
-        let constant = format_ident!("CHECK_MASK_{}", c.name.to_string().to_upper_camel_case());
-        quote! {
-            if check_mask & #constant != 0 {
-                let check_started_at = ::std::time::Instant::now();
-                let mut #var = self.subsystems.#p_method();
-                report.#name = <#mapper as ::bevy_godot4::action_framework::CheckAdapter>::map_and_check(
-                    pp,
-                    static_data,
-                    &mut #var,
-                );
-                if let Some(check_timing) = check_timing.as_deref_mut() {
-                    check_timing.#name += check_started_at.elapsed();
+    let check_refresh_inits = checks
+        .iter()
+        .enumerate()
+        .map(|(index, c)| {
+            let name = &c.name;
+            let mapper = &c.mapper_type;
+            let var = format_ident!("{}_check_subsystem", c.name);
+            let p_method = format_ident!("p{}", index);
+            let constant = format_ident!("CHECK_MASK_{}", c.name.to_string().to_upper_camel_case());
+            quote! {
+                if check_mask & #constant != 0 {
+                    let check_started_at = ::std::time::Instant::now();
+                    let mut #var = self.subsystems.#p_method();
+                    report.#name = <#mapper as ::bevy_godot4::action_framework::CheckAdapter>::map_and_check(
+                        pp,
+                        static_data,
+                        &mut #var,
+                    );
+                    if let Some(check_timing) = check_timing.as_deref_mut() {
+                        check_timing.#name += check_started_at.elapsed();
+                    }
                 }
             }
-        }
-    }).collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
 
     let check_refresh_timing_field_defs = checks.iter().map(|c| {
         let name = &c.name;
@@ -359,38 +363,36 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
         }
     }).collect::<Vec<_>>();
 
+    let status_snapshot_name = format_ident!(
+        "{}Snapshot",
+        status_codes_dto_name.to_string().trim_end_matches("Dto")
+    );
+    let report_snapshot_name = format_ident!(
+        "{}Snapshot",
+        check_report_dto_name.to_string().trim_end_matches("Dto")
+    );
     let status_field_defs = checks.iter().map(|c| {
         let name = &c.name;
-        quote! { pub #name: i64, }
-    });
-
-    let status_field_defaults = checks.iter().map(|c| {
-        let name = &c.name;
-        quote! { status_mut.#name = ::bevy_godot4::action_framework::ActionCheckStatus::NotProvided.as_i64(); }
+        quote! { #[init(val = bevy_godot4::action_framework::ActionCheckStatus::NotProvided.as_i64())] pub #name: i64, }
     });
 
     let report_dto_payload_defs = checks.iter().zip(check_aliases.iter()).map(|(c, alias)| {
         let name = &c.name;
         quote! {
-            pub #name: Option<Gd<<#alias as DataTransferConfig>::DtoType>>,
+            #[nested] pub #name: Option<<#alias as DataTransferConfig>::Snapshot>,
         }
-    });
-
-    let report_dto_payload_defaults = checks.iter().map(|c| {
-        let name = &c.name;
-        quote! { dto_mut.#name = None; }
     });
 
     let transfer_update_fields = checks.iter().zip(check_aliases.iter()).map(|(c, alias)| {
         let name = &c.name;
         quote! {
-            let (status_code, payload_dto) = match &data.#name {
+            let (status_code, payload_snapshot) = match &data.#name {
                 ::bevy_godot4::action_framework::Criterion::Ok { payload } => {
                     (
                         ::bevy_godot4::action_framework::ActionCheckStatus::Ok.as_i64(),
                         payload
                             .as_ref()
-                            .map(|p| <#alias as DataTransferConfig>::from_data(p, identity)),
+                            .map(|p| <#alias as DataTransferConfig>::snapshot_from_data(p, identity)),
                     )
                 }
                 ::bevy_godot4::action_framework::Criterion::NotProvided { payload } => {
@@ -398,7 +400,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                         ::bevy_godot4::action_framework::ActionCheckStatus::NotProvided.as_i64(),
                         payload
                             .as_ref()
-                            .map(|p| <#alias as DataTransferConfig>::from_data(p, identity)),
+                            .map(|p| <#alias as DataTransferConfig>::snapshot_from_data(p, identity)),
                     )
                 }
                 ::bevy_godot4::action_framework::Criterion::Fail { payload, .. } => {
@@ -406,16 +408,14 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                         ::bevy_godot4::action_framework::ActionCheckStatus::Failure.as_i64(),
                         payload
                             .as_ref()
-                            .map(|p| <#alias as DataTransferConfig>::from_data(p, identity)),
+                            .map(|p| <#alias as DataTransferConfig>::snapshot_from_data(p, identity)),
                     )
                 }
             };
 
             {
-                let mut dto_mut = dto.bind_mut();
-                dto_mut.#name = payload_dto;
-                let mut status = dto_mut.status_codes.bind_mut();
-                status.#name = status_code;
+                snapshot.#name = payload_snapshot;
+                snapshot.status_codes.#name = status_code;
             }
         }
     });
@@ -425,8 +425,11 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
             use super::*;
             use ::bevy::prelude::*;
             use ::bevy::ecs::system::SystemParam;
-            use ::bevy_godot4::prelude::DataTransferConfig;
-            use ::bevy_godot4::prelude::BevyApp;
+            use ::bevy_godot4::prelude::{DtoOf, DataTransferConfig, TransferDto, TransferSnapshot, IdentitySubsystem, bridge_dto};
+            use ::bevy_godot4::action_framework::ActionStatus;
+            use ::bevy_godot4::prelude::{BevyApp, UpdateDispatcher, ExportPublication, OccurrenceStream,
+                ExportValue, UpdatePayload, UpdateReceiver, UpdateSubscription};
+            use std::rc::{Rc, Weak};
             use ::bevy_godot4::prelude::{InitializationCoordinator, InitializationPhase};
             use ::godot::classes::{Node, RefCounted};
             use ::godot::obj::{Base, Gd};
@@ -447,9 +450,28 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
             #( #check_subsystem_type_alias_defs )*
             type ReportData = #check_report_name;
             type ReportDto = #check_report_dto_name;
-            type PartialParamsDto = <#partial_params as DataTransferConfig>::DtoType;
-            type ExecutePayloadDto = <ExecutePayload as DataTransferConfig>::DtoType;
-            type StaticDataDto = <StaticData as DataTransferConfig>::DtoType;
+            type ReportSnapshot = #report_snapshot_name;
+            type PartialParamsSnapshot = <#partial_params as DataTransferConfig>::Snapshot;
+            type ExecutePayloadSnapshot = <ExecutePayload as DataTransferConfig>::Snapshot;
+            type StaticDataSnapshot = <StaticData as DataTransferConfig>::Snapshot;
+            type PartialParamsDto = DtoOf<#partial_params>;
+            type ExecutePayloadDto = DtoOf<ExecutePayload>;
+            type StaticDataDto = DtoOf<StaticData>;
+
+            // Responses stay as native snapshots until a registered Godot callback needs DTOs.
+            #[derive(Clone)]
+            struct ActionUpdate(i64, ReportSnapshot, ExecutePayloadSnapshot);
+            impl ExportValue for ActionUpdate { const NAME: &'static str = concat!(#action_name, " action results"); }
+            impl UpdatePayload for ActionUpdate {
+                type Fields = (i64, ReportSnapshot, ExecutePayloadSnapshot);
+                fn into_fields(self) -> Self::Fields { (self.0, self.1, self.2) }
+                fn write_arguments(&self, arguments: &mut Array<Variant>) {
+                    arguments.clear();
+                    arguments.push(&self.0.to_variant());
+                    arguments.push(&self.1.to_variant());
+                    arguments.push(&self.2.to_variant());
+                }
+            }
 
             #[derive(Debug, Clone, PartialEq)]
             pub struct #check_report_name {
@@ -511,76 +533,33 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 Rust,
             }
 
-            #[derive(GodotClass)]
-            #[class(init, base=RefCounted)]
-            pub struct #status_codes_dto_name {
-                #[base]
-                base: Base<RefCounted>,
-                #( #[var] #status_field_defs )*
-            }
+            #[bridge_dto(#status_codes_dto_name)]
+            #[derive(Debug)]
+            pub struct #status_snapshot_name { #( #[var] #status_field_defs )* }
 
-            #[derive(GodotClass)]
-            #[class(init, base=RefCounted)]
-            pub struct #check_report_dto_name {
-                #[base]
-                base: Base<RefCounted>,
-                #[var]
-                pub status_codes: Gd<#status_codes_dto_name>,
+            #[bridge_dto(#check_report_dto_name)]
+            #[derive(Debug)]
+            pub struct #report_snapshot_name {
+                #[var] #[nested]
+                pub status_codes: #status_snapshot_name,
                 #( #[var] #report_dto_payload_defs )*
             }
-
             pub struct #report_transfer_config_name;
-
-            use bevy_godot4::prelude::NoSnapshot;
             impl DataTransferConfig for #report_transfer_config_name {
-                type Snapshot = NoSnapshot;
-
+                type Snapshot = #report_snapshot_name;
                 type DataType = #check_report_name;
-                type DtoType = #check_report_dto_name;
-                const USES_DEFAULT_OUTBOUND_DTO_BUILD: bool = false;
 
-                fn update_dto(
-                    dto: &mut Gd<Self::DtoType>,
-                    data: &Self::DataType,
-                    identity: &mut ::bevy_godot4::prelude::IdentitySubsystem,
-                ) {
+                fn update_snapshot(snapshot: &mut Self::Snapshot, data: &Self::DataType, identity: &mut IdentitySubsystem) {
                     #( #transfer_update_fields )*
                 }
-
-                fn update_data(
-                    _dto: &Gd<Self::DtoType>,
-                    _data: &mut Self::DataType,
-                    _identity: &mut ::bevy_godot4::prelude::IdentitySubsystem,
-                ) {
-                }
-
-                fn from_data(
-                    data: &Self::DataType,
-                    identity: &mut ::bevy_godot4::prelude::IdentitySubsystem,
-                ) -> Gd<Self::DtoType> {
-                    let mut dto = #check_report_dto_name::new_gd();
-                    {
-                        let mut dto_mut = dto.bind_mut();
-                        dto_mut.status_codes = {
-                            let mut status = #status_codes_dto_name::new_gd();
-                            {
-                                let mut status_mut = status.bind_mut();
-                                #( #status_field_defaults )*
-                            }
-                            status
-                        };
-                        #( #report_dto_payload_defaults )*
-                    }
-                    Self::update_dto(&mut dto, data, identity);
-                    dto
-                }
+                fn update_data(_: &Self::Snapshot, _: &mut Self::DataType, _: &mut IdentitySubsystem) {}
             }
 
             #[derive(Clone)]
             pub enum ApiRequestKind {
-                UpdateParams(Gd<PartialParamsDto>),
+                UpdateParams(PartialParamsSnapshot),
                 Execute,
-                SetStaticData(Gd<StaticDataDto>),
+                SetStaticData(StaticDataSnapshot),
                 Done,
             }
 
@@ -592,8 +571,8 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
             pub enum ApiResponse {
                 Check(
                     ActionInstanceId,
-                    Gd<ReportDto>,
-                    Gd<ExecutePayloadDto>,
+                    ReportSnapshot,
+                    ExecutePayloadSnapshot,
                     CheckReason,
                 ),
                 ExecuteEnqueued {
@@ -602,9 +581,9 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 },
                 ExecuteDone {
                     execution_id: ExecutionId,
-                    result: ExecuteResultData,
-                    report: Gd<ReportDto>,
-                    payload: Gd<ExecutePayloadDto>,
+                    succeeded: bool,
+                    report: ReportSnapshot,
+                    payload: ExecutePayloadSnapshot,
                 },
                 DoneAck {
                     action_instance_id: ActionInstanceId,
@@ -664,6 +643,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
             #[derive(Default)]
             struct ApiResponseQueue {
                 q: VecDeque<ApiResponse>,
+                publication: Option<Weak<ExportPublication>>,
             }
 
             #[derive(Resource, Default, Debug)]
@@ -697,6 +677,9 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
 
                 fn push_response(&mut self, resp: ApiResponse) {
                     self.responses.q.push_back(resp);
+                    if let Some(publication) = self.responses.publication.as_ref().and_then(Weak::upgrade) {
+                        publication.request();
+                    }
                 }
 
                 fn drain_responses(&mut self) -> Vec<ApiResponse> {
@@ -1177,7 +1160,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                                 warn!("[{}] UpdateParams without action_instance_id; ignoring", #action_name);
                                 continue;
                             };
-                            let params = <#partial_params as DataTransferConfig>::from_dto(
+                            let params = <#partial_params as DataTransferConfig>::from_snapshot(
                                 &params,
                                 &mut identity,
                             );
@@ -1196,7 +1179,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                             });
                         }
                         ApiRequestKind::SetStaticData(data) => {
-                            let static_data = <StaticData as DataTransferConfig>::from_dto(
+                            let static_data = <StaticData as DataTransferConfig>::from_snapshot(
                                 &data,
                                 &mut identity,
                             );
@@ -1358,19 +1341,19 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 for response in manager.drain_out() {
                     match response {
                         OutResponse::Check(action_instance_id, report, reason) => {
-                            let dto = <#report_transfer_config_name as DataTransferConfig>::from_data(
+                            let report_snapshot = <#report_transfer_config_name as DataTransferConfig>::snapshot_from_data(
                                 &report,
                                 &mut identity,
                             );
                             let default_payload = ExecutePayload::default();
-                            let payload_dto = <ExecutePayload as DataTransferConfig>::from_data(
+                            let payload_snapshot = <ExecutePayload as DataTransferConfig>::snapshot_from_data(
                                 &default_payload,
                                 &mut identity,
                             );
                             io.push_response(ApiResponse::Check(
                                 action_instance_id,
-                                dto,
-                                payload_dto,
+                                report_snapshot,
+                                payload_snapshot,
                                 reason,
                             ));
                         }
@@ -1388,24 +1371,24 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                             result,
                             report,
                         } => {
-                            let dto = <#report_transfer_config_name as DataTransferConfig>::from_data(
+                            let report_snapshot = <#report_transfer_config_name as DataTransferConfig>::snapshot_from_data(
                                 &report,
                                 &mut identity,
                             );
-                            let payload_dto = if let Some(payload) = result.payload.as_ref() {
-                                <ExecutePayload as DataTransferConfig>::from_data(payload, &mut identity)
+                            let payload_snapshot = if let Some(payload) = result.payload.as_ref() {
+                                <ExecutePayload as DataTransferConfig>::snapshot_from_data(payload, &mut identity)
                             } else {
                                 let default_payload = ExecutePayload::default();
-                                <ExecutePayload as DataTransferConfig>::from_data(
+                                <ExecutePayload as DataTransferConfig>::snapshot_from_data(
                                     &default_payload,
                                     &mut identity,
                                 )
                             };
                             io.push_response(ApiResponse::ExecuteDone {
                                 execution_id,
-                                result,
-                                report: dto,
-                                payload: payload_dto,
+                                succeeded: result.ok,
+                                report: report_snapshot,
+                                payload: payload_snapshot,
                             });
                         }
                         OutResponse::DoneAck { action_instance_id } => {
@@ -1423,8 +1406,9 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 action_instance_id: ActionInstanceId,
                 pending_execution_id: Option<ExecutionId>,
                 bevy_app: Option<Gd<BevyApp>>,
-                partial_params_dto: Gd<PartialParamsDto>,
+                partial_params_snapshot: PartialParamsSnapshot,
                 push_pending: bool,
+                updates: Option<Rc<OccurrenceStream<ActionUpdate>>>,
             }
 
             #[godot_api]
@@ -1435,19 +1419,24 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                         let mut b = gd.bind_mut();
                         b.action_instance_id = action_instance_id;
                         b.pending_execution_id = None;
+                        let mut dispatcher = UpdateDispatcher::resolve(&bevy_app.clone().upcast()).expect("action needs authored dispatcher");
+                        b.updates = Some(dispatcher.bind_mut().occurrence_stream());
                         b.bevy_app = Some(bevy_app);
-                        b.partial_params_dto = <PartialParamsDto as ::godot::obj::NewGd>::new_gd();
+                        b.partial_params_snapshot = PartialParamsSnapshot::default();
                         b.push_pending = false;
                     }
                     gd
                 }
 
-                #[signal]
-                fn on_action_status_changed(kind: i64, report: Gd<ReportDto>, payload: Gd<ExecutePayloadDto>);
+                /// Subscribe to ordered checks and execution results through the shared dispatcher.
+                #[func]
+                fn subscribe(&self, owner: Gd<Node>, receiver: Gd<UpdateReceiver>) -> Option<Gd<UpdateSubscription>> {
+                    self.updates.as_ref()?.subscribe(owner, receiver)
+                }
 
                 #[func]
                 fn update_params(&mut self, params: Gd<PartialParamsDto>) -> Gd<Self> {
-                    self.partial_params_dto = params;
+                    self.partial_params_snapshot = params.bind().capture_snapshot();
                     self.schedule_push();
                     self.to_gd()
                 }
@@ -1469,7 +1458,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
 
                     enqueue_requests_for_app(&mut app, vec![ApiRequest {
                         action_instance_id: Some(self.action_instance_id),
-                        kind: ApiRequestKind::UpdateParams(self.partial_params_dto.clone()),
+                        kind: ApiRequestKind::UpdateParams(self.partial_params_snapshot.clone()),
                     }]);
                     self.push_pending = false;
                 }
@@ -1486,7 +1475,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                         vec![
                             ApiRequest {
                                 action_instance_id: Some(self.action_instance_id),
-                                kind: ApiRequestKind::UpdateParams(self.partial_params_dto.clone()),
+                                kind: ApiRequestKind::UpdateParams(self.partial_params_snapshot.clone()),
                             },
                             ApiRequest {
                                 action_instance_id: Some(self.action_instance_id),
@@ -1521,6 +1510,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 instances_by_execution_id: HashMap<ExecutionId, Gd<#instance_name>>,
                 static_data_cache: Option<Gd<StaticDataDto>>,
                 pending_static_data_sync: bool,
+                response_publication: Option<Rc<ExportPublication>>,
             }
 
             #[godot_api]
@@ -1537,7 +1527,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                                 if let Some(static_data) = self.static_data_cache.as_ref().cloned() {
                                     enqueue_requests_for_app(&mut app, vec![ApiRequest {
                                         action_instance_id: None,
-                                        kind: ApiRequestKind::SetStaticData(static_data),
+                                        kind: ApiRequestKind::SetStaticData(static_data.bind().capture_snapshot()),
                                     }]);
                                     self.pending_static_data_sync = false;
                                 }
@@ -1551,13 +1541,47 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 }
 
                 fn ready(&mut self) {
+                    self.bind_response_publication();
                     InitializationCoordinator::register_initializer_node(
                         self.base().clone().upcast(),
                         InitializationPhase::Configuration,
                     );
                 }
 
-                fn process(&mut self, _delta: f64) {
+                fn exit_tree(&mut self) {
+                    self.response_publication = None;
+                    for instance in self.instances_by_action_instance_id.values() {
+                        if let Some(updates) = &instance.bind().updates { updates.clear(); }
+                    }
+                    self.instances_by_execution_id.clear();
+                    self.instances_by_action_instance_id.clear();
+                    self.bevy_app = None;
+                    self.base_mut().request_ready();
+                }
+            }
+
+            impl #node_name {
+                fn bind_response_publication(&mut self) {
+                    if self.response_publication.is_some() { return; }
+                    let Some(mut app) = self.bevy_app.clone() else { return; };
+                    if !app.bind().is_initialized() { return; }
+                    let host = self.base().clone();
+                    let Some(mut dispatcher) = UpdateDispatcher::resolve(&host) else { return; };
+                    let id = self.to_gd().instance_id();
+                    let publication = dispatcher.bind_mut().register_publication(false, move || {
+                        if let Ok(mut node) = Gd::<#node_name>::try_from_instance_id(id) {
+                            if node.is_inside_tree() { node.bind_mut().publish_responses(); }
+                        }
+                    });
+                    app.bind_mut().with_world_mut(|world| {
+                        let mut queue = world.non_send_resource_mut::<ApiResponseQueue>();
+                        queue.publication = Some(Rc::downgrade(&publication));
+                        // Responses queued before registration must not wait for another result.
+                        if !queue.q.is_empty() { publication.request(); }
+                    });
+                    self.response_publication = Some(publication);
+                }
+                fn publish_responses(&mut self) {
                     let Some(mut app) = self.bevy_app.as_ref().cloned() else {
                         return;
                     };
@@ -1566,7 +1590,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                         if let Some(static_data) = self.static_data_cache.as_ref().cloned() {
                             enqueue_requests_for_app(&mut app, vec![ApiRequest {
                                 action_instance_id: None,
-                                kind: ApiRequestKind::SetStaticData(static_data),
+                                kind: ApiRequestKind::SetStaticData(static_data.bind().capture_snapshot()),
                             }]);
                         }
                         self.pending_static_data_sync = false;
@@ -1577,14 +1601,11 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                             ApiResponse::Check(action_instance_id, report, payload, reason) => {
                                 if let Some(instance) = self.instances_by_action_instance_id.get(&action_instance_id) {
                                     let _ = reason;
-                                    instance
-                                        .signals()
-                                        .on_action_status_changed()
-                                        .emit(
-                                            ::bevy_godot4::action_framework::ActionStatus::Checked.as_i64(),
-                                            &report,
-                                            &payload,
-                                        );
+                                    if let Some(updates) = &instance.bind().updates {
+                                        updates.push(ActionUpdate(
+                                            ActionStatus::Checked.as_i64(), report, payload,
+                                        ));
+                                    }
                                 }
                             }
                             ApiResponse::ExecuteEnqueued { action_instance_id, execution_id } => {
@@ -1595,25 +1616,19 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                             }
                             ApiResponse::ExecuteDone {
                                 execution_id,
-                                result,
+                                succeeded,
                                 report,
                                 payload,
                             } => {
                                 if let Some(mut instance) = self.instances_by_execution_id.remove(&execution_id) {
-                                    instance
-                                        .signals()
-                                        .on_action_status_changed()
-                                        .emit(
-                                            if result.ok {
-                                                ::bevy_godot4::action_framework::ActionStatus::ExecutionSuccess
-                                                    .as_i64()
-                                            } else {
-                                                ::bevy_godot4::action_framework::ActionStatus::ExecutionFailed
-                                                    .as_i64()
-                                            },
-                                            &report,
-                                            &payload,
-                                        );
+                                    if let Some(updates) = &instance.bind().updates {
+                                        let status = if succeeded {
+                                            ActionStatus::ExecutionSuccess
+                                        } else {
+                                            ActionStatus::ExecutionFailed
+                                        };
+                                        updates.push(ActionUpdate(status.as_i64(), report, payload));
+                                    }
                                     instance.bind_mut().pending_execution_id = None;
                                 }
                             }
@@ -1633,6 +1648,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
             impl #node_name {
                 #[func]
                 fn initialize(&mut self) {
+                    self.bind_response_publication();
                     let Some(mut app) = self.bevy_app.as_ref().cloned() else {
                         return;
                     };
@@ -1641,7 +1657,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                         if let Some(static_data) = self.static_data_cache.as_ref().cloned() {
                             enqueue_requests_for_app(&mut app, vec![ApiRequest {
                                 action_instance_id: None,
-                                kind: ApiRequestKind::SetStaticData(static_data),
+                                kind: ApiRequestKind::SetStaticData(static_data.bind().capture_snapshot()),
                             }]);
                         }
                         self.pending_static_data_sync = false;
@@ -1683,7 +1699,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
 
                     enqueue_requests_for_app(&mut app, vec![ApiRequest {
                         action_instance_id: Some(action_instance_id),
-                        kind: ApiRequestKind::UpdateParams(<PartialParamsDto as ::godot::obj::NewGd>::new_gd()),
+                        kind: ApiRequestKind::UpdateParams(PartialParamsSnapshot::default()),
                     }]);
 
                     instance
@@ -1714,7 +1730,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
 
                     enqueue_requests_for_app(&mut app, vec![ApiRequest {
                         action_instance_id: None,
-                        kind: ApiRequestKind::SetStaticData(static_data),
+                        kind: ApiRequestKind::SetStaticData(static_data.bind().capture_snapshot()),
                     }]);
                     self.pending_static_data_sync = false;
                 }

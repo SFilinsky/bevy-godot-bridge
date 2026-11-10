@@ -3,7 +3,7 @@ use godot::prelude::*;
 
 /// Basic bridge information for one Godot entity scene.
 ///
-/// Exporters set the entity ID and revision. Nodes made by `with_state_node!`
+/// Exporters set the entity ID. Nodes made by `with_state_node!`
 /// use this information to find the data for the entity.
 #[derive(GodotClass)]
 #[class(base=Node)]
@@ -11,8 +11,6 @@ pub struct EntityMeta {
     despawning: bool,
     #[var]
     pub entity_id: i64,
-    #[var]
-    pub revision: i64,
     #[var]
     custom_cleanup_enabled: bool,
     #[base]
@@ -106,7 +104,6 @@ impl INode for EntityMeta {
         Self {
             entity_id: -1,
             despawning: false,
-            revision: -1,
             custom_cleanup_enabled: false,
             base,
         }

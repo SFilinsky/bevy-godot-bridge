@@ -5,6 +5,8 @@
 //! actions send updates and results back to Godot. Rust-created actions use the
 //! same checks and execution without needing a Godot response.
 
+use crate::data_transfer::DataTransferConfig;
+
 /// Whether an action report currently permits execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllowanceSummary {
@@ -218,7 +220,7 @@ pub trait CheckReportLike {
 
 /// Runs an action after its final checks pass.
 pub trait ExecuteAction<FullParams, ExecuteResult> {
-    type StaticData: crate::dto::DataTransferConfig<DataType = Self::StaticData>;
+    type StaticData: DataTransferConfig<DataType = Self::StaticData>;
 
     fn execute_action(
         &mut self,
