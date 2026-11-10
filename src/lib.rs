@@ -68,6 +68,7 @@ pub mod prelude {
     pub use super::export_delivery::{ExportChangeSource, GodotExportDelivery};
     pub use super::export_values::{ExportValue, ExportValueBatch, ExportValueSubscription};
     pub use super::initialization::{InitializationCoordinator, InitializationPhase};
+    pub use super::presentation::{ScalarPresentationTrack, TransformPresentationTrack};
     pub use super::required_settings::RequiredSettings;
     pub use super::scene::GodotScene;
     pub use super::scene::node_registry::{NodeRegistry, RegistryError};

@@ -66,21 +66,36 @@ impl Drop for ExportValueSubscription {
     }
 }
 
-struct Binding {
+#[derive(Clone)]
+enum Consumer<T> {
+    Script(Callable),
+    Native(Rc<dyn Fn(T)>),
+}
+
+impl<T> Consumer<T> {
+    fn is_valid(&self) -> bool {
+        match self {
+            Self::Script(callback) => callback.is_valid(),
+            Self::Native(_) => true,
+        }
+    }
+}
+
+struct Binding<T> {
     owner: Gd<Node>,
     entity: Gd<EntityMeta>,
-    callback: Callable,
+    consumer: Consumer<T>,
     active: Rc<Cell<bool>>,
 }
 
-impl Binding {
+impl<T> Binding<T> {
     fn is_active(&self) -> bool {
         self.active.get()
             && self.owner.is_instance_valid()
             && self.owner.is_inside_tree()
             && self.entity.is_instance_valid()
             && self.entity.bind().accepts_updates()
-            && self.callback.is_valid()
+            && self.consumer.is_valid()
     }
 }
 
@@ -88,7 +103,7 @@ impl Binding {
 pub struct ExportValueBatch<T: ExportValue> {
     cleanup_pending: Rc<Cell<bool>>,
     changed_list: Rc<RefCell<Vec<i64>>>,
-    binding_map: RefCell<HashMap<i64, Vec<Binding>>>,
+    binding_map: RefCell<HashMap<i64, Vec<Binding<T>>>>,
     value_list: RefCell<Vec<(i64, T)>>,
     seen_set: RefCell<HashSet<i64>>,
     read: Box<dyn Fn(i64) -> Option<T>>,
@@ -121,13 +136,32 @@ impl<T: ExportValue> ExportValueBatch<T> {
         entity: Gd<EntityMeta>,
         callback: Callable,
     ) -> Gd<ExportValueSubscription> {
+        self.register(owner, entity, Consumer::Script(callback))
+    }
+
+    /// Connect typed native work with the same ordering and cancellation as script views.
+    pub fn watch_native(
+        &self,
+        owner: Gd<Node>,
+        entity: Gd<EntityMeta>,
+        receive: impl Fn(T) + 'static,
+    ) -> Gd<ExportValueSubscription> {
+        self.register(owner, entity, Consumer::Native(Rc::new(receive)))
+    }
+
+    fn register(
+        &self,
+        owner: Gd<Node>,
+        entity: Gd<EntityMeta>,
+        consumer: Consumer<T>,
+    ) -> Gd<ExportValueSubscription> {
         let mut subscription = ExportValueSubscription::new_gd();
         subscription.bind_mut().cleanup_pending = self.cleanup_pending.clone();
         let entity_id = entity.bind().entity_id;
         let binding = Binding {
             owner,
             entity,
-            callback,
+            consumer,
             active: subscription.bind().active.clone(),
         };
         self.binding_map
@@ -192,7 +226,7 @@ impl<T: ExportValue> ValueDelivery for ExportValueBatch<T> {
                             .filter(|binding| binding.is_active())
                             .map(|binding| {
                                 (
-                                    binding.callback.clone(),
+                                    binding.consumer.clone(),
                                     binding.active.clone(),
                                     binding.owner.clone(),
                                     binding.entity.clone(),
@@ -201,8 +235,9 @@ impl<T: ExportValue> ValueDelivery for ExportValueBatch<T> {
                     );
                 }
             }
-            value.write_arguments(&mut argument_list);
-            for (callback, active, owner, entity) in callback_list.drain(..) {
+            // Native-only destinations never create script arguments.
+            let mut arguments_ready = false;
+            for (consumer, active, owner, entity) in callback_list.drain(..) {
                 if !delivery_owner.is_instance_valid() || !delivery_owner.is_inside_tree() {
                     break;
                 }
@@ -211,9 +246,18 @@ impl<T: ExportValue> ValueDelivery for ExportValueBatch<T> {
                     && owner.is_inside_tree()
                     && entity.is_instance_valid()
                     && entity.bind().accepts_updates()
-                    && callback.is_valid()
+                    && consumer.is_valid()
                 {
-                    callback.callv(&argument_list);
+                    match consumer {
+                        Consumer::Script(callback) => {
+                            if !arguments_ready {
+                                value.write_arguments(&mut argument_list);
+                                arguments_ready = true;
+                            }
+                            callback.callv(&argument_list);
+                        }
+                        Consumer::Native(receive) => receive(value),
+                    }
                 }
             }
         }
