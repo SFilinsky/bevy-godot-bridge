@@ -47,6 +47,7 @@ impl<T: Value> Handle<T> {
             duration: duration.max(0.0),
             elapsed: 0.0,
             completed: false,
+            has_published: false,
             last_clock: self.queue.clock.get(),
         });
     }
