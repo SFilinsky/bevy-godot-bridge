@@ -1,4 +1,5 @@
 //! Compact active transitions and typed output buffers shared by visual policies.
+use super::sampling::{Interpolate, TransitionState, sample};
 use godot::builtin::{StringName, Transform3D, VarDictionary};
 use godot::classes::{Node, Node3D};
 use godot::obj::Gd;
@@ -11,20 +12,21 @@ observe! {
     use super::probe::writes_enabled;
 }
 
-pub trait Value: Copy {
+pub trait Value: Interpolate {
     type Target: Clone;
-    fn interpolate(start: Self, end: Self, weight: f64) -> Self;
     fn valid(target: &Self::Target) -> bool;
     fn apply(self, target: &mut Self::Target);
 }
 
 #[derive(Clone, Copy)]
 pub struct TransformValue(pub Transform3D);
-impl Value for TransformValue {
-    type Target = Gd<Node3D>;
+impl Interpolate for TransformValue {
     fn interpolate(start: Self, end: Self, weight: f64) -> Self {
         Self(start.0.interpolate_with(&end.0, weight as f32))
     }
+}
+impl Value for TransformValue {
+    type Target = Gd<Node3D>;
     fn valid(target: &Self::Target) -> bool {
         target.is_instance_valid() && target.is_inside_tree()
     }
@@ -35,11 +37,13 @@ impl Value for TransformValue {
 
 #[derive(Clone, Copy)]
 pub struct ScalarValue(pub f64);
-impl Value for ScalarValue {
-    type Target = (Gd<Node>, StringName);
+impl Interpolate for ScalarValue {
     fn interpolate(start: Self, end: Self, weight: f64) -> Self {
         Self(start.0 + (end.0 - start.0) * weight)
     }
+}
+impl Value for ScalarValue {
+    type Target = (Gd<Node>, StringName);
     fn valid(target: &Self::Target) -> bool {
         target.0.is_instance_valid() && target.0.is_inside_tree()
     }
@@ -60,13 +64,8 @@ pub struct Transition<T: Value> {
     pub revision: u64,
     pub owner: Gd<Node>,
     pub target: T::Target,
-    pub start: T,
-    pub end: T,
-    pub duration: f64,
-    pub elapsed: f64,
+    pub(super) state: TransitionState<T>,
     pub completed: bool,
-    pub has_published: bool,
-    pub last_clock: f64,
 }
 
 impl<T: Value> Transition<T> {
@@ -123,6 +122,7 @@ pub struct Batch<T: Value> {
     active_list: Vec<Transition<T>>,
     index_map: HashMap<u64, usize>,
     output_list: Vec<(usize, T)>,
+    eligible_list: Vec<bool>,
     pub metrics: Metrics,
 }
 
@@ -133,6 +133,7 @@ impl<T: Value> Default for Batch<T> {
             active_list: Vec::new(),
             index_map: HashMap::new(),
             output_list: Vec::new(),
+            eligible_list: Vec::new(),
             metrics: Metrics::default(),
         }
     }
@@ -148,6 +149,7 @@ impl<T: Value> Batch<T> {
         }
         self.index_map.clear();
         self.output_list.clear();
+        self.eligible_list.clear();
     }
 
     pub fn step(&mut self, delta: f64, service_valid: impl Fn() -> bool) {
@@ -175,25 +177,21 @@ impl<T: Value> Batch<T> {
             }
         }
         self.output_list.clear();
+        // Gather engine state once into reusable plain inputs before calculating samples.
+        self.eligible_list.clear();
+        self.eligible_list.extend(
+            self.active_list
+                .iter()
+                .map(|entry| entry.valid() && entry.owner.can_process()),
+        );
         for (index, entry) in self.active_list.iter_mut().enumerate() {
-            // A new request starts at submission, even between catch-up physics steps.
-            let elapsed_delta = (clock - entry.last_clock).max(0.0);
-            entry.last_clock = clock;
-            if !entry.valid() || !entry.owner.can_process() {
-                continue;
+            // This pass reads only gathered values and updates intermediate animation state.
+            let next = sample(&entry.state, clock, self.eligible_list[index]);
+            entry.state.elapsed = next.elapsed;
+            entry.state.last_clock = next.last_clock;
+            if let Some(value) = next.value {
+                self.output_list.push((index, value));
             }
-            // A replacement must publish its start even before another physics tick.
-            if elapsed_delta == 0.0 && entry.duration > 0.0 && entry.has_published {
-                continue;
-            }
-            entry.elapsed = (entry.elapsed + elapsed_delta).min(entry.duration);
-            let weight = if entry.duration > 0.0 {
-                entry.elapsed / entry.duration
-            } else {
-                1.0
-            };
-            self.output_list
-                .push((index, T::interpolate(entry.start, entry.end, weight)));
         }
         observe! { let prepared = Instant::now(); }
         // Native destinations may call scripts; check cancellation again before each write.
@@ -207,8 +205,8 @@ impl<T: Value> Batch<T> {
                     value.apply(&mut entry.target);
                     observe! { self.metrics.writes += 1; }
                 }
-                entry.completed = entry.elapsed >= entry.duration;
-                entry.has_published = true;
+                entry.completed = entry.state.elapsed >= entry.state.duration;
+                entry.state.has_published = true;
                 observe! { self.metrics.evaluations += 1; }
             }
         }

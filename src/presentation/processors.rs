@@ -4,6 +4,7 @@ use godot::classes::node::ProcessMode;
 use godot::classes::{INode, Node};
 use godot::obj::{Base, Gd, WithBaseField};
 use godot::prelude::{GodotClass, godot_api};
+use std::mem::take;
 observe! {
     use godot::classes::Performance;
     use godot::obj::Singleton;
@@ -52,7 +53,7 @@ impl INode for TransformPresentation {
             .presentation
             .as_ref()
             .expect("Assign the authored Presentation root");
-        let callback = presentation.callable("_publish_frame");
+        let callback = self.to_gd().callable("_publish_frame");
         self.base()
             .get_tree()
             .expect("processor is in tree")
@@ -66,18 +67,55 @@ impl INode for TransformPresentation {
     fn physics_process(&mut self, delta: f64) {
         // Time advancement does not write transforms or run gameplay.
         if let Some(presentation) = &self.presentation {
-            presentation.bind().advance_clock(delta);
+            let service = presentation.bind();
+            let clock = &service.transform.queue.clock;
+            clock.set(clock.get() + delta.max(0.0));
         }
     }
 
     fn exit_tree(&mut self) {
         let presentation = self.presentation.as_ref().expect("authored presentation");
         if let Some(mut tree) = self.base().get_tree() {
-            tree.disconnect("process_frame", &presentation.callable("_publish_frame"));
+            tree.disconnect("process_frame", &self.to_gd().callable("_publish_frame"));
         }
         observe! {
             let name = format!("Presentation/{}/frame publication ms", presentation.instance_id().to_i64());
             Performance::singleton().remove_custom_monitor(&name);
+        }
+    }
+}
+
+#[godot_api]
+impl TransformPresentation {
+    #[func(gd_self)]
+    fn _publish_frame(this: Gd<Self>) {
+        // Release the behavior before scene writes can remove it or its level.
+        let Some(mut presentation) = this.bind().presentation.clone() else {
+            return;
+        };
+        let (mut batch, epoch) = {
+            let mut service = presentation.bind_mut();
+            // Repeated renders without new time or requests need no new sample.
+            let clock = service.transform.queue.clock.get();
+            if clock == service.last_frame_clock
+                && service.transform.queue.pending.borrow().is_empty()
+            {
+                return;
+            }
+            service.last_frame_clock = clock;
+            let batch = take(&mut service.transform);
+            service.transform.queue = batch.queue.clone();
+            (batch, service.epoch)
+        };
+        // Publish using accumulated physics time, before idle consumers read positions.
+        batch.step(0.0, || {
+            presentation.is_instance_valid()
+                && presentation.is_inside_tree()
+                && presentation.bind().epoch == epoch
+        });
+        // An unloaded or remounted level must not receive the old batch back.
+        if presentation.is_instance_valid() && presentation.bind().epoch == epoch {
+            presentation.bind_mut().transform = batch;
         }
     }
 }
@@ -111,8 +149,23 @@ impl INode for ScalarPresentation {
     fn process(this: Gd<Self>, delta: f64) {
         // A property setter can unload this scene; release the processor first.
         let presentation = this.bind().presentation.clone();
-        if let Some(presentation) = presentation {
-            SharedPresentation::advance_numbers(presentation, delta);
+        let Some(mut presentation) = presentation else {
+            return;
+        };
+        let (mut batch, epoch) = {
+            let mut service = presentation.bind_mut();
+            let batch = take(&mut service.scalar);
+            service.scalar.queue = batch.queue.clone();
+            (batch, service.epoch)
+        };
+        // Advance and apply while neither authored node is borrowed.
+        batch.step(delta, || {
+            presentation.is_instance_valid()
+                && presentation.is_inside_tree()
+                && presentation.bind().epoch == epoch
+        });
+        if presentation.is_instance_valid() && presentation.bind().epoch == epoch {
+            presentation.bind_mut().scalar = batch;
         }
     }
 
