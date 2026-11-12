@@ -1,11 +1,11 @@
 //! Bind an exported event queue to ordered delivery after Bevy returns.
 use crate::app::BevyApp;
-use crate::data_transfer::DataTransferConfig;
-use crate::export_publication::ExportPublication;
-use crate::export_queue::{ExportQueue, drain_snapshots, snapshot_batch_to_dtos};
-use crate::export_values::{ExportValue, UpdateSubscription};
-use crate::occurrence_stream::OccurrenceStream;
-use crate::update_dispatcher::UpdateDispatcher;
+use crate::data::config::DataTransferConfig;
+use crate::export::publication::ExportPublication;
+use crate::export::queues::{ExportQueue, drain_snapshots, snapshot_batch_to_dtos};
+use crate::updates::dispatcher::UpdateDispatcher;
+use crate::updates::occurrences::OccurrenceStream;
+use crate::updates::subscriptions::{ExportValue, UpdateSubscription};
 use godot::builtin::{Array, Variant};
 use godot::classes::Node;
 use godot::meta::ToGodot;

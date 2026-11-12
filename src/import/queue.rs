@@ -1,8 +1,8 @@
 //! Capture Godot requests now and deliver their messages on the next Bevy step.
 use crate::app::BevyApp;
-use crate::data_transfer::DataTransferConfig;
-use crate::transfer_types::DtoOf;
-use crate::transfer_types::TransferDto;
+use crate::data::config::DataTransferConfig;
+use crate::data::types::DtoOf;
+use crate::data::types::TransferDto;
 use crate::import::subsystems::IdentitySubsystem;
 use bevy::prelude::{App, FixedPreUpdate, Message, MessageWriter, NonSendMut, Plugin};
 use godot::global::godot_error;

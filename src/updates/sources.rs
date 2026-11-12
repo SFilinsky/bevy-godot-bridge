@@ -1,10 +1,10 @@
 //! Read declared component snapshots and deliver values through the shared dispatcher.
-use crate::data_transfer::DataTransferConfig;
-use crate::transfer_types::DtoOf;
-use crate::entity_meta::EntityMeta;
-use crate::export_snapshots::SnapshotPair;
-use crate::update_dispatcher::{ExportChangeSource, UpdateDispatcher};
-use crate::export_values::{ExportValue, ExportValueBatch, UpdateSubscription};
+use crate::data::config::DataTransferConfig;
+use crate::data::types::DtoOf;
+use crate::entities::metadata::EntityMeta;
+use crate::export::state::snapshots::SnapshotPair;
+use crate::updates::dispatcher::{ExportChangeSource, UpdateDispatcher};
+use crate::updates::subscriptions::{ExportValue, ExportValueBatch, UpdateSubscription};
 use godot::builtin::{Array, Variant};
 use godot::classes::Node;
 #[cfg(any(debug_assertions, feature = "profiled-release"))]

@@ -168,3 +168,9 @@ fn spawn_scene(
             .insert(GodotSceneSpawned);
     }
 }
+
+#[cfg(feature = "assets")]
+pub(crate) mod assets;
+pub(crate) mod children;
+pub(crate) mod handles;
+pub(crate) mod tree;

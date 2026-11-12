@@ -1,5 +1,5 @@
 //! One owned value crosses the bridge; a typed Godot DTO is built only on demand.
-use crate::data_transfer::DataTransferConfig;
+use crate::data::config::DataTransferConfig;
 use godot::classes::RefCounted;
 use godot::meta::{ByValue, FromGodot, ToGodot};
 use godot::obj::bounds::DeclUser;

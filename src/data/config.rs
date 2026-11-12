@@ -1,5 +1,5 @@
 //! Maps gameplay facts to captured bridge values and back.
-use crate::transfer_types::TransferSnapshot;
+use crate::data::types::TransferSnapshot;
 use crate::import::subsystems::IdentitySubsystem;
 use godot::classes::{Node, RefCounted};
 use godot::obj::{Gd, GodotClass};

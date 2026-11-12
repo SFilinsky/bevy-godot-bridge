@@ -1,4 +1,4 @@
-use crate::entity_meta::EntityMeta;
+use crate::entities::metadata::EntityMeta;
 use crate::prelude::BevyApp;
 use godot::prelude::*;
 use std::collections::HashMap;

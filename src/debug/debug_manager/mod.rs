@@ -3,7 +3,7 @@
 use std::cmp::PartialEq;
 use std::fmt::Debug;
 
-use crate::app_action_queue::AppAction;
+use crate::app::jobs::AppAction;
 use crate::prelude::BevyApp;
 use bevy::app::{App, Plugin};
 use bevy::ecs::system::SystemParam;
