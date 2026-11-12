@@ -82,7 +82,7 @@ impl<I: Iterator> Iterator for ProfiledIter<I> {
 
 #[cfg(feature = "bridge-transport-profiling")]
 mod enabled {
-    use crate::export_profile::{ExportProfile, Stage};
+    use crate::export::profiling::{ExportProfile, Stage};
     use crate::performance::layer::{
         measurements_enabled, record_detail_duration_for_current_scope,
     };
@@ -195,8 +195,8 @@ mod enabled {
 
     #[cfg(test)]
     mod tests {
-        use crate::export_profile::Stage;
-        use crate::export_profile::enabled::Batch;
+        use crate::export::profiling::Stage;
+        use crate::export::profiling::enabled::Batch;
         use std::time::{Duration, Instant};
 
         #[test]

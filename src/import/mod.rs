@@ -16,7 +16,7 @@ pub mod components {
 
 pub mod subsystems {
     use super::components::GodotIdentity;
-    use crate::bevy_app_subsystem::BevyAppIdAllocatorRef;
+    use crate::app::subsystem::BevyAppIdAllocatorRef;
     use bevy::ecs::entity::Entities;
     use bevy::ecs::system::SystemParam;
     use bevy::prelude::NonSend;
@@ -127,7 +127,7 @@ pub mod subsystems {
 pub mod intentions {
     use crate::import::subsystems::IdentitySubsystem;
     use bevy::prelude::Message;
-    use bevy_godot4::data_transfer::DataTransferConfig;
+    use bevy_godot4::data::config::DataTransferConfig;
 
     use bevy_godot4::prelude::bridge_dto;
     use bevy_godot4_proc_macros::import_queue;
@@ -341,3 +341,5 @@ pub mod plugins {
         }
     }
 }
+
+pub(crate) mod settings;

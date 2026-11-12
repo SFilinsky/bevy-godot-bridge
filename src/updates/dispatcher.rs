@@ -9,9 +9,11 @@
 //! including profiling builds, omit them. Component change tracking stays in
 //! Rust through `ExportState::change_source`.
 
-use crate::export_publication::{ExportPublication, PublicationQueue};
-use crate::export_values::{ExportValue, ExportValueBatch, PendingValues, ValueBatchRegistry};
-use crate::occurrence_stream::OccurrenceStream;
+use crate::export::publication::{ExportPublication, PublicationQueue};
+use crate::updates::occurrences::OccurrenceStream;
+use crate::updates::subscriptions::{
+    ExportValue, ExportValueBatch, PendingValues, ValueBatchRegistry,
+};
 use std::cell::RefCell;
 #[cfg(feature = "bridge-test-api")]
 use std::collections::HashMap;

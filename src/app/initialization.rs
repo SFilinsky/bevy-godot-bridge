@@ -1,8 +1,8 @@
 //! Starts Godot scene setup before the first Bevy update.
 
 use crate::prelude::{BevyApp, SceneRoot};
+use crate::scene::children::collect_children;
 use crate::scene::registration::{register_level_service_on_entry, scene_services};
-use crate::tools::collect_children;
 use godot::builtin::StringName;
 use godot::classes::{INode, Node};
 use godot::global::{godot_error, godot_print, godot_warn};

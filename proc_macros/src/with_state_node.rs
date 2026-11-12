@@ -90,7 +90,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             register_store_on_entry, child_services, BevyApp, StateReadError, report_state_error};
         use std::cell::RefCell;
         use std::rc::Rc;
-        use bevy_godot4::export_profile::{Stage as ExportStage, measure as measure_export};
+        use bevy_godot4::export::profiling::{Stage as ExportStage, measure as measure_export};
 
         #[derive(Clone)]
         struct #prepared(Option<<#config as #config_trait>::Snapshot>);

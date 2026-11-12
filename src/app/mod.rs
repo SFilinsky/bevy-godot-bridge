@@ -1,7 +1,7 @@
-pub use crate::bevy_app_subsystem::BevyAppSubsystem;
-use crate::bevy_app_subsystem::{BevyAppHostPlugin, BevyAppIdAllocatorRef};
+pub use crate::app::subsystem::BevyAppSubsystem;
+use crate::app::subsystem::{BevyAppHostPlugin, BevyAppIdAllocatorRef};
 use crate::scene::registration::{register_level_service_on_entry, scene_services};
-use crate::update_dispatcher::UpdateDispatcher;
+use crate::updates::dispatcher::UpdateDispatcher;
 use bevy::app::App;
 use godot::{
     builtin::NodePath,
@@ -10,7 +10,7 @@ use godot::{
     prelude::{GodotClass, Inherits, godot_api},
 };
 
-use crate::app_action_queue::ActionQueue;
+use crate::app::jobs::ActionQueue;
 use crate::import::plugins::IdentitySubsystemPlugin;
 use crate::performance::init_performance_tracing;
 use crate::performance::update_snapshot::BevyUpdateSnapshot;
@@ -23,7 +23,7 @@ observe! {
 }
 use crate::performance::layer::{allocate_app_scope_id, clear_metrics_for_scope, enter_app_scope};
 use crate::prelude::*;
-use crate::scene_tree::plugins::SceneTreeSubsystemPlugin;
+use crate::scene::tree::plugins::SceneTreeSubsystemPlugin;
 use bevy::DefaultPlugins;
 use bevy::prelude::{Fixed, Time, Virtual, World};
 use bevy::time::TimeUpdateStrategy;
@@ -452,7 +452,7 @@ impl INode for BevyApp {
         Self::configure_manual_time(&mut app);
 
         #[cfg(feature = "assets")]
-        app.add_plugins(crate::assets::GodotAssetsPlugin);
+        app.add_plugins(crate::scene::assets::GodotAssetsPlugin);
 
         self.app = Some(app);
 
@@ -536,3 +536,9 @@ impl INode for BevyApp {
         // }
     }
 }
+
+pub(crate) mod initialization;
+pub(crate) mod jobs;
+pub(crate) mod lifecycle;
+pub(crate) mod scheduling;
+pub(crate) mod subsystem;

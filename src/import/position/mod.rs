@@ -1,7 +1,7 @@
 //! Position import layered on top of bridge entity initialization.
 
 pub mod intentions {
-    use crate::data_transfer::DataTransferConfig;
+    use crate::data::config::DataTransferConfig;
     use crate::import::subsystems::IdentitySubsystem;
     use bevy::prelude::{Message, Vec3};
 

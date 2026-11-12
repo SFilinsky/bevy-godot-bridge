@@ -5,7 +5,7 @@
 //! actions send updates and results back to Godot. Rust-created actions use the
 //! same checks and execution without needing a Godot response.
 
-use crate::data_transfer::DataTransferConfig;
+use crate::data::config::DataTransferConfig;
 
 /// Whether an action report currently permits execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

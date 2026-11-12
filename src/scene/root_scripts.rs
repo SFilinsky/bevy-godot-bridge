@@ -1,7 +1,7 @@
 //! Resolves the scene-local container for root-level Godot scripts.
 
+use crate::scene::children::collect_children;
 use crate::scene::scene_root::SceneRoot;
-use crate::tools::collect_children;
 use godot::global::godot_error;
 use godot::prelude::*;
 

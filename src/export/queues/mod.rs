@@ -1,7 +1,7 @@
 //! Shared outbound queues for values Bevy sends to Godot.
 //!
 //! A source plugin copies `Message` or `Event` values into an
-//! [`ExportQueue`](crate::export_queue::ExportQueue).
+//! [`ExportQueue`](crate::export::queues::ExportQueue).
 //! The shared dispatcher publishes ordered batches through a typed class created by
 //! [`export_queue!`](crate::prelude::export_queue). The queue stores Rust
 //! values until Godot asks for them, so source systems do not create Godot
@@ -14,7 +14,7 @@ use std::vec::Drain;
 
 use bevy::ecs::schedule::common_conditions::on_message;
 
-use crate::export_publication::ExportPublication;
+use crate::export::publication::ExportPublication;
 use bevy::prelude::{
     App, Event, IntoScheduleConfigs, Message, MessageReader, NonSendMut, On, Plugin, PostUpdate,
     World,
@@ -23,10 +23,10 @@ use godot::builtin::Array;
 use godot::obj::Gd;
 use std::rc::{Rc, Weak};
 
-use crate::bevy_app_subsystem::BevyAppIdAllocatorRef;
-use crate::data_transfer::DataTransferConfig;
+use crate::app::subsystem::BevyAppIdAllocatorRef;
+use crate::data::config::DataTransferConfig;
+use crate::data::types::TransferSnapshot;
 use crate::import::subsystems::{IdentityRegistry, IdentitySubsystem};
-use crate::transfer_types::TransferSnapshot;
 
 /// Stores values that Godot has not read yet.
 ///
@@ -326,3 +326,5 @@ mod tests {
         );
     }
 }
+
+pub(crate) mod source;

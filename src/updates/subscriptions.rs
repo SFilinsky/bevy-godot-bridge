@@ -17,8 +17,8 @@ use godot::obj::{Base, Gd, NewGd};
 use godot::prelude::{GodotClass, godot_api};
 use godot_apis::updates::{Receiver, UpdatePayload, UpdateReceiver};
 
-use crate::entity_meta::EntityMeta;
-use crate::update_dispatcher::ExportChangeSource;
+use crate::entities::metadata::EntityMeta;
+use crate::updates::dispatcher::ExportChangeSource;
 observe! {
     use std::time::Instant;
     use godot::classes::{Engine, Time};

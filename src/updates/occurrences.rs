@@ -1,5 +1,5 @@
 //! Keep every event or action result, then deliver it through the shared connections.
-use crate::export_values::{Binding, ExportValue, UpdateSubscription, ValueDelivery};
+use crate::updates::subscriptions::{Binding, ExportValue, UpdateSubscription, ValueDelivery};
 use godot::builtin::Array;
 use godot::classes::Node;
 use godot::obj::Gd;

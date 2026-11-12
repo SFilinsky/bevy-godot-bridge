@@ -440,7 +440,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             use bevy::ecs::system::SystemParam;
             use bevy::prelude::*;
             use bevy_godot4::prelude::*;
-            use bevy_godot4::export_profile::{ExportProfile, Stage as ExportStage, measure as measure_export, query_iter};
+            use bevy_godot4::export::profiling::{ExportProfile, Stage as ExportStage, measure as measure_export, query_iter};
             use godot::prelude::*;
             use godot::classes::Engine;
             use std::collections::{HashMap, HashSet};

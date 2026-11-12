@@ -186,8 +186,8 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
     let check_type_alias_defs = checks.iter().zip(check_aliases.iter()).map(|(c, alias)| {
         let mapper = &c.mapper_type;
         quote! {
-            type #alias = <<#mapper as ::bevy_godot4::action_framework::CheckAdapter>::CheckSubsystem<'static, 'static>
-                as ::bevy_godot4::action_framework::Check>::Fail;
+            type #alias = <<#mapper as ::bevy_godot4::actions::CheckAdapter>::CheckSubsystem<'static, 'static>
+                as ::bevy_godot4::actions::Check>::Fail;
         }
     });
 
@@ -195,7 +195,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
         |(c, alias)| {
             let mapper = &c.mapper_type;
             quote! {
-                type #alias<'w, 's> = <#mapper as ::bevy_godot4::action_framework::CheckAdapter>::CheckSubsystem<'w, 's>;
+                type #alias<'w, 's> = <#mapper as ::bevy_godot4::actions::CheckAdapter>::CheckSubsystem<'w, 's>;
             }
         },
     );
@@ -211,14 +211,14 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
     let check_field_defs = checks.iter().zip(check_aliases.iter()).map(|(c, alias)| {
         let name = &c.name;
         quote! {
-            pub #name: ::bevy_godot4::action_framework::Criterion<#alias>,
+            pub #name: ::bevy_godot4::actions::Criterion<#alias>,
         }
     });
 
     let check_field_args = checks.iter().zip(check_aliases.iter()).map(|(c, alias)| {
         let name = &c.name;
         quote! {
-            #name: ::bevy_godot4::action_framework::Criterion<#alias>
+            #name: ::bevy_godot4::actions::Criterion<#alias>
         }
     });
 
@@ -235,7 +235,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
     let check_default_inits = checks.iter().map(|c| {
         let name = &c.name;
         quote! {
-            #name: ::bevy_godot4::action_framework::Criterion::NotProvided { payload: None },
+            #name: ::bevy_godot4::actions::Criterion::NotProvided { payload: None },
         }
     });
 
@@ -266,7 +266,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 if check_mask & #constant != 0 {
                     let check_started_at = ::std::time::Instant::now();
                     let mut #var = self.subsystems.#p_method();
-                    report.#name = <#mapper as ::bevy_godot4::action_framework::CheckAdapter>::map_and_check(
+                    report.#name = <#mapper as ::bevy_godot4::actions::CheckAdapter>::map_and_check(
                         pp,
                         static_data,
                         &mut #var,
@@ -335,7 +335,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
             let continuous_check_started_at = ::std::time::Instant::now();
             {
                 let mut check_subsystem = action.checks.subsystems.#p_method();
-                if let Some(continuous_check) = ::bevy_godot4::action_framework::Check::continuous_check(&mut check_subsystem) {
+                if let Some(continuous_check) = ::bevy_godot4::actions::Check::continuous_check(&mut check_subsystem) {
                     continuous_check_mask |= #constant;
                     for action_change in action_change_list.iter() {
                         let partial_params = (!action_change.is_removed)
@@ -373,7 +373,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
     );
     let status_field_defs = checks.iter().map(|c| {
         let name = &c.name;
-        quote! { #[init(val = bevy_godot4::action_framework::ActionCheckStatus::NotProvided.as_i64())] pub #name: i64, }
+        quote! { #[init(val = bevy_godot4::actions::ActionCheckStatus::NotProvided.as_i64())] pub #name: i64, }
     });
 
     let report_dto_payload_defs = checks.iter().zip(check_aliases.iter()).map(|(c, alias)| {
@@ -387,25 +387,25 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
         let name = &c.name;
         quote! {
             let (status_code, payload_snapshot) = match &data.#name {
-                ::bevy_godot4::action_framework::Criterion::Ok { payload } => {
+                ::bevy_godot4::actions::Criterion::Ok { payload } => {
                     (
-                        ::bevy_godot4::action_framework::ActionCheckStatus::Ok.as_i64(),
+                        ::bevy_godot4::actions::ActionCheckStatus::Ok.as_i64(),
                         payload
                             .as_ref()
                             .map(|p| <#alias as DataTransferConfig>::snapshot_from_data(p, identity)),
                     )
                 }
-                ::bevy_godot4::action_framework::Criterion::NotProvided { payload } => {
+                ::bevy_godot4::actions::Criterion::NotProvided { payload } => {
                     (
-                        ::bevy_godot4::action_framework::ActionCheckStatus::NotProvided.as_i64(),
+                        ::bevy_godot4::actions::ActionCheckStatus::NotProvided.as_i64(),
                         payload
                             .as_ref()
                             .map(|p| <#alias as DataTransferConfig>::snapshot_from_data(p, identity)),
                     )
                 }
-                ::bevy_godot4::action_framework::Criterion::Fail { payload, .. } => {
+                ::bevy_godot4::actions::Criterion::Fail { payload, .. } => {
                     (
-                        ::bevy_godot4::action_framework::ActionCheckStatus::Failure.as_i64(),
+                        ::bevy_godot4::actions::ActionCheckStatus::Failure.as_i64(),
                         payload
                             .as_ref()
                             .map(|p| <#alias as DataTransferConfig>::snapshot_from_data(p, identity)),
@@ -426,7 +426,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
             use ::bevy::prelude::*;
             use ::bevy::ecs::system::SystemParam;
             use ::bevy_godot4::prelude::{DtoOf, DataTransferConfig, TransferDto, TransferSnapshot, IdentitySubsystem, bridge_dto};
-            use ::bevy_godot4::action_framework::ActionStatus;
+            use ::bevy_godot4::actions::ActionStatus;
             use ::bevy_godot4::prelude::{BevyApp, UpdateDispatcher, ExportPublication, OccurrenceStream,
                 ExportValue, UpdatePayload, UpdateReceiver, UpdateSubscription};
             use std::rc::{Rc, Weak};
@@ -436,13 +436,13 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
             use ::godot::prelude::*;
             use ::std::collections::{HashMap, VecDeque};
 
-            pub type ActionInstanceId = ::bevy_godot4::action_framework::ActionInstanceId;
-            pub type ExecutionId = ::bevy_godot4::action_framework::ExecutionId;
-            pub type CheckReason = ::bevy_godot4::action_framework::CheckReason;
-            type FullParams = <#partial_params as ::bevy_godot4::action_framework::ActionParams>::FullParams;
+            pub type ActionInstanceId = ::bevy_godot4::actions::ActionInstanceId;
+            pub type ExecutionId = ::bevy_godot4::actions::ExecutionId;
+            pub type CheckReason = ::bevy_godot4::actions::CheckReason;
+            type FullParams = <#partial_params as ::bevy_godot4::actions::ActionParams>::FullParams;
             type ExecutePayload = #execute_result_payload;
-            type ExecuteResultData = ::bevy_godot4::action_framework::ExecuteResult<ExecutePayload>;
-            type StaticData = <#execute_subsystem<'static, 'static> as ::bevy_godot4::action_framework::ExecuteAction<
+            type ExecuteResultData = ::bevy_godot4::actions::ExecuteResult<ExecutePayload>;
+            type StaticData = <#execute_subsystem<'static, 'static> as ::bevy_godot4::actions::ExecuteAction<
                 FullParams,
                 ExecuteResultData,
             >>::StaticData;
@@ -475,7 +475,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
 
             #[derive(Debug, Clone, PartialEq)]
             pub struct #check_report_name {
-                pub allowance: ::bevy_godot4::action_framework::AllowanceSummary,
+                pub allowance: ::bevy_godot4::actions::AllowanceSummary,
                 #( #check_field_defs )*
             }
 
@@ -484,9 +484,9 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                     #( #check_field_args ),*
                 ) -> Self {
                     let allowance = if true #( #check_allowance_terms )* {
-                        ::bevy_godot4::action_framework::AllowanceSummary::Ok
+                        ::bevy_godot4::actions::AllowanceSummary::Ok
                     } else {
-                        ::bevy_godot4::action_framework::AllowanceSummary::NotAllowed
+                        ::bevy_godot4::actions::AllowanceSummary::NotAllowed
                     };
 
                     Self {
@@ -502,14 +502,14 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
             impl Default for #check_report_name {
                 fn default() -> Self {
                     Self {
-                        allowance: ::bevy_godot4::action_framework::AllowanceSummary::NotAllowed,
+                        allowance: ::bevy_godot4::actions::AllowanceSummary::NotAllowed,
                         #( #check_default_inits )*
                     }
                 }
             }
 
-            impl ::bevy_godot4::action_framework::CheckReportLike for #check_report_name {
-                fn allowance(&self) -> ::bevy_godot4::action_framework::AllowanceSummary {
+            impl ::bevy_godot4::actions::CheckReportLike for #check_report_name {
+                fn allowance(&self) -> ::bevy_godot4::actions::AllowanceSummary {
                     self.allowance
                 }
             }
@@ -609,7 +609,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
             fn _assert_generated_bounds() {
                 fn _partial_params<T>()
                 where
-                    T: ::bevy_godot4::action_framework::ActionParams
+                    T: ::bevy_godot4::actions::ActionParams
                         + DataTransferConfig<DataType = T>
                         + Clone
                         + Default,
@@ -739,7 +739,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 report: #check_report_name,
                 origin: ActionInstanceOrigin,
                 last_godot_report: Option<#check_report_name>,
-                last_rust_allowance: Option<::bevy_godot4::action_framework::AllowanceSummary>,
+                last_rust_allowance: Option<::bevy_godot4::actions::AllowanceSummary>,
             }
 
             impl Entry {
@@ -775,7 +775,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 static_data_change_pending: bool,
                 next_execution_id: ExecutionId,
                 entries: HashMap<ActionInstanceId, Entry>,
-                dirty_action_id_list: ::bevy_godot4::action_framework::DirtyActionIdList,
+                dirty_action_id_list: ::bevy_godot4::actions::DirtyActionIdList,
                 continuous_action_change_list: Vec<ContinuousActionChange>,
                 pending_exec: VecDeque<(ExecutionId, ActionInstanceId)>,
                 out_results: VecDeque<OutResponse>,
@@ -800,7 +800,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                         last_godot_report: None,
                         last_rust_allowance: None,
                         });
-                        ::bevy_godot4::action_framework::ActionParams::merge_from(&mut entry.params, &incoming);
+                        ::bevy_godot4::actions::ActionParams::merge_from(&mut entry.params, &incoming);
                     }
                     self.continuous_action_change_list.push(ContinuousActionChange {
                         action_instance_id,
@@ -814,7 +814,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                     action_instance_id: ActionInstanceId,
                     params: FullParams,
                 ) {
-                    let partial_params = ::bevy_godot4::action_framework::ActionParams::from_full(&params);
+                    let partial_params = ::bevy_godot4::actions::ActionParams::from_full(&params);
                     self.entries.insert(
                         action_instance_id,
                         Entry {
@@ -840,7 +840,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                     incoming: #partial_params,
                 ) -> bool {
                     let Some(()) = self.entries.get_mut(&action_instance_id).map(|entry| {
-                        ::bevy_godot4::action_framework::ActionParams::merge_from(
+                        ::bevy_godot4::actions::ActionParams::merge_from(
                             &mut entry.params,
                             &incoming,
                         );
@@ -946,7 +946,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 }
 
                 pub fn resolve_full_params(&self, action_instance_id: ActionInstanceId) -> Option<FullParams> {
-                    ::bevy_godot4::action_framework::ActionParams::to_full(
+                    ::bevy_godot4::actions::ActionParams::to_full(
                         &self.entries.get(&action_instance_id)?.params,
                     )
                 }
@@ -1037,9 +1037,9 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 ) {
                     #( #check_refresh_inits )*
                     report.allowance = if true #( #report_allowance_terms )* {
-                        ::bevy_godot4::action_framework::AllowanceSummary::Ok
+                        ::bevy_godot4::actions::AllowanceSummary::Ok
                     } else {
-                        ::bevy_godot4::action_framework::AllowanceSummary::NotAllowed
+                        ::bevy_godot4::actions::AllowanceSummary::NotAllowed
                     };
                 }
             }
@@ -1100,7 +1100,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                     &mut self,
                     params: FullParams,
                 ) -> #check_report_name {
-                    let pp = ::bevy_godot4::action_framework::ActionParams::from_full(&params);
+                    let pp = ::bevy_godot4::actions::ActionParams::from_full(&params);
                     self.check_partial(&pp)
                 }
 
@@ -1111,9 +1111,9 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                     ExecuteResultData,
                     #check_report_name,
                 ) {
-                    let partial = ::bevy_godot4::action_framework::ActionParams::from_full(&params);
+                    let partial = ::bevy_godot4::actions::ActionParams::from_full(&params);
                     let report = self.check_partial(&partial);
-                    if !::bevy_godot4::action_framework::CheckReportLike::is_allowed(&report) {
+                    if !::bevy_godot4::actions::CheckReportLike::is_allowed(&report) {
                         return (
                             ExecuteResultData {
                                 ok: false,
@@ -1126,7 +1126,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                     let static_data = &self.manager.static_data;
                     let result = {
                         let mut execution_subsystem = self.subsystems.p0();
-                        <#execute_subsystem<'_, '_> as ::bevy_godot4::action_framework::ExecuteAction<
+                        <#execute_subsystem<'_, '_> as ::bevy_godot4::actions::ExecuteAction<
                             FullParams,
                             ExecuteResultData,
                         >>::execute_action(&mut execution_subsystem, static_data, params)

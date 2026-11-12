@@ -1,6 +1,6 @@
 //! Queue owned entity values, then publish them together after Bevy returns.
-use crate::export_snapshots::SnapshotPair;
-use crate::transfer_types::TransferSnapshot;
+use crate::data::types::TransferSnapshot;
+use crate::export::state::snapshots::SnapshotPair;
 use godot::obj::Gd;
 use std::cell::OnceCell;
 use std::collections::HashMap;
