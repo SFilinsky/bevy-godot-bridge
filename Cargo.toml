@@ -7,6 +7,16 @@ readme = "README.md"
 [lib]
 crate-type = ["lib", "cdylib"]
 
+# Keep tests beside their code, but compile these as external library users
+# so generated macros cannot accidentally rely on private bridge items.
+[[test]]
+name = "export_notifications"
+path = "src/export/queues/consumer_tests.rs"
+
+[[test]]
+name = "state_publication"
+path = "src/export/state/consumer_tests.rs"
+
 [features]
 # Expose inspection methods used only by Godot regression tests and benchmark counters.
 bridge-test-api = ["bevy_godot4_proc_macros/bridge-test-api"]
