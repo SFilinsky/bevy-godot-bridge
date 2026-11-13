@@ -1,9 +1,8 @@
 use bevy::prelude::{App, Entity, Event, Message};
-use bevy_godot4::prelude::bridge_dto;
 use bevy_godot4::prelude::{
     DataTransferConfig, ExportEventsPlugin, ExportMessagesPlugin, ExportQueue, IdentitySubsystem,
+    bridge_dto, export_queue,
 };
-use godot::prelude::*;
 
 #[derive(Clone, Default, Message)]
 struct TestNotification(u32);
@@ -86,11 +85,11 @@ impl DataTransferConfig for TestImmediateNotificationTransferConfig {
     }
 }
 
-bevy_godot4::prelude::export_queue! {
+export_queue! {
     config: TestNotificationTransferConfig,
 }
 
-bevy_godot4::prelude::export_queue! {
+export_queue! {
     config: TestImmediateNotificationTransferConfig,
 }
 
