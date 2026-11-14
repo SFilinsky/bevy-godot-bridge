@@ -9,7 +9,7 @@ use std::mem::take;
 use std::rc::Rc;
 observe! {
     use std::time::Instant;
-    use crate::performance::layer::record_system_duration_for_current_scope;
+    use crate::performance::layer::record_detail_duration_for_current_scope;
 }
 
 /// One ordered source registered with the app's UpdateDispatcher.
@@ -88,7 +88,7 @@ impl<T: ExportValue> ValueDelivery for OccurrenceStream<T> {
             }
         }
         observe! {
-            record_system_duration_for_current_scope(&format!("Godot occurrences: deliver {}", T::NAME), started.elapsed());
+            record_detail_duration_for_current_scope(&format!("Godot occurrences: deliver {}", T::NAME), started.elapsed());
         }
     }
 }

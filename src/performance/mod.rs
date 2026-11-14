@@ -7,6 +7,11 @@
 //!
 //! These tools collect numbers only. Your game decides which timings are good
 //! enough.
+//!
+//! A report's `cpu_time_total_ms` sums recorded independent work, not every CPU
+//! task in the process. Use the detail recorder for work already included in
+//! another timer. Details remain visible with `included_in_cpu_total: false`;
+//! never add them to their surrounding timer again.
 
 mod measurement_gate;
 pub(crate) mod update_snapshot;

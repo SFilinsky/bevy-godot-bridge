@@ -254,13 +254,13 @@ impl DrainMetrics {
     fn record(self) {
         #[cfg(feature = "bridge-transport-profiling")]
         {
-            use crate::performance::layer::record_system_duration_for_current_scope;
+            use crate::performance::layer::record_detail_duration_for_current_scope;
 
-            record_system_duration_for_current_scope(
+            record_detail_duration_for_current_scope(
                 "bridge export queue create Godot DTOs",
                 self.dto_creation,
             );
-            record_system_duration_for_current_scope(
+            record_detail_duration_for_current_scope(
                 "bridge export queue DTO array append",
                 self.dto_array_append,
             );

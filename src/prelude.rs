@@ -34,7 +34,8 @@ pub use crate::import::{
 };
 pub use crate::performance::layer::{
     MeasurementTimer, clear_benchmark_capture_gameplay_phase_for_current_scope, measure_work,
-    measurements_enabled, record_system_duration_for_current_scope,
+    measurements_enabled, record_detail_duration_for_current_scope,
+    record_system_duration_for_current_scope,
     set_benchmark_capture_gameplay_phase_for_current_scope,
     set_benchmark_capture_phase_for_current_scope, set_benchmark_capture_phase_for_scope,
 };
