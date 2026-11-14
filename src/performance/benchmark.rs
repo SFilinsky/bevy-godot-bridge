@@ -198,6 +198,7 @@ pub struct BenchmarkSceneDirector {
     #[export]
     scene_id: GString,
 
+    /// Positive values finish a timed benchmark; zero records until explicitly stopped.
     #[export]
     duration_seconds: f64,
 
@@ -322,7 +323,8 @@ impl INode for BenchmarkSceneDirector {
                 duration_seconds: real_delta_seconds,
                 duration_ms: frame_time_ms,
             });
-        if self.elapsed_seconds >= self.duration_seconds {
+        // Session capture has no deadline; timed benchmarks retain their configured limit.
+        if self.duration_seconds > 0.0 && self.elapsed_seconds >= self.duration_seconds {
             self.finish();
         }
     }
