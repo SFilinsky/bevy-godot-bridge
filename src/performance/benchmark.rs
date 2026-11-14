@@ -93,6 +93,7 @@ impl FramesOverBudget {
 }
 
 pub(crate) struct BenchmarkSystemReportStats {
+    pub(crate) included_in_cpu_total: bool,
     pub(crate) name: String,
     pub(crate) calls: usize,
     pub(crate) summary: MetricSummary,
@@ -118,6 +119,7 @@ impl BenchmarkSystemReportStats {
             };
 
         Self {
+            included_in_cpu_total: samples.is_system && !samples.is_detail,
             name: samples.name.clone(),
             calls: samples.sample_list.len(),
             summary,
@@ -715,12 +717,16 @@ fn build_phase_report_list(
             .or_default()
             .push(sample_index);
 
-        if let Some(gameplay_phase_name) = samples.phase_key.gameplay_phase_name.as_ref() {
-            sample_index_list_by_gameplay_state_key_map
-                .entry((lifecycle_phase_name, gameplay_phase_name.clone()))
-                .or_default()
-                .push(sample_index);
-        }
+        // Keep work recorded before a gameplay state was assigned visible too.
+        let gameplay_phase_name = samples
+            .phase_key
+            .gameplay_phase_name
+            .as_deref()
+            .unwrap_or("Unassigned");
+        sample_index_list_by_gameplay_state_key_map
+            .entry((lifecycle_phase_name, gameplay_phase_name.to_owned()))
+            .or_default()
+            .push(sample_index);
     }
 
     let mut frame_stats_by_lifecycle_phase_name_map: HashMap<
@@ -738,12 +744,16 @@ fn build_phase_report_list(
             .or_default();
         record_frame_sample(frame_stats, frame_sample);
 
-        if let Some(gameplay_phase_name) = frame_sample.phase_key.gameplay_phase_name.as_ref() {
-            let gameplay_frame_stats = frame_stats_by_gameplay_state_key_map
-                .entry((lifecycle_phase_name, gameplay_phase_name.clone()))
-                .or_default();
-            record_frame_sample(gameplay_frame_stats, frame_sample);
-        }
+        // Use the same grouping for elapsed frames and recorded work.
+        let gameplay_phase_name = frame_sample
+            .phase_key
+            .gameplay_phase_name
+            .as_deref()
+            .unwrap_or("Unassigned");
+        let gameplay_frame_stats = frame_stats_by_gameplay_state_key_map
+            .entry((lifecycle_phase_name, gameplay_phase_name.to_owned()))
+            .or_default();
+        record_frame_sample(gameplay_frame_stats, frame_sample);
     }
 
     let mut phase_name_list = sample_index_list_by_lifecycle_phase_name_map
@@ -1006,4 +1016,94 @@ fn max_average_in_window_ms(sample_list: &[BenchmarkInvocationSample], window_se
     }
 
     max_average_ms
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BenchmarkPhaseFrameStatsBuilder, build_aggregate_report, build_phase_report_list};
+    use crate::performance::layer::{
+        BenchmarkInvocationSample, BenchmarkPhaseKey, BenchmarkSystemSamples,
+    };
+
+    fn sample(name: &str, milliseconds: f64, is_detail: bool) -> BenchmarkSystemSamples {
+        BenchmarkSystemSamples {
+            phase_key: BenchmarkPhaseKey {
+                lifecycle_phase_name: "Playing".to_owned(),
+                gameplay_phase_name: Some("Running".to_owned()),
+            },
+            name: name.to_owned(),
+            is_system: true,
+            is_detail,
+            sample_list: vec![BenchmarkInvocationSample {
+                at_seconds: 1.0,
+                duration_seconds: milliseconds / 1_000.0,
+            }],
+        }
+    }
+
+    #[test]
+    fn nested_delivery_details_remain_visible_without_increasing_the_total() {
+        // The two inner operations occupy the same ten milliseconds as delivery.
+        let sample_list = vec![
+            sample("delivery", 10.0, false),
+            sample("read values", 3.0, true),
+            sample("apply values", 7.0, true),
+        ];
+        let report = build_aggregate_report(
+            &sample_list,
+            &[0, 1, 2],
+            BenchmarkPhaseFrameStatsBuilder::default(),
+        );
+        assert_eq!(report.cpu_time_total_ms, 10.0);
+        assert_eq!(report.system_stat_list.len(), 3);
+        for row in &report.system_stat_list {
+            let independent = row.name == "delivery";
+            assert_eq!(row.included_in_cpu_total, independent);
+            assert_eq!(
+                row.share_of_total_percent,
+                if independent { 100.0 } else { 0.0 }
+            );
+        }
+    }
+
+    #[test]
+    fn phase_totals_keep_independent_work_and_exclude_its_details() {
+        // Collection and later delivery are separate work; reads belong to delivery.
+        let sample_list = vec![
+            sample("collection", 2.0, false),
+            sample("delivery", 10.0, false),
+            sample("read values", 3.0, true),
+            sample("apply values", 7.0, true),
+        ];
+        let report_list = build_phase_report_list(sample_list, &[]);
+        assert_eq!(report_list.len(), 1);
+        assert_eq!(report_list[0].aggregate.cpu_time_total_ms, 12.0);
+        assert_eq!(
+            report_list[0].gameplay_state_report_list[0]
+                .aggregate
+                .cpu_time_total_ms,
+            12.0
+        );
+    }
+
+    #[test]
+    fn work_without_a_gameplay_state_is_not_hidden_by_named_states() {
+        let mut initial = sample("before state assignment", 2.0, false);
+        initial.phase_key.gameplay_phase_name = None;
+        let report_list =
+            build_phase_report_list(vec![initial, sample("delivery", 10.0, false)], &[]);
+        let phase = &report_list[0];
+        let visible_total: f64 = phase
+            .gameplay_state_report_list
+            .iter()
+            .map(|state| state.aggregate.cpu_time_total_ms)
+            .sum();
+        assert_eq!(visible_total, phase.aggregate.cpu_time_total_ms);
+        assert!(
+            phase
+                .gameplay_state_report_list
+                .iter()
+                .any(|state| state.phase_name == "Unassigned")
+        );
+    }
 }

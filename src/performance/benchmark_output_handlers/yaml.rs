@@ -25,6 +25,7 @@ impl BenchmarkOutputHandler for YamlBenchmarkOutputHandler {
 fn build_yaml_report(report_data: &BenchmarkReport) -> String {
     let mut report = String::new();
     report.push_str("benchmark:\n");
+    report.push_str("  cpu_time_scope: recorded_non_overlapping_work\n");
     report.push_str(&format!(
         "  scene_id: \"{}\"\n",
         yaml_escape(&report_data.scene_id)
@@ -282,6 +283,10 @@ fn write_system_report(report: &mut String, system: &BenchmarkSystemReportStats,
     ));
     report.push_str(&format!("{field_indent}calls: {}\n", system.calls));
     report.push_str(&format!(
+        "{field_indent}included_in_cpu_total: {}\n",
+        system.included_in_cpu_total
+    ));
+    report.push_str(&format!(
         "{field_indent}total_ms: {:.6}\n",
         system.summary.total_ms
     ));
@@ -339,4 +344,29 @@ fn yaml_escape(value: &impl ToString) -> String {
         .replace('\n', "\\n")
         .replace('\r', "\\r")
         .replace('\t', "\\t")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_system_report;
+    use crate::performance::benchmark::{BenchmarkSystemReportStats, MetricSummary};
+
+    #[test]
+    fn saved_rows_say_whether_their_time_is_included_in_the_total() {
+        for included in [false, true] {
+            let row = BenchmarkSystemReportStats {
+                included_in_cpu_total: included,
+                name: "delivery timing".to_owned(),
+                calls: 1,
+                summary: MetricSummary::default(),
+                max_1s_average_ms: 0.0,
+                max_5s_average_ms: 0.0,
+                max_10s_average_ms: 0.0,
+                share_of_total_percent: 0.0,
+            };
+            let mut output = String::new();
+            write_system_report(&mut output, &row, "");
+            assert!(output.contains(&format!("included_in_cpu_total: {included}\n")));
+        }
+    }
 }

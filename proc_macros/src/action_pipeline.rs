@@ -312,7 +312,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
         .map(|(c, metric_name)| {
             let name = &c.name;
             quote! {
-                ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+                record_detail_duration_for_current_scope(
                     #metric_name,
                     check_timing.#name,
                 );
@@ -356,7 +356,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                         .mark_check_mask_dirty(&dirty_action_id_list, #constant);
                 }
             }
-            ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+            record_detail_duration_for_current_scope(
                 #metric_name,
                 continuous_check_started_at.elapsed(),
             );
@@ -427,6 +427,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
             use ::bevy::ecs::system::SystemParam;
             use ::bevy_godot4::prelude::{DtoOf, DataTransferConfig, TransferDto, TransferSnapshot, IdentitySubsystem, bridge_dto};
             use ::bevy_godot4::actions::ActionStatus;
+            use ::bevy_godot4::prelude::record_detail_duration_for_current_scope;
             use ::bevy_godot4::prelude::{BevyApp, UpdateDispatcher, ExportPublication, OccurrenceStream,
                 ExportValue, UpdatePayload, UpdateReceiver, UpdateSubscription};
             use std::rc::{Rc, Weak};
@@ -1205,7 +1206,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 let action_change_drain_started_at = ::std::time::Instant::now();
                 let action_change_list = action.manager.drain_continuous_action_change_list();
                 let static_data_change_pending = action.manager.take_static_data_change_pending();
-                ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+                record_detail_duration_for_current_scope(
                     #action_change_drain_metric_name,
                     action_change_drain_started_at.elapsed(),
                 );
@@ -1222,7 +1223,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                     .mark_polling_checks_dirty(ALL_CHECK_MASK & !continuous_check_mask);
                 // Godot-created actions retain detailed live preview updates.
                 action.manager.mark_godot_checks_dirty();
-                ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+                record_detail_duration_for_current_scope(
                     #scheduling_metric_name,
                     scheduling_started_at.elapsed(),
                 );
@@ -1230,7 +1231,7 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                 // Drain only IDs and masks so cached parameters and reports remain in place.
                 let preparation_started_at = ::std::time::Instant::now();
                 let dirty_check_entry_list = action.manager.drain_dirty_check_entry_list();
-                ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+                record_detail_duration_for_current_scope(
                     #preparation_metric_name,
                     preparation_started_at.elapsed(),
                 );
@@ -1294,12 +1295,12 @@ fn expand_spec(spec: Spec) -> proc_macro2::TokenStream {
                     }
                     report_delivery_duration += report_delivery_started_at.elapsed();
                 }
-                ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+                record_detail_duration_for_current_scope(
                     #evaluation_metric_name,
                     candidate_evaluation_duration,
                 );
                 #( #check_refresh_timing_metric_records )*
-                ::bevy_godot4::prelude::record_system_duration_for_current_scope(
+                record_detail_duration_for_current_scope(
                     #delivery_metric_name,
                     report_delivery_duration,
                 );

@@ -30,7 +30,10 @@ use crate::scene::registration::{child_services, register_store_on_entry};
 observe! {
     use std::time::Instant;
     use godot::classes::{Engine, Time};
-    use crate::performance::{allowed, layer::record_system_duration_for_current_scope};
+    use crate::performance::allowed;
+    use crate::performance::layer::{
+        record_detail_duration_for_current_scope, record_system_duration_for_current_scope,
+    };
 }
 
 /// Shared change versions for one exported feature, independent of its value type.
@@ -254,13 +257,13 @@ impl UpdateDispatcher {
         }
         // Wake only producers that queued values, then publish entity notices.
         states.deliver(|| this.is_instance_valid() && this.is_inside_tree());
-        observe! { record_system_duration_for_current_scope("Godot export: publish queued state", publication_started.elapsed()); }
+        observe! { record_detail_duration_for_current_scope("Godot export: publish queued state", publication_started.elapsed()); }
         observe! { let notices_started = Instant::now(); }
         notices.deliver(|| this.is_instance_valid() && this.is_inside_tree());
         if !this.is_instance_valid() || !this.is_inside_tree() {
             return;
         }
-        observe! { record_system_duration_for_current_scope("Godot export: publish entity notices", notices_started.elapsed()); }
+        observe! { record_detail_duration_for_current_scope("Godot export: publish entity notices", notices_started.elapsed()); }
         // Take the published work without retaining a Rust borrow across callbacks.
         // A callback may detach its view or unload the entire owning scene.
         let value_batch_list = {

@@ -23,7 +23,7 @@ observe! {
     use std::time::Instant;
     use godot::classes::{Engine, Time};
     use godot::obj::Singleton;
-    use crate::performance::layer::record_system_duration_for_current_scope;
+    use crate::performance::layer::record_detail_duration_for_current_scope;
 }
 
 /// Changed IDs and the first publication time stay together until a batch takes them.
@@ -284,7 +284,7 @@ impl<T: ExportValue> ValueDelivery for ExportValueBatch<T> {
             seen_set.clear();
         }
         observe! {
-            record_system_duration_for_current_scope(&format!("Godot values: read {}", T::NAME), read_started.elapsed());
+            record_detail_duration_for_current_scope(&format!("Godot values: read {}", T::NAME), read_started.elapsed());
             let apply_started = Instant::now();
         }
         // Copy only the callbacks for one entity. Cancellation flags remain live.
@@ -320,7 +320,7 @@ impl<T: ExportValue> ValueDelivery for ExportValueBatch<T> {
         self.changed_list.borrow_mut().ids = changed_list;
         *self.value_list.borrow_mut() = value_list;
         observe! {
-            record_system_duration_for_current_scope(&format!("Godot values: apply {}", T::NAME), apply_started.elapsed());
+            record_detail_duration_for_current_scope(&format!("Godot values: apply {}", T::NAME), apply_started.elapsed());
         }
     }
 }

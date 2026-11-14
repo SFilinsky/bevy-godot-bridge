@@ -203,10 +203,12 @@ pub fn record_system_duration_for_current_scope(name: &str, duration: Duration) 
 /// Adds a timing detail that is already included in a surrounding system.
 ///
 /// Benchmark reports keep this row for inspection, but do not add it to the
-/// total CPU time. Use it for a small part of a Bevy system, not for a full
-/// independent system run.
-#[cfg(feature = "bridge-transport-profiling")]
-pub(crate) fn record_detail_duration_for_current_scope(name: &str, duration: Duration) {
+/// measured work total. Use it for work already timed by a surrounding Bevy
+/// system or Godot delivery call. Independent work uses the system recorder.
+pub fn record_detail_duration_for_current_scope(name: &str, duration: Duration) {
+    if !collecting() {
+        return;
+    }
     let scope_id = CURRENT_APP_SCOPE_ID.load(Ordering::Relaxed);
     record_system_duration(
         scope_id,
